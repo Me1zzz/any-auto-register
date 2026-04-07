@@ -248,6 +248,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                     extra=merged_extra,
                 )
                 _mailbox = _build_mailbox(_proxy)
+                if hasattr(_mailbox, "_task_alias_pool_key"):
+                    _mailbox._task_alias_pool_key = task_id
                 _platform = PlatformCls(config=_config, mailbox=_mailbox)
                 _platform._task_attempt_token = attempt_id
                 _platform._log_fn = lambda msg: _log(task_id, msg)
@@ -265,6 +267,14 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 )
                 current_email = account.email or current_email
                 if isinstance(account.extra, dict):
+                    mailbox_account = getattr(_mailbox, "_last_account", None)
+                    mailbox_extra = getattr(mailbox_account, "extra", None)
+                    if isinstance(mailbox_extra, dict):
+                        for extra_key, extra_value in mailbox_extra.items():
+                            account.extra.setdefault(extra_key, extra_value)
+                    mailbox_account_id = str(getattr(mailbox_account, "account_id", "") or "").strip()
+                    if mailbox_account_id and mailbox_account_id != account.email:
+                        account.extra.setdefault("mailbox_email", mailbox_account_id)
                     mail_provider = merged_extra.get("mail_provider", "")
                     if mail_provider:
                         account.extra.setdefault("mail_provider", mail_provider)
@@ -384,6 +394,12 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
     else:
         summary = f"完成: 成功 {success} 个, 跳过 {skipped} 个, 失败 {len(errors)} 个"
     _log(task_id, summary)
+    try:
+        from core.base_mailbox import CloudMailMailbox
+
+        CloudMailMailbox.release_alias_pool(task_id)
+    except Exception:
+        pass
     _task_store.finish(
         task_id,
         status=final_status,

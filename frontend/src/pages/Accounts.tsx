@@ -68,6 +68,19 @@ function normalizeAccount(account: any) {
   return { ...account, extra, cpaSync, sub2apiSync, cliproxySync, chatgptLocal }
 }
 
+function getMailboxAliasMeta(account: any) {
+  const extra = account?.extra && typeof account.extra === 'object' ? account.extra : {}
+  const mailboxAlias = extra.mailbox_alias && typeof extra.mailbox_alias === 'object' ? extra.mailbox_alias : null
+  const aliasEmail = String(mailboxAlias?.alias_email || account?.email || '').trim()
+  const mailboxEmail = String(mailboxAlias?.mailbox_email || extra.mailbox_email || '').trim()
+  const hasAlias = Boolean(mailboxAlias?.enabled && aliasEmail && mailboxEmail && aliasEmail !== mailboxEmail)
+  return {
+    hasAlias,
+    aliasEmail,
+    mailboxEmail,
+  }
+}
+
 function formatSyncTime(value?: string) {
   if (!value) return ''
   const date = new Date(value)
@@ -1054,22 +1067,31 @@ export default function Accounts() {
       dataIndex: 'email',
       key: 'email',
       width: 260,
-      render: (text: string, record: any) => (
-        <div style={cellStackStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-            <Text
-              style={{ ...monospaceStyle, flex: 1, minWidth: 0, whiteSpace: 'nowrap' }}
-              ellipsis={{ tooltip: text }}
-            >
-              {text}
-            </Text>
-            <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => copyText(text)} />
+      render: (text: string, record: any) => {
+        const aliasMeta = getMailboxAliasMeta(record)
+        return (
+          <div style={cellStackStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <Text
+                style={{ ...monospaceStyle, flex: 1, minWidth: 0, whiteSpace: 'nowrap' }}
+                ellipsis={{ tooltip: text }}
+              >
+                {text}
+              </Text>
+              <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => copyText(text)} />
+            </div>
+            {aliasMeta.hasAlias ? (
+              <Text type="secondary" style={secondaryTextStyle} ellipsis={{ tooltip: aliasMeta.mailboxEmail }}>
+                真实邮箱: {aliasMeta.mailboxEmail}
+              </Text>
+            ) : (
+              <Text type="secondary" style={secondaryTextStyle} ellipsis={{ tooltip: record.user_id || `账号 #${record.id}` }}>
+                {record.user_id ? `UID: ${record.user_id}` : `账号 #${record.id}`}
+              </Text>
+            )}
           </div>
-          <Text type="secondary" style={secondaryTextStyle} ellipsis={{ tooltip: record.user_id || `账号 #${record.id}` }}>
-            {record.user_id ? `UID: ${record.user_id}` : `账号 #${record.id}`}
-          </Text>
-        </div>
-      ),
+        )
+      },
     },
     {
       title: '密码',
@@ -1500,6 +1522,16 @@ export default function Accounts() {
                     </Text>
                   </div>
                 </div>
+              )
+            })()}
+            {(() => {
+              const aliasMeta = getMailboxAliasMeta(currentAccount)
+              if (!aliasMeta.hasAlias) return null
+              return (
+                <DetailSection title="邮箱映射">
+                  <SummaryField label="别名邮箱" value={aliasMeta.aliasEmail} code />
+                  <SummaryField label="真实邮箱" value={aliasMeta.mailboxEmail} code />
+                </DetailSection>
               )
             })()}
             {currentPlatform === 'kiro' && currentAccount?.extra ? (

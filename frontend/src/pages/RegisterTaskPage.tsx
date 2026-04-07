@@ -65,6 +65,9 @@ export default function RegisterTaskPage() {
         cloudmail_admin_password: cfg.cloudmail_admin_password || '',
         cloudmail_domain: cfg.cloudmail_domain || '',
         cloudmail_subdomain: cfg.cloudmail_subdomain || '',
+        cloudmail_alias_enabled: parseBooleanConfigValue(cfg.cloudmail_alias_enabled),
+        cloudmail_alias_emails: cfg.cloudmail_alias_emails || '',
+        cloudmail_alias_mailbox_email: cfg.cloudmail_alias_mailbox_email || '',
         cloudmail_timeout: cfg.cloudmail_timeout || 30,
         outlook_backend: cfg.outlook_backend || 'graph',
         laoudo_auth: cfg.laoudo_auth || '',
@@ -142,6 +145,9 @@ export default function RegisterTaskPage() {
       cloudmail_admin_password: values.cloudmail_admin_password,
       cloudmail_domain: values.cloudmail_domain,
       cloudmail_subdomain: values.cloudmail_subdomain,
+      cloudmail_alias_enabled: values.cloudmail_alias_enabled,
+      cloudmail_alias_emails: values.cloudmail_alias_emails,
+      cloudmail_alias_mailbox_email: values.cloudmail_alias_mailbox_email,
       cloudmail_timeout: values.cloudmail_timeout,
       outlook_backend: values.outlook_backend,
       duckmail_api_url: values.duckmail_api_url,
@@ -249,6 +255,9 @@ export default function RegisterTaskPage() {
         applemail_mailboxes: 'INBOX,Junk',
         outlook_backend: 'graph',
         gptmail_base_url: 'https://mail.chatgpt.org.uk',
+        cloudmail_alias_enabled: false,
+        cloudmail_alias_emails: '',
+        cloudmail_alias_mailbox_email: '',
         cloudmail_timeout: 30,
         count: 1,
         concurrency: 1,
@@ -382,6 +391,15 @@ export default function RegisterTaskPage() {
               </Form.Item>
               <Form.Item name="cloudmail_subdomain" label="子域名（可选）">
                 <Input placeholder="pool-a" />
+              </Form.Item>
+              <Form.Item name="cloudmail_alias_enabled" label="启用别名邮箱" valuePropName="checked">
+                <Checkbox>注册使用预设别名邮箱，验证码仍从真实邮箱拉取</Checkbox>
+              </Form.Item>
+              <Form.Item name="cloudmail_alias_emails" label="别名邮箱列表" extra="一行一个，使用预先配置好的完整别名邮箱地址">
+                <Input.TextArea rows={5} placeholder={"alias1@example.com\nalias2@example.com"} />
+              </Form.Item>
+              <Form.Item name="cloudmail_alias_mailbox_email" label="别名对应真实邮箱" extra="调用 emailList 时使用这个真实邮箱，并通过 recipt 匹配别名邮件">
+                <Input placeholder="real@mail.example.com" />
               </Form.Item>
               <Form.Item name="cloudmail_timeout" label="请求超时秒数">
                 <InputNumber min={5} max={120} style={{ width: '100%' }} />

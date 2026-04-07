@@ -15,6 +15,7 @@ sys.modules.setdefault("smstome_tool", smstome_tool_stub)
 from platforms.chatgpt.oauth_client import OAuthClient
 from platforms.chatgpt.chatgpt_client import ChatGPTClient
 from platforms.chatgpt.refresh_token_registration_engine import (
+    EmailServiceAdapter,
     RefreshTokenRegistrationEngine,
 )
 from platforms.chatgpt.utils import FlowState
@@ -220,6 +221,53 @@ class RefreshTokenRegistrationEngineTests(unittest.TestCase):
         call_args = oauth_client.signup_and_get_tokens.call_args_list
         self.assertEqual(call_args[0].args[0], "user1@example.com")
         self.assertEqual(call_args[1].args[0], "user2@example.com")
+
+    def test_email_service_adapter_does_not_auto_exclude_previously_used_codes(self):
+        email_service = mock.Mock()
+        email_service.get_verification_code.return_value = "890206"
+        logs = []
+        adapter = EmailServiceAdapter(
+            email_service=email_service,
+            email="user@example.com",
+            log_fn=logs.append,
+        )
+        adapter._used_codes.add("890206")
+
+        code = adapter.wait_for_verification_code(
+            "user@example.com",
+            timeout=30,
+        )
+
+        self.assertEqual(code, "890206")
+        email_service.get_verification_code.assert_called_once_with(
+            email="user@example.com",
+            timeout=30,
+            otp_sent_at=None,
+            exclude_codes=set(),
+        )
+
+    def test_email_service_adapter_keeps_explicit_excluded_codes(self):
+        email_service = mock.Mock()
+        email_service.get_verification_code.return_value = "123456"
+        adapter = EmailServiceAdapter(
+            email_service=email_service,
+            email="user@example.com",
+            log_fn=lambda _msg: None,
+        )
+        adapter._used_codes.add("890206")
+
+        adapter.wait_for_verification_code(
+            "user@example.com",
+            timeout=30,
+            exclude_codes={"654321"},
+        )
+
+        email_service.get_verification_code.assert_called_once_with(
+            email="user@example.com",
+            timeout=30,
+            otp_sent_at=None,
+            exclude_codes={"654321"},
+        )
 
 
 class OAuthClientPasswordlessTests(unittest.TestCase):

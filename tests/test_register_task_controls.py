@@ -1,7 +1,15 @@
 import unittest
 from unittest.mock import patch
 
-from api.tasks import RegisterTaskRequest, _create_task_record, _run_register, _task_store
+from fastapi import BackgroundTasks
+
+from api.tasks import (
+    RegisterTaskRequest,
+    _create_task_record,
+    _run_register,
+    _task_store,
+    create_register_task,
+)
 from core.base_mailbox import BaseMailbox, MailboxAccount
 from core.base_platform import Account, BasePlatform
 
@@ -30,6 +38,27 @@ class _FakeMailbox(BaseMailbox):
             poll_interval=0.01,
             poll_once=poll_once,
         )
+
+
+class _FakeAliasMailbox(_FakeMailbox):
+    def __init__(self):
+        self._last_account = MailboxAccount(
+            email="alias@example.com",
+            account_id="real@example.com",
+            extra={
+                "mailbox_alias": {
+                    "enabled": True,
+                    "alias_email": "alias@example.com",
+                    "mailbox_email": "real@example.com",
+                    "alias_domain": "example.com",
+                    "alias_prefix": "",
+                    "alias_suffix": "",
+                }
+            },
+        )
+
+    def get_email(self) -> MailboxAccount:
+        return self._last_account
 
 
 class _FakePlatform(BasePlatform):
@@ -146,6 +175,63 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
 
         self.assertIn("workspace进度: 1/2", joined_logs)
         self.assertIn("workspace进度: 2/2", joined_logs)
+
+    def test_register_persists_mailbox_alias_metadata(self):
+        task_id = "task-alias-mailbox-extra"
+        req = self._build_request()
+        _create_task_record(task_id, req, "manual", None)
+        saved_accounts = []
+
+        def _capture(account):
+            saved_accounts.append(account)
+            return account
+
+        with (
+            patch("core.registry.get", return_value=_FakePlatform),
+            patch("core.base_mailbox.create_mailbox", return_value=_FakeAliasMailbox()),
+            patch("core.db.save_account", side_effect=_capture),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(saved_accounts), 1)
+        account = saved_accounts[0]
+        self.assertEqual(account.email, "alias@example.com")
+        self.assertEqual(account.extra.get("mailbox_email"), "real@example.com")
+        self.assertEqual(
+            account.extra.get("mailbox_alias"),
+            {
+                "enabled": True,
+                "alias_email": "alias@example.com",
+                "mailbox_email": "real@example.com",
+                "alias_domain": "example.com",
+                "alias_prefix": "",
+                "alias_suffix": "",
+            },
+        )
+
+    def test_create_register_task_keeps_alias_config_in_request(self):
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "cloudmail_alias_prefix": "alias+",
+                "cloudmail_alias_suffix": ".team",
+                "cloudmail_alias_domain": "alias.example.com",
+            }
+        )
+        background_tasks = BackgroundTasks()
+
+        with patch("api.tasks.enqueue_register_task", return_value="task-123") as enqueue_mock:
+            result = create_register_task(req, background_tasks)
+
+        self.assertEqual(result, {"task_id": "task-123"})
+        enqueue_mock.assert_called_once()
+        called_req = enqueue_mock.call_args.args[0]
+        self.assertTrue(called_req.extra["cloudmail_alias_enabled"])
+        self.assertEqual(called_req.extra["cloudmail_alias_prefix"], "alias+")
+        self.assertEqual(called_req.extra["cloudmail_alias_suffix"], ".team")
+        self.assertEqual(called_req.extra["cloudmail_alias_domain"], "alias.example.com")
 
 
 if __name__ == "__main__":

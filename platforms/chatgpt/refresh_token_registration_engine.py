@@ -131,7 +131,7 @@ class EmailServiceAdapter:
         otp_sent_at: float | None = None,
         exclude_codes=None,
     ):
-        excluded = set(exclude_codes or set()) | set(self._used_codes)
+        excluded = set(exclude_codes or set())
         self.log_fn(f"正在等待邮箱 {email} 的验证码 ({timeout}s)...")
         code = self.email_service.get_verification_code(
             email=email,

@@ -145,6 +145,9 @@ const TAB_ITEMS = [
           { key: 'cloudmail_admin_password', label: '管理员密码', secret: true },
           { key: 'cloudmail_domain', label: '邮箱域名（可选）', placeholder: 'mail.example.com,mail2.example.com' },
           { key: 'cloudmail_subdomain', label: '子域名（可选）', placeholder: 'pool-a' },
+          { key: 'cloudmail_alias_enabled', label: '启用别名邮箱', type: 'boolean' },
+          { key: 'cloudmail_alias_emails', label: '别名邮箱列表', type: 'textarea', placeholder: 'alias1@example.com\nalias2@example.com' },
+          { key: 'cloudmail_alias_mailbox_email', label: '别名对应真实邮箱', placeholder: 'real@mail.example.com' },
           { key: 'cloudmail_timeout', label: '请求超时秒数', placeholder: '30' },
         ],
       },
@@ -394,7 +397,7 @@ interface FieldConfig {
   key: string
   label: string
   placeholder?: string
-  type?: 'select' | 'input' | 'boolean'
+  type?: 'select' | 'input' | 'boolean' | 'textarea'
   secret?: boolean
 }
 
@@ -563,6 +566,7 @@ function ConfigField({ field }: { field: FieldConfig }) {
   const [showSecret, setShowSecret] = useState(false)
   const options = SELECT_FIELDS[field.key]
   const isBooleanField = field.type === 'boolean'
+  const isTextareaField = field.type === 'textarea'
   const helpText =
     field.key === 'default_executor'
       ? '仅对支持的平台生效；ChatGPT、Cursor、Grok、Kiro、Tavily、Trae 支持浏览器模式，OpenBlockLabs 仅支持纯协议。'
@@ -579,6 +583,8 @@ function ConfigField({ field }: { field: FieldConfig }) {
         <Select options={options} style={{ width: '100%' }} />
       ) : isBooleanField ? (
         <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+      ) : isTextareaField ? (
+        <Input.TextArea rows={5} placeholder={field.placeholder} />
       ) : field.secret ? (
         <Input.Password
           placeholder={field.placeholder}

@@ -245,6 +245,9 @@ def create_mailbox(
             subdomain=extra.get("cloudmail_subdomain")
             or extra.get("subdomain")
             or "",
+            alias_enabled=extra.get("cloudmail_alias_enabled", ""),
+            alias_emails=extra.get("cloudmail_alias_emails") or "",
+            alias_mailbox_email=extra.get("cloudmail_alias_mailbox_email") or "",
             timeout=timeout_value,
             proxy=proxy,
         )
@@ -1086,6 +1089,8 @@ class CloudMailMailbox(BaseMailbox):
     _token_cache: dict[str, tuple[str, float]] = {}
     _seen_ids_lock = threading.Lock()
     _seen_ids: dict[str, set[str]] = {}
+    _alias_pool_lock = threading.Lock()
+    _alias_pools: dict[str, dict[str, Any]] = {}
 
     def __init__(
         self,
@@ -1094,6 +1099,9 @@ class CloudMailMailbox(BaseMailbox):
         admin_password: str,
         domain: Any = "",
         subdomain: str = "",
+        alias_enabled: Any = "",
+        alias_emails: Any = "",
+        alias_mailbox_email: str = "",
         timeout: int = 30,
         proxy: str = None,
     ):
@@ -1102,8 +1110,20 @@ class CloudMailMailbox(BaseMailbox):
         self.admin_password = str(admin_password or "").strip()
         self.domain = domain
         self.subdomain = str(subdomain or "").strip()
+        self.alias_enabled = self._parse_bool(alias_enabled)
+        self.alias_emails = self._parse_alias_emails(alias_emails)
+        self.alias_mailbox_email = str(alias_mailbox_email or "").strip()
         self.timeout = max(int(timeout or 30), 5)
         self.proxy = build_requests_proxy_config(proxy)
+        self._last_account: Optional[MailboxAccount] = None
+        self._task_alias_pool_key = ""
+
+    @staticmethod
+    def _parse_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        return text in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _extract_domain_from_url(url: str) -> str:
@@ -1121,6 +1141,156 @@ class CloudMailMailbox(BaseMailbox):
         if "://" in domain:
             domain = CloudMailMailbox._extract_domain_from_url(domain)
         return domain.strip()
+
+    def _parse_alias_emails(self, value: Any) -> list[str]:
+        if isinstance(value, (list, tuple, set)):
+            iterable = value
+        else:
+            raw = str(value or "").strip()
+            iterable = raw.splitlines() if raw else []
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in iterable:
+            email = str(item or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            result.append(email)
+        return result
+
+    def _sanitize_mail_message(self, message: dict) -> dict:
+        sanitized = {}
+        for key, value in (message or {}).items():
+            if key == "content":
+                continue
+            sanitized[key] = value
+        return sanitized
+
+    def _mail_debug_summary(self, message: dict, index: int = 0) -> str:
+        if not isinstance(message, dict):
+            return f"idx={index} invalid-message"
+        message_id = self._mail_id(message, index)
+        subject = str(message.get("subject") or "").strip()
+        if len(subject) > 80:
+            subject = subject[:77] + "..."
+        recipient_addresses = set()
+        for key in ("recipt", "receipt", "recipient", "recipients"):
+            recipient_addresses.update(self._collect_recipient_addresses(message.get(key)))
+        recipients = sorted(recipient_addresses)
+        recipients_text = ",".join(recipients[:3]) if recipients else "-"
+        if len(recipients) > 3:
+            recipients_text += ",..."
+        return (
+            f"id={message_id} toEmail={str(message.get('toEmail') or '').strip()} "
+            f"recipient={recipients_text} subject={subject}"
+        )
+
+    def _list_mails_log_summary(self, email: str, mails: list) -> None:
+        summaries = [
+            self._mail_debug_summary(msg, idx)
+            for idx, msg in enumerate(mails[:5])
+            if isinstance(msg, dict)
+        ]
+        suffix = " ..." if len(mails) > 5 else ""
+        self._log(
+            f"[CloudMail] emailList 响应: toEmail={email} count={len(mails)} items={summaries}{suffix}"
+        )
+
+    def _pick_alias_email(self) -> str:
+        if not self.alias_enabled:
+            return ""
+        if not self.alias_emails:
+            raise RuntimeError("CloudMail 已启用别名邮箱，但未配置别名邮箱列表")
+        task_pool_key = str(getattr(self, "_task_alias_pool_key", "") or "").strip()
+        if not task_pool_key:
+            return random.choice(self.alias_emails)
+
+        alias_source = tuple(self.alias_emails)
+        with CloudMailMailbox._alias_pool_lock:
+            pool = CloudMailMailbox._alias_pools.get(task_pool_key)
+            if not pool or tuple(pool.get("source") or ()) != alias_source:
+                remaining = list(alias_source)
+                random.shuffle(remaining)
+                pool = {
+                    "source": alias_source,
+                    "remaining": remaining,
+                }
+                CloudMailMailbox._alias_pools[task_pool_key] = pool
+
+            remaining_aliases = pool.get("remaining") or []
+            if not remaining_aliases:
+                raise RuntimeError("CloudMail 别名邮箱池已耗尽，请增加别名邮箱列表或降低任务数量")
+            return str(remaining_aliases.pop(0) or "")
+
+    @classmethod
+    def release_alias_pool(cls, task_pool_key: str) -> None:
+        key = str(task_pool_key or "").strip()
+        if not key:
+            return
+        with cls._alias_pool_lock:
+            cls._alias_pools.pop(key, None)
+
+    def _resolve_mailbox_email(self, alias_email: str) -> str:
+        if alias_email:
+            mailbox_email = str(self.alias_mailbox_email or "").strip()
+            if not mailbox_email:
+                raise RuntimeError("CloudMail 已启用别名邮箱，但未配置别名邮箱对应的真实邮箱")
+            return mailbox_email
+        return self._build_email()
+
+    @staticmethod
+    def _normalize_email_value(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _collect_recipient_addresses(self, value: Any) -> set[str]:
+        addresses: set[str] = set()
+
+        def collect(item: Any) -> None:
+            if item in (None, ""):
+                return
+
+            if isinstance(item, dict):
+                for key in ("address", "email", "recipient", "recipt", "receipt", "toEmail"):
+                    normalized = self._normalize_email_value(item.get(key))
+                    if normalized:
+                        addresses.add(normalized)
+                return
+
+            if isinstance(item, (list, tuple, set)):
+                for child in item:
+                    collect(child)
+                return
+
+            text = str(item).strip()
+            if not text:
+                return
+
+            if text.startswith("[") or text.startswith("{"):
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    parsed = None
+                if parsed is not None:
+                    collect(parsed)
+                    return
+
+            normalized = self._normalize_email_value(text)
+            if normalized:
+                addresses.add(normalized)
+
+        collect(value)
+        return addresses
+
+    def _match_alias_receipt(self, message: dict, alias_email: str) -> bool:
+        if not alias_email:
+            return True
+        normalized_alias = self._normalize_email_value(alias_email)
+        recipient_addresses = set()
+        for key in ("recipt", "receipt", "recipient", "recipients"):
+            recipient_addresses.update(self._collect_recipient_addresses(message.get(key)))
+        if not recipient_addresses:
+            return False
+        return normalized_alias in recipient_addresses
 
     def _domain_candidates(self) -> list[str]:
         candidates: list[str] = []
@@ -1262,7 +1432,9 @@ class CloudMailMailbox(BaseMailbox):
             data = {}
         if data.get("code") != 200:
             return []
-        return data.get("data") or []
+        mails = data.get("data") or []
+        self._list_mails_log_summary(email, mails)
+        return mails
 
     def _gen_prefix(self) -> str:
         import random
@@ -1280,6 +1452,30 @@ class CloudMailMailbox(BaseMailbox):
         if self.subdomain:
             domain = f"{self.subdomain}.{domain}"
         return f"{self._gen_prefix()}@{domain}"
+
+    def _resolve_alias_domain(self, mailbox_email: str) -> str:
+        mailbox_domain = str(mailbox_email or "").split("@", 1)[1].strip() if "@" in str(mailbox_email or "") else ""
+        return self.alias_domain or mailbox_domain
+
+    def _build_alias_email(self, mailbox_email: str) -> str:
+        if not self.alias_enabled:
+            return mailbox_email
+        local_part, _, _ = str(mailbox_email or "").partition("@")
+        alias_domain = self._resolve_alias_domain(mailbox_email)
+        if not local_part or not alias_domain:
+            return mailbox_email
+        return f"{self.alias_prefix}{local_part}{self.alias_suffix}@{alias_domain}"
+
+    def _build_account_extra(self, alias_email: str, mailbox_email: str) -> dict:
+        if alias_email == mailbox_email:
+            return {}
+        return {
+            "mailbox_alias": {
+                "enabled": True,
+                "alias_email": alias_email,
+                "mailbox_email": mailbox_email,
+            }
+        }
 
     @staticmethod
     def _parse_message_timestamp(message: dict) -> Optional[float]:
@@ -1317,6 +1513,7 @@ class CloudMailMailbox(BaseMailbox):
                 continue
         return None
 
+
     @staticmethod
     def _mail_id(message: dict, index: int = 0) -> str:
         for key in ("emailId", "id", "mailId", "messageId"):
@@ -1340,9 +1537,19 @@ class CloudMailMailbox(BaseMailbox):
 
     def get_email(self) -> MailboxAccount:
         self._ensure_config()
-        email = self._build_email()
-        self._log(f"[CloudMail] 生成邮箱: {email}")
-        return MailboxAccount(email=email, account_id=email)
+        alias_email = self._pick_alias_email()
+        mailbox_email = self._resolve_mailbox_email(alias_email)
+        account = MailboxAccount(
+            email=alias_email or mailbox_email,
+            account_id=mailbox_email,
+            extra=self._build_account_extra(alias_email or mailbox_email, mailbox_email),
+        )
+        self._last_account = account
+        if alias_email:
+            self._log(f"[CloudMail] 生成邮箱: alias={account.email} mailbox={mailbox_email}")
+        else:
+            self._log(f"[CloudMail] 生成邮箱: {mailbox_email}")
+        return account
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         target = account.account_id or account.email
@@ -1362,6 +1569,7 @@ class CloudMailMailbox(BaseMailbox):
         **kwargs,
     ) -> str:
         target = account.account_id or account.email
+        alias_email = str(account.email or "").strip().lower() if target != account.email else ""
         seen = set(before_ids or set())
         seen.update(self._load_seen_ids(target))
         otp_sent_at = kwargs.get("otp_sent_at")
@@ -1375,14 +1583,24 @@ class CloudMailMailbox(BaseMailbox):
             try:
                 mails = self._list_mails(target)
                 for idx, msg in enumerate(mails):
+                    summary = self._mail_debug_summary(msg, idx)
+                    if alias_email and not self._match_alias_receipt(msg, alias_email):
+                        self._log(
+                            f"[CloudMail] 跳过邮件: alias 不匹配 target={target} alias={alias_email} {summary}"
+                        )
+                        continue
                     mid = self._mail_id(msg, idx)
                     if mid in seen:
+                        self._log(f"[CloudMail] 跳过邮件: 已处理过 {summary}")
                         continue
                     seen.add(mid)
                     self._remember_seen_id(target, mid)
 
                     msg_ts = self._parse_message_timestamp(msg)
                     if otp_sent_at and msg_ts and msg_ts < float(otp_sent_at):
+                        self._log(
+                            f"[CloudMail] 跳过邮件: 早于本次发送时间 otp_sent_at={otp_sent_at} msg_ts={msg_ts} {summary}"
+                        )
                         continue
 
                     content = " ".join(
@@ -1394,13 +1612,16 @@ class CloudMailMailbox(BaseMailbox):
                         ]
                     )
                     if keyword and keyword.lower() not in content.lower():
+                        self._log(f"[CloudMail] 跳过邮件: keyword 不匹配 keyword={keyword} {summary}")
                         continue
                     code = self._safe_extract(content, code_pattern)
                     if code and code in exclude_codes:
-                        continue
+                        self._log(f"[CloudMail] 跳过邮件: 命中排除验证码 code={code} {summary}")
+                        return None
                     if code:
                         self._log(f"[CloudMail] 命中验证码: {code}")
                         return code
+                    self._log(f"[CloudMail] 跳过邮件: 未提取到验证码 {summary}")
             except Exception:
                 pass
             return None
