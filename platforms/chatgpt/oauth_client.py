@@ -141,6 +141,16 @@ class OAuthClient:
             random_delay(low, high)
 
     @staticmethod
+    def _sample_otp_wait_timeout(base_timeout: int) -> int:
+        """按基准秒数采样单次验证码等待时长。"""
+        try:
+            base = max(30, int(base_timeout or 600))
+        except Exception:
+            base = 600
+        sampled = int(round(random.uniform(base * 0.75, base * 1.25)))
+        return max(30, sampled)
+
+    @staticmethod
     def _random_chrome_fingerprint():
         profiles = [
             {
@@ -3088,27 +3098,26 @@ class OAuthClient:
         except Exception:
             otp_wait_seconds = 600
         otp_wait_seconds = max(30, min(otp_wait_seconds, 3600))
-        otp_poll_window = min(30, max(10, otp_wait_seconds))
         try:
-            default_resend_wait_seconds = 45 if prefer_passwordless_login else 120
-            otp_resend_wait_seconds = int(
+            otp_max_resends = int(
                 self.config.get(
-                    "chatgpt_oauth_otp_resend_wait_seconds",
-                    self.config.get(
-                        "chatgpt_otp_resend_wait_seconds",
-                        default_resend_wait_seconds,
-                    ),
+                    "chatgpt_oauth_otp_max_resends",
+                    self.config.get("chatgpt_otp_max_resends", 5),
                 )
-                or default_resend_wait_seconds
+                if self.config.get(
+                    "chatgpt_oauth_otp_max_resends",
+                    self.config.get("chatgpt_otp_max_resends", 5),
+                )
+                not in (None, "")
+                else 5
             )
         except Exception:
-            otp_resend_wait_seconds = 45 if prefer_passwordless_login else 120
-        otp_resend_wait_seconds = max(30, min(otp_resend_wait_seconds, 900))
-        otp_deadline = time.time() + otp_wait_seconds
+            otp_max_resends = 5
+        otp_max_resends = max(0, min(otp_max_resends, 20))
         otp_sent_at = _otp_sent_at_baseline
-        next_resend_at = time.time() + otp_resend_wait_seconds
+        otp_resend_count = 0
         self._log(
-            f"OAuth OTP 等待窗口: total={otp_wait_seconds}s, poll_window={otp_poll_window}s"
+            f"OAuth OTP 等待策略: base={otp_wait_seconds}s, max_resends={otp_max_resends}"
         )
 
         def validate_otp(code):
@@ -3210,9 +3219,11 @@ class OAuthClient:
 
         if hasattr(skymail_client, "wait_for_verification_code"):
             self._log("使用 wait_for_verification_code 进行阻塞式获取新验证码...")
-            while time.time() < otp_deadline:
-                remaining = max(1, int(otp_deadline - time.time()))
-                wait_time = min(otp_poll_window, remaining)
+            while True:
+                wait_time = self._sample_otp_wait_timeout(otp_wait_seconds)
+                self._log(
+                    f"OAuth OTP 等待窗口: base={otp_wait_seconds}s, actual={wait_time}s, resend={otp_resend_count}/{otp_max_resends}"
+                )
                 try:
                     code = skymail_client.wait_for_verification_code(
                         email,
@@ -3231,18 +3242,20 @@ class OAuthClient:
                     code = None
 
                 if not code:
-                    if time.time() >= next_resend_at and not self.last_error:
-                        self._log(
-                            f"暂未收到 OTP，触发重发（间隔 {otp_resend_wait_seconds}s）"
-                        )
-                        if _resend_email_otp():
-                            otp_sent_at = time.time()
-                            next_resend_at = otp_sent_at + otp_resend_wait_seconds
-                        else:
-                            next_resend_at = time.time() + otp_resend_wait_seconds
-                    self._log("暂未收到新的 OTP，继续等待...")
                     if self.last_error:
                         break
+                    if otp_resend_count >= otp_max_resends:
+                        break
+                    otp_resend_count += 1
+                    self._log(
+                        f"暂未收到 OTP，触发重发。resend={otp_resend_count}/{otp_max_resends}"
+                    )
+                    resend_ok = _resend_email_otp()
+                    if resend_ok:
+                        otp_sent_at = time.time()
+                        self._log("已触发新的 OTP，继续等待...")
+                    else:
+                        self._log("OTP 重发失败，继续等待当前可用邮件...")
                     continue
 
                 if code in tried_codes:
@@ -3255,7 +3268,7 @@ class OAuthClient:
                 if self.last_error:
                     break
         else:
-            while time.time() < otp_deadline:
+            while True:
                 messages = skymail_client.fetch_emails(email) or []
                 candidate_codes = []
 
@@ -3266,9 +3279,20 @@ class OAuthClient:
                         candidate_codes.append(code)
 
                 if not candidate_codes:
-                    elapsed = int(otp_wait_seconds - max(0, otp_deadline - time.time()))
-                    self._log(f"等待新的 OTP... ({elapsed}s/{otp_wait_seconds}s)")
-                    time.sleep(2)
+                    if otp_resend_count >= otp_max_resends:
+                        break
+                    otp_resend_count += 1
+                    wait_time = self._sample_otp_wait_timeout(otp_wait_seconds)
+                    self._log(
+                        f"等待新的 OTP... base={otp_wait_seconds}s actual={wait_time}s resend={otp_resend_count}/{otp_max_resends}"
+                    )
+                    time.sleep(min(wait_time, 2))
+                    self._log(
+                        f"暂未收到 OTP，触发重发。resend={otp_resend_count}/{otp_max_resends}"
+                    )
+                    resend_ok = _resend_email_otp()
+                    if resend_ok:
+                        otp_sent_at = time.time()
                     continue
 
                 for otp_code in candidate_codes:
@@ -3282,7 +3306,7 @@ class OAuthClient:
 
         if not self.last_error:
             self._set_error(
-                f"OAuth 阶段 OTP 验证失败，已尝试 {len(tried_codes)} 个验证码，等待窗口 {otp_wait_seconds}s"
+                f"OAuth 阶段 OTP 验证失败：已重发 {otp_resend_count}/{otp_max_resends} 次，已尝试 {len(tried_codes)} 个验证码"
             )
         return None
 

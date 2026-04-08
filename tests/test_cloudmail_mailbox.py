@@ -653,6 +653,125 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertIn("跳过邮件: 命中排除验证码 code=654321", joined_logs)
         self.assertIn("subject=Your verification code is 654321", joined_logs)
 
+    def test_wait_for_code_logs_skip_reason_only_once_per_message(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        assert isinstance(mailbox, CloudMailMailbox)
+        logs = []
+        setattr(mailbox, "_log_fn", logs.append)
+        account = MailboxAccount(
+            email="alias@alias.example.com",
+            account_id="real@mail.example.com",
+        )
+        repeated_mail = {
+            "emailId": "m-1",
+            "toEmail": "real@mail.example.com",
+            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+            "subject": "Your verification code is 111111",
+            "content": "",
+        }
+
+        def fake_run_polling_wait(*, poll_once, **kwargs):
+            for _ in range(10):
+                self.assertIsNone(poll_once())
+            raise TimeoutError("等待验证码超时 (1s)")
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=[repeated_mail]), mock.patch.object(
+            mailbox,
+            "_run_polling_wait",
+            side_effect=fake_run_polling_wait,
+        ):
+            with self.assertRaises(TimeoutError):
+                mailbox.wait_for_code(account, timeout=1)
+
+        alias_skip_logs = [line for line in logs if "跳过邮件: alias 不匹配" in line]
+        self.assertEqual(len(alias_skip_logs), 1)
+
+    def test_wait_for_code_logs_once_for_each_distinct_skipped_message(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        assert isinstance(mailbox, CloudMailMailbox)
+        logs = []
+        setattr(mailbox, "_log_fn", logs.append)
+        account = MailboxAccount(
+            email="alias@alias.example.com",
+            account_id="real@mail.example.com",
+        )
+        repeated_mails = [
+            {
+                "emailId": "m-1",
+                "toEmail": "real@mail.example.com",
+                "recipient": '[{"address":"other1@alias.example.com","name":""}]',
+                "subject": "Your verification code is 111111",
+                "content": "",
+            },
+            {
+                "emailId": "m-2",
+                "toEmail": "real@mail.example.com",
+                "recipient": '[{"address":"other2@alias.example.com","name":""}]',
+                "subject": "Your verification code is 222222",
+                "content": "",
+            },
+        ]
+
+        def fake_run_polling_wait(*, poll_once, **kwargs):
+            for _ in range(10):
+                self.assertIsNone(poll_once())
+            raise TimeoutError("等待验证码超时 (1s)")
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=repeated_mails), mock.patch.object(
+            mailbox,
+            "_run_polling_wait",
+            side_effect=fake_run_polling_wait,
+        ):
+            with self.assertRaises(TimeoutError):
+                mailbox.wait_for_code(account, timeout=1)
+
+        alias_skip_logs = [line for line in logs if "跳过邮件: alias 不匹配" in line]
+        self.assertEqual(len(alias_skip_logs), 2)
+        self.assertTrue(any("recipient=other1@alias.example.com" in line for line in alias_skip_logs))
+        self.assertTrue(any("recipient=other2@alias.example.com" in line for line in alias_skip_logs))
+
+    def test_wait_for_code_uses_randomized_poll_interval_for_cloudmail(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        assert isinstance(mailbox, CloudMailMailbox)
+        account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
+
+        with mock.patch("core.base_mailbox.random.uniform", return_value=17.3) as mock_uniform, mock.patch.object(
+            mailbox,
+            "_run_polling_wait",
+            return_value="123456",
+        ) as mock_run_polling_wait:
+            code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "123456")
+        mock_uniform.assert_called_once_with(15, 20)
+        self.assertEqual(mock_run_polling_wait.call_args.kwargs["poll_interval"], 17.3)
+        self.assertEqual(mock_run_polling_wait.call_args.kwargs["timeout"], 5)
+        self.assertTrue(callable(mock_run_polling_wait.call_args.kwargs["poll_once"]))
+
 
 def _json_response(payload: dict, status_code: int = 200):
     response = mock.Mock()

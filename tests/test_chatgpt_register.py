@@ -269,10 +269,293 @@ class RefreshTokenRegistrationEngineTests(unittest.TestCase):
             exclude_codes={"654321"},
         )
 
+    def test_run_uses_mailbox_timeout_as_register_wait_base(self):
+        engine = self._make_engine(
+            extra_config={
+                "mailbox_otp_timeout_seconds": 75,
+                "chatgpt_register_otp_wait_seconds": 600,
+            }
+        )
+
+        register_client = mock.Mock()
+        register_client.register_complete_flow.return_value = (False, "user_already_exists")
+        register_client.device_id = "device-fixed"
+        register_client.ua = "UA"
+        register_client.sec_ch_ua = '"Chromium";v="136"'
+        register_client.impersonate = "chrome136"
+
+        oauth_client = mock.Mock()
+        oauth_client.login_and_get_tokens.return_value = {
+            "access_token": "at",
+            "refresh_token": "rt",
+            "id_token": "id-token",
+        }
+        oauth_client.last_error = ""
+        oauth_client.last_workspace_id = "ws-1"
+        oauth_client._decode_oauth_session_cookie.return_value = {
+            "workspaces": [{"id": "ws-1"}]
+        }
+        oauth_client._get_cookie_value.return_value = "session-1"
+
+        with mock.patch.object(engine, "_build_chatgpt_client", return_value=register_client), \
+            mock.patch.object(engine, "_build_oauth_client", return_value=oauth_client), \
+            mock.patch("platforms.chatgpt.refresh_token_registration_engine.OAuthManager") as mock_oauth_manager_cls:
+            oauth_manager = mock.Mock()
+            oauth_manager.extract_account_info.return_value = {
+                "email": "user@example.com",
+                "account_id": "acct-1",
+            }
+            mock_oauth_manager_cls.return_value = oauth_manager
+
+            result = engine.run()
+
+        self.assertTrue(result.success)
+        register_kwargs = register_client.register_complete_flow.call_args.kwargs
+        self.assertEqual(register_kwargs["otp_wait_timeout"], 75)
+        self.assertEqual(register_kwargs["max_otp_resend_attempts"], 5)
+
+
+class ChatGPTClientRegisterFlowOtpTests(unittest.TestCase):
+    def _make_client(self):
+        client = object.__new__(ChatGPTClient)
+        client.proxy = "http://127.0.0.1:7890"
+        client.verbose = False
+        client.browser_mode = "protocol"
+        client.device_id = "device-fixed"
+        client.accept_language = "en-US,en;q=0.9"
+        client.impersonate = "chrome136"
+        client.chrome_major = 136
+        client.chrome_full = "136.0.7103.100"
+        client.ua = "UA"
+        client.sec_ch_ua = '"Chromium";v="136"'
+        client.session = mock.Mock(headers={})
+        client.last_registration_state = FlowState()
+        client.last_stage = ""
+        client._log = lambda _msg: None
+        return client
+
+    def test_register_complete_flow_resends_until_code_received(self):
+        client = self._make_client()
+        register_state = FlowState(
+            page_type="register_password",
+            current_url="https://auth.openai.com/create-account/password",
+        )
+        otp_state = FlowState(
+            page_type="email_otp_verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        about_you_state = FlowState(
+            page_type="about_you",
+            current_url="https://auth.openai.com/about-you",
+        )
+        mail_client = mock.Mock()
+        mail_client.wait_for_verification_code.side_effect = [TimeoutError("t1"), TimeoutError("t2"), "123456"]
+
+        with mock.patch.object(client, "visit_homepage", return_value=True), \
+            mock.patch.object(client, "get_csrf_token", return_value="csrf"), \
+            mock.patch.object(client, "signin", return_value="https://auth.openai.com/authorize"), \
+            mock.patch.object(client, "authorize", return_value="https://auth.openai.com/create-account/password"), \
+            mock.patch.object(client, "_state_from_url", side_effect=[register_state, otp_state]), \
+            mock.patch.object(client, "_is_registration_complete_state", side_effect=lambda state: False), \
+            mock.patch.object(client, "_state_is_password_registration", side_effect=lambda state: state.page_type == "register_password"), \
+            mock.patch.object(client, "_state_is_email_otp", side_effect=lambda state: state.page_type == "email_otp_verification"), \
+            mock.patch.object(client, "_state_is_about_you", side_effect=lambda state: state.page_type == "about_you"), \
+            mock.patch.object(client, "_state_requires_navigation", return_value=False), \
+            mock.patch.object(client, "register_user", return_value=(True, "ok")), \
+            mock.patch.object(client, "send_email_otp", side_effect=[True, True, True]) as send_otp, \
+            mock.patch.object(client, "verify_email_otp", return_value=(True, about_you_state)), \
+            mock.patch("platforms.chatgpt.chatgpt_client.random.uniform", side_effect=[80, 90, 100]):
+            ok, message = client.register_complete_flow(
+                "user@example.com",
+                "Secret123!",
+                "Foo",
+                "Bar",
+                "1990-01-01",
+                mail_client,
+                stop_before_about_you_submission=True,
+                otp_wait_timeout=100,
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(message, "pending_about_you_submission")
+        self.assertEqual(send_otp.call_count, 3)
+        wait_calls = mail_client.wait_for_verification_code.call_args_list
+        self.assertEqual([call.kwargs["timeout"] for call in wait_calls], [80, 90, 100])
+        self.assertIsNotNone(wait_calls[0].kwargs["otp_sent_at"])
+        self.assertLess(wait_calls[0].kwargs["otp_sent_at"], wait_calls[1].kwargs["otp_sent_at"])
+        self.assertLess(wait_calls[1].kwargs["otp_sent_at"], wait_calls[2].kwargs["otp_sent_at"])
+
+    def test_register_complete_flow_fails_after_default_five_resends(self):
+        client = self._make_client()
+        register_state = FlowState(
+            page_type="register_password",
+            current_url="https://auth.openai.com/create-account/password",
+        )
+        otp_state = FlowState(
+            page_type="email_otp_verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        mail_client = mock.Mock()
+        mail_client.wait_for_verification_code.side_effect = [TimeoutError(f"t{i}") for i in range(6)]
+
+        with mock.patch.object(client, "visit_homepage", return_value=True), \
+            mock.patch.object(client, "get_csrf_token", return_value="csrf"), \
+            mock.patch.object(client, "signin", return_value="https://auth.openai.com/authorize"), \
+            mock.patch.object(client, "authorize", return_value="https://auth.openai.com/create-account/password"), \
+            mock.patch.object(client, "_state_from_url", side_effect=[register_state, otp_state]), \
+            mock.patch.object(client, "_is_registration_complete_state", side_effect=lambda state: False), \
+            mock.patch.object(client, "_state_is_password_registration", side_effect=lambda state: state.page_type == "register_password"), \
+            mock.patch.object(client, "_state_is_email_otp", side_effect=lambda state: state.page_type == "email_otp_verification"), \
+            mock.patch.object(client, "_state_is_about_you", side_effect=lambda state: False), \
+            mock.patch.object(client, "_state_requires_navigation", return_value=False), \
+            mock.patch.object(client, "register_user", return_value=(True, "ok")), \
+            mock.patch.object(client, "send_email_otp", side_effect=[True, True, True, True, True, True]) as send_otp, \
+            mock.patch("platforms.chatgpt.chatgpt_client.random.uniform", side_effect=[100, 100, 100, 100, 100, 100]):
+            ok, message = client.register_complete_flow(
+                "user@example.com",
+                "Secret123!",
+                "Foo",
+                "Bar",
+                "1990-01-01",
+                mail_client,
+                otp_wait_timeout=100,
+            )
+
+        self.assertFalse(ok)
+        self.assertIn("已重发 5/5 次", message)
+        self.assertEqual(send_otp.call_count, 6)
+
 
 class OAuthClientPasswordlessTests(unittest.TestCase):
     def _make_client(self):
         return OAuthClient({}, proxy="http://127.0.0.1:7890", verbose=False)
+
+    def test_handle_otp_verification_resends_until_code_received(self):
+        client = self._make_client()
+        client.config = {
+            "chatgpt_oauth_otp_wait_seconds": 30,
+            "chatgpt_oauth_otp_max_resends": 5,
+        }
+        state = FlowState(
+            page_type="email_otp_verification",
+            continue_url="https://auth.openai.com/email-verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        mail_client = mock.Mock()
+        mail_client._used_codes = set()
+        mail_client.wait_for_verification_code.side_effect = [TimeoutError("t1"), TimeoutError("t2"), "654321"]
+        next_state = FlowState(
+            page_type="consent",
+            continue_url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+            current_url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+        )
+
+        def _post_side_effect(url, **kwargs):
+            if url.endswith("/api/accounts/passwordless/send-otp"):
+                return mock.Mock(status_code=200, url=url, text="", json=mock.Mock(return_value={}))
+            if url.endswith("/api/accounts/email-otp/validate"):
+                return mock.Mock(
+                    status_code=200,
+                    url=url,
+                    text="",
+                    json=mock.Mock(return_value={"page": {"type": "consent"}}),
+                )
+            raise AssertionError(f"unexpected POST url: {url}")
+
+        with mock.patch("platforms.chatgpt.oauth_client.get_sentinel_token_via_browser", return_value="sentinel"), \
+            mock.patch.object(client, "_headers", return_value={}), \
+            mock.patch.object(client, "_browser_pause"), \
+            mock.patch.object(client, "_state_from_payload", return_value=next_state), \
+            mock.patch.object(type(client), "_sample_otp_wait_timeout", side_effect=[31, 30, 29]), \
+            mock.patch.object(client.session, "post", side_effect=_post_side_effect) as post_mock, \
+            mock.patch.object(client, "_log"):
+            resolved_state = client._handle_otp_verification(
+                "user@example.com",
+                "device-fixed",
+                "UA",
+                '"Chromium";v="136"',
+                "chrome136",
+                mail_client,
+                state,
+                prefer_passwordless_login=True,
+            )
+
+        self.assertEqual(resolved_state, next_state)
+        self.assertEqual(mail_client.wait_for_verification_code.call_count, 3)
+        self.assertEqual(post_mock.call_count, 3)
+        wait_calls = mail_client.wait_for_verification_code.call_args_list
+        self.assertEqual([call.kwargs["timeout"] for call in wait_calls], [31, 30, 29])
+        self.assertLess(wait_calls[0].kwargs["otp_sent_at"], wait_calls[1].kwargs["otp_sent_at"])
+        self.assertLess(wait_calls[1].kwargs["otp_sent_at"], wait_calls[2].kwargs["otp_sent_at"])
+
+    def test_handle_otp_verification_fails_after_default_five_resends(self):
+        client = self._make_client()
+        client.config = {"chatgpt_oauth_otp_wait_seconds": 30}
+        state = FlowState(
+            page_type="email_otp_verification",
+            continue_url="https://auth.openai.com/email-verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        mail_client = mock.Mock()
+        mail_client._used_codes = set()
+        mail_client.wait_for_verification_code.side_effect = [TimeoutError(f"t{i}") for i in range(6)]
+
+        with mock.patch("platforms.chatgpt.oauth_client.get_sentinel_token_via_browser", return_value="sentinel"), \
+            mock.patch.object(client, "_headers", return_value={}), \
+            mock.patch.object(client, "_browser_pause"), \
+            mock.patch.object(client, "_log"), \
+            mock.patch.object(type(client), "_sample_otp_wait_timeout", side_effect=[30, 30, 30, 30, 30, 30]), \
+            mock.patch.object(client.session, "post", return_value=mock.Mock(status_code=200, url="https://auth.openai.com/api/accounts/passwordless/send-otp", text="", json=mock.Mock(return_value={}))), \
+            mock.patch.object(client.session, "get", return_value=mock.Mock(status_code=200, url="https://auth.openai.com/api/accounts/email-otp/send", text="", json=mock.Mock(return_value={}))):
+            next_state = client._handle_otp_verification(
+                "user@example.com",
+                "device-fixed",
+                "UA",
+                '"Chromium";v="136"',
+                "chrome136",
+                mail_client,
+                state,
+                prefer_passwordless_login=True,
+            )
+
+        self.assertIsNone(next_state)
+        self.assertIn("已重发 5/5 次", client.last_error)
+
+    def test_handle_otp_verification_resend_failures_still_consume_budget(self):
+        client = self._make_client()
+        client.config = {
+            "chatgpt_oauth_otp_wait_seconds": 30,
+            "chatgpt_oauth_otp_max_resends": 2,
+        }
+        state = FlowState(
+            page_type="email_otp_verification",
+            continue_url="https://auth.openai.com/email-verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        mail_client = mock.Mock()
+        mail_client._used_codes = set()
+        mail_client.wait_for_verification_code.side_effect = [TimeoutError("t1"), TimeoutError("t2"), TimeoutError("t3")]
+
+        with mock.patch("platforms.chatgpt.oauth_client.get_sentinel_token_via_browser", return_value="sentinel"), \
+            mock.patch.object(client, "_headers", return_value={}), \
+            mock.patch.object(client, "_browser_pause"), \
+            mock.patch.object(client, "_log"), \
+            mock.patch.object(type(client), "_sample_otp_wait_timeout", side_effect=[30, 30, 30]), \
+            mock.patch.object(client.session, "post", return_value=mock.Mock(status_code=500, url="https://auth.openai.com/api/accounts/passwordless/send-otp", text="err", json=mock.Mock(return_value={}))), \
+            mock.patch.object(client.session, "get", return_value=mock.Mock(status_code=500, url="https://auth.openai.com/api/accounts/email-otp/send", text="err", json=mock.Mock(return_value={}))):
+            next_state = client._handle_otp_verification(
+                "user@example.com",
+                "device-fixed",
+                "UA",
+                '"Chromium";v="136"',
+                "chrome136",
+                mail_client,
+                state,
+                prefer_passwordless_login=True,
+            )
+
+        self.assertIsNone(next_state)
+        self.assertIn("已重发 2/2 次", client.last_error)
 
     def test_submit_signup_register_uses_minimal_headers_strategy(self):
         client = self._make_client()

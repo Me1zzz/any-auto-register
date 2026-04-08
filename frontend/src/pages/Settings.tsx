@@ -96,7 +96,13 @@ const TAB_ITEMS = [
         desc: '选择注册时使用的邮箱类型',
         fields: [
           { key: 'mail_provider', label: '邮箱服务', type: 'select' },
-          { key: 'mailbox_otp_timeout_seconds', label: '邮箱验证码等待秒数', placeholder: '例如 60 / 90 / 120' },
+          {
+            key: 'mailbox_otp_timeout_seconds',
+            label: '邮箱验证码等待秒数',
+            placeholder: '例如 60 / 90 / 120',
+            description:
+              '表示每轮等待后触发重发的基准秒数。实际每次会在 0.75x ~ 1.25x 之间随机等待；超时后自动重发验证码，默认最多重发 5 次。',
+          },
         ],
       },
       {
@@ -397,6 +403,7 @@ interface FieldConfig {
   key: string
   label: string
   placeholder?: string
+  description?: string
   type?: 'select' | 'input' | 'boolean' | 'textarea'
   secret?: boolean
 }
@@ -570,7 +577,7 @@ function ConfigField({ field }: { field: FieldConfig }) {
   const helpText =
     field.key === 'default_executor'
       ? '仅对支持的平台生效；ChatGPT、Cursor、Grok、Kiro、Tavily、Trae 支持浏览器模式，OpenBlockLabs 仅支持纯协议。'
-      : undefined
+      : field.description
 
   return (
     <Form.Item

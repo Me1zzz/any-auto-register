@@ -229,6 +229,8 @@ class RefreshTokenRegistrationEngine:
             if key not in self.extra_config:
                 continue
             value = self.extra_config.get(key)
+            if value in (None, ""):
+                continue
             try:
                 parsed = int(value)
             except Exception:
@@ -370,8 +372,8 @@ class RefreshTokenRegistrationEngine:
         last_error = ""
         fixed_email = str(self.email or "").strip()
         register_otp_wait_seconds = self._read_int_config(
-            "chatgpt_register_otp_wait_seconds",
-            fallback_keys=("chatgpt_otp_wait_seconds",),
+            "mailbox_otp_timeout_seconds",
+            fallback_keys=("chatgpt_register_otp_wait_seconds", "chatgpt_otp_wait_seconds"),
             default=600,
             minimum=30,
             maximum=3600,
@@ -382,6 +384,13 @@ class RefreshTokenRegistrationEngine:
             default=300,
             minimum=30,
             maximum=3600,
+        )
+        register_otp_max_resends = self._read_int_config(
+            "chatgpt_register_otp_max_resends",
+            fallback_keys=("chatgpt_otp_max_resends",),
+            default=5,
+            minimum=0,
+            maximum=20,
         )
 
         try:
@@ -415,8 +424,9 @@ class RefreshTokenRegistrationEngine:
             self._log("流程策略: 注册阶段推进到 about_you 后切换到 OAuth 流程继续完成后续步骤")
             self._log(
                 "验证码等待策略: "
-                f"register_wait={register_otp_wait_seconds}s, "
-                f"register_resend_wait={register_otp_resend_wait_seconds}s, "
+                f"register_wait_base={register_otp_wait_seconds}s, "
+                f"register_max_resends={register_otp_max_resends}, "
+                f"legacy_register_resend_wait={register_otp_resend_wait_seconds}s, "
                 "oauth_wait=读取 OAuthClient 配置（默认600s）"
             )
 
@@ -438,6 +448,7 @@ class RefreshTokenRegistrationEngine:
                 stop_before_about_you_submission=True,
                 otp_wait_timeout=register_otp_wait_seconds,
                 otp_resend_wait_timeout=register_otp_resend_wait_seconds,
+                max_otp_resend_attempts=register_otp_max_resends,
             )
 
             if not registered:

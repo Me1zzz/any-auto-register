@@ -54,10 +54,10 @@ class ChatGPTPlatform(BasePlatform):
 
         def _resolve_mailbox_timeout(requested_timeout: int) -> int:
             candidates = (
+                requested_timeout,
                 extra_config.get("mailbox_otp_timeout_seconds"),
                 extra_config.get("email_otp_timeout_seconds"),
                 extra_config.get("otp_timeout"),
-                requested_timeout,
             )
             for value in candidates:
                 if value in (None, ""):

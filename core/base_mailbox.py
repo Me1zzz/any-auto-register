@@ -1580,6 +1580,12 @@ class CloudMailMailbox(BaseMailbox):
         except Exception:
             return set()
 
+    def _log_skip_reason_once(self, logged_message_ids: set[str], message_id: str, message: str) -> None:
+        if message_id in logged_message_ids:
+            return
+        logged_message_ids.add(message_id)
+        self._log(message)
+
     def wait_for_code(
         self,
         account: MailboxAccount,
@@ -1599,20 +1605,27 @@ class CloudMailMailbox(BaseMailbox):
             for code in (kwargs.get("exclude_codes") or set())
             if str(code or "").strip()
         }
+        skip_logged_message_ids: set[str] = set()
 
         def poll_once() -> Optional[str]:
             try:
                 mails = self._list_mails(target)
                 for idx, msg in enumerate(mails):
                     summary = self._mail_debug_summary(msg, idx)
+                    mid = self._mail_id(msg, idx)
                     if alias_email and not self._match_alias_receipt(msg, alias_email):
-                        self._log(
+                        self._log_skip_reason_once(
+                            skip_logged_message_ids,
+                            mid,
                             f"[CloudMail] 跳过邮件: alias 不匹配 target={target} alias={alias_email} {summary}"
                         )
                         continue
-                    mid = self._mail_id(msg, idx)
                     if mid in seen:
-                        self._log(f"[CloudMail] 跳过邮件: 已处理过 {summary}")
+                        self._log_skip_reason_once(
+                            skip_logged_message_ids,
+                            mid,
+                            f"[CloudMail] 跳过邮件: 已处理过 {summary}",
+                        )
                         continue
                     seen.add(mid)
                     if seen_key:
@@ -1620,7 +1633,9 @@ class CloudMailMailbox(BaseMailbox):
 
                     msg_ts = self._parse_message_timestamp(msg)
                     if otp_sent_at and msg_ts and msg_ts < float(otp_sent_at):
-                        self._log(
+                        self._log_skip_reason_once(
+                            skip_logged_message_ids,
+                            mid,
                             f"[CloudMail] 跳过邮件: 早于本次发送时间 otp_sent_at={otp_sent_at} msg_ts={msg_ts} {summary}"
                         )
                         continue
@@ -1634,23 +1649,36 @@ class CloudMailMailbox(BaseMailbox):
                         ]
                     )
                     if keyword and keyword.lower() not in content.lower():
-                        self._log(f"[CloudMail] 跳过邮件: keyword 不匹配 keyword={keyword} {summary}")
+                        self._log_skip_reason_once(
+                            skip_logged_message_ids,
+                            mid,
+                            f"[CloudMail] 跳过邮件: keyword 不匹配 keyword={keyword} {summary}",
+                        )
                         continue
                     code = self._safe_extract(content, code_pattern)
                     if code and code in exclude_codes:
-                        self._log(f"[CloudMail] 跳过邮件: 命中排除验证码 code={code} {summary}")
+                        self._log_skip_reason_once(
+                            skip_logged_message_ids,
+                            mid,
+                            f"[CloudMail] 跳过邮件: 命中排除验证码 code={code} {summary}",
+                        )
                         return None
                     if code:
                         self._log(f"[CloudMail] 命中验证码: {code}")
                         return code
-                    self._log(f"[CloudMail] 跳过邮件: 未提取到验证码 {summary}")
+                    self._log_skip_reason_once(
+                        skip_logged_message_ids,
+                        mid,
+                        f"[CloudMail] 跳过邮件: 未提取到验证码 {summary}",
+                    )
             except Exception:
                 pass
             return None
 
+        poll_interval = random.uniform(15, 20)
         return self._run_polling_wait(
             timeout=timeout,
-            poll_interval=3,
+            poll_interval=poll_interval,
             poll_once=poll_once,
         )
 
