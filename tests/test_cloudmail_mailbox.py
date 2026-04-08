@@ -71,6 +71,33 @@ class CloudMailMailboxTests(unittest.TestCase):
             },
         )
 
+    def test_get_email_allows_alias_without_real_mailbox(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+                "cloudmail_alias_enabled": "1",
+                "cloudmail_alias_emails": "alias2@alias.example.com",
+            },
+        )
+
+        account = mailbox.get_email()
+
+        self.assertEqual(account.email, "alias2@alias.example.com")
+        self.assertEqual(account.account_id, "")
+        self.assertEqual(
+            account.extra,
+            {
+                "mailbox_alias": {
+                    "enabled": True,
+                    "alias_email": "alias2@alias.example.com",
+                    "mailbox_email": "",
+                }
+            },
+        )
+
     def test_get_email_does_not_repeat_alias_within_same_task_pool(self):
         mailbox_a = create_mailbox(
             "cloudmail",
@@ -94,6 +121,8 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
+        assert isinstance(mailbox_a, CloudMailMailbox)
+        assert isinstance(mailbox_b, CloudMailMailbox)
         mailbox_a._task_alias_pool_key = "task-1"
         mailbox_b._task_alias_pool_key = "task-1"
 
@@ -127,6 +156,8 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
+        assert isinstance(mailbox_a, CloudMailMailbox)
+        assert isinstance(mailbox_b, CloudMailMailbox)
         mailbox_a._task_alias_pool_key = "task-1"
         mailbox_b._task_alias_pool_key = "task-1"
 
@@ -146,6 +177,7 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
+        assert isinstance(mailbox, CloudMailMailbox)
         mailbox._task_alias_pool_key = "task-1"
 
         with mock.patch("random.shuffle", side_effect=lambda items: None):
@@ -286,6 +318,127 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "sss@me1zzz.tech")
 
     @mock.patch("requests.post")
+    def test_get_current_ids_filters_by_recipient_when_real_mailbox_missing(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "other@mail.example.com",
+                            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+                            "subject": "Your verification code is 111111",
+                            "content": "",
+                        },
+                        {
+                            "emailId": "m-2",
+                            "toEmail": "shared@mail.example.com",
+                            "recipient": '[{"address":"alias@alias.example.com","name":""}]',
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        },
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(email="alias@alias.example.com", account_id="")
+
+        current_ids = mailbox.get_current_ids(account)
+
+        self.assertEqual(current_ids, {"m-2"})
+        self.assertNotIn("toEmail", mock_post.call_args_list[1].kwargs["json"])
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_filters_by_recipient_when_real_mailbox_missing(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "other@mail.example.com",
+                            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+                            "subject": "Your verification code is 111111",
+                            "content": "",
+                        },
+                        {
+                            "emailId": "m-2",
+                            "toEmail": "shared@mail.example.com",
+                            "recipient": '[{"address":"alias@alias.example.com","name":""}]',
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        },
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(email="alias@alias.example.com", account_id="")
+
+        code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "654321")
+        self.assertNotIn("toEmail", mock_post.call_args_list[1].kwargs["json"])
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_times_out_when_recipient_missing_and_real_mailbox_missing(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "shared@mail.example.com",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(email="alias@alias.example.com", account_id="")
+
+        with self.assertRaises(TimeoutError):
+            mailbox.wait_for_code(account, timeout=1)
+
+        self.assertNotIn("toEmail", mock_post.call_args_list[1].kwargs["json"])
+
+    @mock.patch("requests.post")
     def test_wait_for_code_returns_duplicate_code_when_not_explicitly_excluded(self, mock_post):
         mock_post.side_effect = [
             _json_response({"code": 200, "data": {"token": "tok-1"}}),
@@ -401,8 +554,9 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
             },
         )
+        assert isinstance(mailbox, CloudMailMailbox)
         logs = []
-        mailbox._log_fn = logs.append
+        setattr(mailbox, "_log_fn", logs.append)
 
         mails = mailbox._list_mails("real@mail.example.com")
 
@@ -443,8 +597,10 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
             },
         )
+        assert isinstance(mailbox, CloudMailMailbox)
+        assert isinstance(mailbox, CloudMailMailbox)
         logs = []
-        mailbox._log_fn = logs.append
+        setattr(mailbox, "_log_fn", logs.append)
         account = MailboxAccount(
             email="alias@alias.example.com",
             account_id="real@mail.example.com",
@@ -485,8 +641,9 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
             },
         )
+        assert isinstance(mailbox, CloudMailMailbox)
         logs = []
-        mailbox._log_fn = logs.append
+        setattr(mailbox, "_log_fn", logs.append)
         account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
 
         with self.assertRaises(TimeoutError):

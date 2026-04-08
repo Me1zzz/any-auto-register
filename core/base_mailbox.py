@@ -1192,8 +1192,9 @@ class CloudMailMailbox(BaseMailbox):
             if isinstance(msg, dict)
         ]
         suffix = " ..." if len(mails) > 5 else ""
+        filter_value = email or "<all>"
         self._log(
-            f"[CloudMail] emailList 响应: toEmail={email} count={len(mails)} items={summaries}{suffix}"
+            f"[CloudMail] emailList 响应: toEmail={filter_value} count={len(mails)} items={summaries}{suffix}"
         )
 
     def _pick_alias_email(self) -> str:
@@ -1233,10 +1234,22 @@ class CloudMailMailbox(BaseMailbox):
     def _resolve_mailbox_email(self, alias_email: str) -> str:
         if alias_email:
             mailbox_email = str(self.alias_mailbox_email or "").strip()
-            if not mailbox_email:
-                raise RuntimeError("CloudMail 已启用别名邮箱，但未配置别名邮箱对应的真实邮箱")
             return mailbox_email
         return self._build_email()
+
+    def _resolve_lookup_context(self, account: MailboxAccount) -> tuple[str, str, str]:
+        mailbox_email = str(account.account_id or "").strip()
+        account_email = str(account.email or "").strip()
+
+        if mailbox_email:
+            alias_email = ""
+            if self._normalize_email_value(mailbox_email) != self._normalize_email_value(account_email):
+                alias_email = self._normalize_email_value(account_email)
+            return mailbox_email, alias_email, mailbox_email
+
+        alias_email = self._normalize_email_value(account_email)
+        seen_key = f"recipient:{alias_email}" if alias_email else ""
+        return "", alias_email, seen_key
 
     @staticmethod
     def _normalize_email_value(value: Any) -> str:
@@ -1399,14 +1412,15 @@ class CloudMailMailbox(BaseMailbox):
             CloudMailMailbox._token_cache[cache_key] = (token, now + 3600)
             return token
 
-    def _list_mails(self, email: str, *, retry_auth: bool = True) -> list:
+    def _list_mails(self, email: str = "", *, retry_auth: bool = True) -> list:
         import requests
 
         token = self._get_token()
         payload = {
-            "toEmail": email,
             "timeSort": "desc",
         }
+        if email:
+            payload["toEmail"] = email
         r = requests.post(
             f"{self.api}/api/public/emailList",
             json=payload,
@@ -1539,23 +1553,30 @@ class CloudMailMailbox(BaseMailbox):
         self._ensure_config()
         alias_email = self._pick_alias_email()
         mailbox_email = self._resolve_mailbox_email(alias_email)
+        primary_email = alias_email or mailbox_email
         account = MailboxAccount(
-            email=alias_email or mailbox_email,
+            email=primary_email,
             account_id=mailbox_email,
-            extra=self._build_account_extra(alias_email or mailbox_email, mailbox_email),
+            extra=self._build_account_extra(primary_email, mailbox_email),
         )
         self._last_account = account
         if alias_email:
-            self._log(f"[CloudMail] 生成邮箱: alias={account.email} mailbox={mailbox_email}")
+            mailbox_display = mailbox_email or "<recipient-only>"
+            self._log(f"[CloudMail] 生成邮箱: alias={account.email} mailbox={mailbox_display}")
         else:
             self._log(f"[CloudMail] 生成邮箱: {mailbox_email}")
         return account
 
     def get_current_ids(self, account: MailboxAccount) -> set:
-        target = account.account_id or account.email
+        target, alias_email, _ = self._resolve_lookup_context(account)
         try:
             mails = self._list_mails(target)
-            return {self._mail_id(msg, idx) for idx, msg in enumerate(mails)}
+            ids = set()
+            for idx, msg in enumerate(mails):
+                if alias_email and not target and not self._match_alias_receipt(msg, alias_email):
+                    continue
+                ids.add(self._mail_id(msg, idx))
+            return ids
         except Exception:
             return set()
 
@@ -1568,10 +1589,10 @@ class CloudMailMailbox(BaseMailbox):
         code_pattern: str = None,
         **kwargs,
     ) -> str:
-        target = account.account_id or account.email
-        alias_email = str(account.email or "").strip().lower() if target != account.email else ""
+        target, alias_email, seen_key = self._resolve_lookup_context(account)
         seen = set(before_ids or set())
-        seen.update(self._load_seen_ids(target))
+        if seen_key:
+            seen.update(self._load_seen_ids(seen_key))
         otp_sent_at = kwargs.get("otp_sent_at")
         exclude_codes = {
             str(code).strip()
@@ -1594,7 +1615,8 @@ class CloudMailMailbox(BaseMailbox):
                         self._log(f"[CloudMail] 跳过邮件: 已处理过 {summary}")
                         continue
                     seen.add(mid)
-                    self._remember_seen_id(target, mid)
+                    if seen_key:
+                        self._remember_seen_id(seen_key, mid)
 
                     msg_ts = self._parse_message_timestamp(msg)
                     if otp_sent_at and msg_ts and msg_ts < float(otp_sent_at):
