@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Page Clicker Demo</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+        line-height: 1.5;
+      }
+      button {
+        padding: 12px 20px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 16px;
+        color: #0a7a2f;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Page Clicker Demo</h1>
+    <p>点击按钮后，状态文字会切换为 success。</p>
+    <button id="start-button" type="button">Start Automation</button>
+    <div id="status">waiting</div>
+
+    <script>
+      const button = document.getElementById("start-button");
+      const status = document.getElementById("status");
+      button.addEventListener("click", () => {
+        status.textContent = "success";
+        document.title = "Page Clicker Demo - Clicked";
+      });
+    </script>
+  </body>
+  </html>
