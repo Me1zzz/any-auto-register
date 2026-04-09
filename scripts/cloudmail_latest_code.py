@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Optional, Protocol, cast
 
@@ -119,8 +120,8 @@ def _build_account(args: argparse.Namespace) -> MailboxAccount:
         "cloudmail_alias_mailbox_email",
     )
 
-    if not email:
-        raise RuntimeError("缺少目标邮箱：请通过 --email 或配置 cloudmail_target_email / cloudmail_alias_email 提供")
+    if not email and not mailbox_email:
+        return MailboxAccount(email="", account_id="")
 
     account_id = mailbox_email or email
     return MailboxAccount(email=email, account_id=account_id)
@@ -163,6 +164,69 @@ def _format_match_output(mailbox: object, account: MailboxAccount, code: str) ->
     return f"code={str(code).strip()}"
 
 
+def _scan_once(
+    mailbox: object,
+    account: MailboxAccount,
+    *,
+    keyword: str,
+    code_pattern: str,
+    printed_ids: set[str],
+) -> list[str]:
+    list_mails = cast(Optional[Callable[[str], list[dict]]], getattr(mailbox, "_list_mails", None))
+    resolve_lookup_context = cast(
+        Optional[Callable[[MailboxAccount], tuple[str, str, str]]],
+        getattr(mailbox, "_resolve_lookup_context", None),
+    )
+    match_alias_receipt = cast(
+        Optional[Callable[[dict, str], bool]],
+        getattr(mailbox, "_match_alias_receipt", None),
+    )
+    mail_id = cast(Optional[Callable[[dict, int], str]], getattr(mailbox, "_mail_id", None))
+    safe_extract = cast(Optional[Callable[[str, str], Optional[str]]], getattr(mailbox, "_safe_extract", None))
+
+    if not all(callable(item) for item in (list_mails, resolve_lookup_context, match_alias_receipt, mail_id, safe_extract)):
+        raise RuntimeError("CloudMail mailbox missing required methods for polling")
+
+    assert list_mails is not None
+    assert resolve_lookup_context is not None
+    assert match_alias_receipt is not None
+    assert mail_id is not None
+    assert safe_extract is not None
+
+    target, alias_email, _ = resolve_lookup_context(account)
+    outputs: list[str] = []
+    mails = list_mails(target)
+    keyword_lower = keyword.lower()
+
+    for index, message in enumerate(mails):
+        mid = str(mail_id(message, index) or "").strip()
+        if not mid or mid in printed_ids:
+            continue
+        if alias_email and not target and not match_alias_receipt(message, alias_email):
+            continue
+
+        content = " ".join(
+            [
+                str(message.get("subject") or ""),
+                str(message.get("content") or ""),
+                str(message.get("text") or ""),
+                str(message.get("html") or ""),
+            ]
+        )
+        if keyword_lower and keyword_lower not in content.lower():
+            continue
+
+        code = safe_extract(content, code_pattern)
+        if not code:
+            continue
+
+        setattr(mailbox, "_last_matched_message_id", mid)
+        printed_ids.add(mid)
+        outputs.append(_format_match_output(mailbox, account, code))
+
+    return outputs
+
+
 def run_polling(
     args: argparse.Namespace,
     *,
@@ -172,24 +236,29 @@ def run_polling(
     emit_error = emit_error or (lambda message: print(message, file=sys.stderr))
     mailbox = create_mailbox("cloudmail", extra=_build_mailbox_extra(args))
     account = _build_account(args)
+    printed_ids: set[str] = set()
+    keyword = str(args.keyword or "").strip()
+    code_pattern = str(args.code_pattern or "").strip()
 
     while True:
         try:
-            code = mailbox.wait_for_code(
+            for line in _scan_once(
+                mailbox,
                 account,
-                keyword=str(args.keyword or "").strip(),
-                timeout=int(args.wait_timeout),
-                code_pattern=str(args.code_pattern or "").strip(),
-            )
-            if code:
-                emit(_format_match_output(mailbox, account, str(code)))
-        except TimeoutError:
-            if args.verbose:
-                emit_error(f"[cloudmail] {int(args.wait_timeout)}s 内未获取到新验证码，继续轮询")
+                keyword=keyword,
+                code_pattern=code_pattern,
+                printed_ids=printed_ids,
+            ):
+                emit(line)
+            time.sleep(1)
         except KeyboardInterrupt:
             if args.verbose:
                 emit_error("[cloudmail] 已停止轮询")
             return 0
+        except Exception as exc:
+            if args.verbose:
+                emit_error(f"[cloudmail] 轮询失败: {exc}")
+            time.sleep(1)
 
 
 def main() -> int:
