@@ -83,10 +83,13 @@ class EmailServiceAdapter:
         self.email = email
         self.log_fn = log_fn
         self._used_codes: set[str] = set()
+        self._used_message_ids: set[str] = set()
         self._last_code: str = ""
         self._last_code_at: float = 0.0
         self._last_success_code: str = ""
         self._last_success_code_at: float = 0.0
+        self._last_message_id: str = ""
+        self._last_success_message_id: str = ""
 
     @property
     def last_code(self) -> str:
@@ -97,12 +100,21 @@ class EmailServiceAdapter:
         if not code:
             return
         now = time.time()
+        message_id = str(getattr(self.email_service, "_last_message_id", "") or "").strip()
         self._last_code = code
         self._last_code_at = now
         self._used_codes.add(code)
+        self._last_message_id = message_id
+        if message_id:
+            self._used_message_ids.add(message_id)
         if successful:
             self._last_success_code = code
             self._last_success_code_at = now
+            self._last_success_message_id = message_id
+
+    @property
+    def uses_cloudmail_message_dedupe(self) -> bool:
+        return bool(getattr(self.email_service, "_cloudmail_message_dedupe", False))
 
     def remember_successful_code(self, code: str) -> None:
         self._remember_code(code, successful=True)

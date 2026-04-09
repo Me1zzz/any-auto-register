@@ -3,6 +3,10 @@ import types
 import unittest
 from unittest import mock
 
+curl_cffi_stub = types.ModuleType("curl_cffi")
+curl_cffi_stub.requests = types.SimpleNamespace(Session=lambda *args, **kwargs: mock.Mock())
+sys.modules.setdefault("curl_cffi", curl_cffi_stub)
+
 smstome_tool_stub = types.ModuleType("smstome_tool")
 smstome_tool_stub.PhoneEntry = type("PhoneEntry", (), {})
 smstome_tool_stub.get_unused_phone = lambda *args, **kwargs: None
@@ -556,6 +560,66 @@ class OAuthClientPasswordlessTests(unittest.TestCase):
 
         self.assertIsNone(next_state)
         self.assertIn("已重发 2/2 次", client.last_error)
+
+    def test_handle_otp_verification_uses_message_id_dedupe_for_cloudmail(self):
+        client = self._make_client()
+        client.config = {
+            "chatgpt_oauth_otp_wait_seconds": 30,
+            "chatgpt_oauth_otp_max_resends": 1,
+        }
+        state = FlowState(
+            page_type="email_otp_verification",
+            continue_url="https://auth.openai.com/email-verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        mail_client = mock.Mock()
+        mail_client._used_codes = {"236944"}
+        mail_client._used_message_ids = {"m-1"}
+        type(mail_client).uses_cloudmail_message_dedupe = mock.PropertyMock(return_value=True)
+
+        def _wait_for_verification_code(*args, **kwargs):
+            self.assertEqual(kwargs["exclude_codes"], {"m-1"})
+            mail_client._last_message_id = "m-2"
+            return "236944"
+
+        mail_client.wait_for_verification_code.side_effect = _wait_for_verification_code
+        next_state = FlowState(
+            page_type="consent",
+            continue_url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+            current_url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+        )
+
+        def _post_side_effect(url, **kwargs):
+            if url.endswith("/api/accounts/email-otp/validate"):
+                return mock.Mock(
+                    status_code=200,
+                    url=url,
+                    text="",
+                    json=mock.Mock(return_value={"page": {"type": "consent"}}),
+                )
+            raise AssertionError(f"unexpected POST url: {url}")
+
+        with mock.patch("platforms.chatgpt.oauth_client.get_sentinel_token_via_browser", return_value="sentinel"), \
+            mock.patch.object(client, "_headers", return_value={}), \
+            mock.patch.object(client, "_browser_pause"), \
+            mock.patch.object(client, "_state_from_payload", return_value=next_state), \
+            mock.patch.object(type(client), "_sample_otp_wait_timeout", return_value=30), \
+            mock.patch.object(client.session, "post", side_effect=_post_side_effect), \
+            mock.patch.object(client, "_log") as log_mock:
+            resolved_state = client._handle_otp_verification(
+                "user@example.com",
+                "device-fixed",
+                "UA",
+                '"Chromium";v="136"',
+                "chrome136",
+                mail_client,
+                state,
+                prefer_passwordless_login=False,
+            )
+
+        self.assertEqual(resolved_state, next_state)
+        logged_messages = [call.args[0] for call in log_mock.call_args_list if call.args]
+        self.assertNotIn("跳过已尝试验证码: 236944", logged_messages)
 
     def test_submit_signup_register_uses_minimal_headers_strategy(self):
         client = self._make_client()

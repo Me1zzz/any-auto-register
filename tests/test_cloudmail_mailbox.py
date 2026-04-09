@@ -8,6 +8,7 @@ class CloudMailMailboxTests(unittest.TestCase):
     def setUp(self):
         CloudMailMailbox._token_cache.clear()
         CloudMailMailbox._seen_ids.clear()
+        CloudMailMailbox._skip_logged_ids.clear()
         CloudMailMailbox._alias_pools.clear()
 
     def test_get_email_uses_configured_domain(self):
@@ -483,7 +484,7 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertEqual(code, "654321")
 
     @mock.patch("requests.post")
-    def test_wait_for_code_stops_when_latest_code_is_explicitly_excluded(self, mock_post):
+    def test_wait_for_code_skips_excluded_email_and_continues_scanning(self, mock_post):
         mock_post.side_effect = [
             _json_response({"code": 200, "data": {"token": "tok-1"}}),
             _json_response(
@@ -518,12 +519,13 @@ class CloudMailMailboxTests(unittest.TestCase):
         )
         account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
 
-        with self.assertRaises(TimeoutError):
-            mailbox.wait_for_code(
-                account,
-                timeout=1,
-                exclude_codes={"654321"},
-            )
+        code = mailbox.wait_for_code(
+            account,
+            timeout=1,
+            exclude_codes={"m-1"},
+        )
+
+        self.assertEqual(code, "123456")
 
     @mock.patch("requests.post")
     def test_list_mails_logs_sanitized_response_without_content(self, mock_post):
@@ -647,10 +649,10 @@ class CloudMailMailboxTests(unittest.TestCase):
         account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
 
         with self.assertRaises(TimeoutError):
-            mailbox.wait_for_code(account, timeout=1, exclude_codes={"654321"})
+            mailbox.wait_for_code(account, timeout=1, exclude_codes={"m-1"})
 
         joined_logs = "\n".join(logs)
-        self.assertIn("跳过邮件: 命中排除验证码 code=654321", joined_logs)
+        self.assertIn("跳过邮件: 命中排除邮件 emailId=m-1", joined_logs)
         self.assertIn("subject=Your verification code is 654321", joined_logs)
 
     def test_wait_for_code_logs_skip_reason_only_once_per_message(self):
@@ -745,6 +747,78 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertEqual(len(alias_skip_logs), 2)
         self.assertTrue(any("recipient=other1@alias.example.com" in line for line in alias_skip_logs))
         self.assertTrue(any("recipient=other2@alias.example.com" in line for line in alias_skip_logs))
+
+    def test_wait_for_code_persists_skip_logs_for_same_account_across_retries(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        assert isinstance(mailbox, CloudMailMailbox)
+        logs = []
+        setattr(mailbox, "_log_fn", logs.append)
+        account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
+        repeated_mail = {
+            "emailId": "m-1",
+            "toEmail": "demo@example.com",
+            "subject": "Your verification code is 654321",
+            "content": "",
+        }
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=[repeated_mail]), mock.patch.object(
+            mailbox,
+            "_run_polling_wait",
+            side_effect=lambda *, poll_once, **kwargs: poll_once(),
+        ):
+            self.assertIsNone(mailbox.wait_for_code(account, timeout=1, exclude_codes={"m-1"}))
+            self.assertIsNone(mailbox.wait_for_code(account, timeout=1, exclude_codes={"m-1"}))
+
+        exclude_logs = [line for line in logs if "跳过邮件: 命中排除邮件 emailId=m-1" in line]
+        self.assertEqual(len(exclude_logs), 1)
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_does_not_exclude_different_email_with_same_code(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "demo@example.com",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        },
+                        {
+                            "emailId": "m-2",
+                            "toEmail": "demo@example.com",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        },
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
+
+        code = mailbox.wait_for_code(account, timeout=5, exclude_codes={"m-1"})
+
+        self.assertEqual(code, "654321")
 
     def test_wait_for_code_uses_randomized_poll_interval_for_cloudmail(self):
         mailbox = create_mailbox(

@@ -3,6 +3,7 @@
 import random
 import string
 
+from core.base_mailbox import CloudMailMailbox
 from core.base_mailbox import BaseMailbox
 from core.base_platform import Account, BasePlatform, RegisterConfig
 from core.registry import register
@@ -54,10 +55,10 @@ class ChatGPTPlatform(BasePlatform):
 
         def _resolve_mailbox_timeout(requested_timeout: int) -> int:
             candidates = (
-                requested_timeout,
                 extra_config.get("mailbox_otp_timeout_seconds"),
                 extra_config.get("email_otp_timeout_seconds"),
                 extra_config.get("otp_timeout"),
+                requested_timeout,
             )
             for value in candidates:
                 if value in (None, ""):
@@ -87,9 +88,11 @@ class ChatGPTPlatform(BasePlatform):
                     self._acct = None
                     self._email = _fixed_email
                     self._before_ids = set()
+                    self._last_message_id = ""
+                    self._cloudmail_message_dedupe = isinstance(_mailbox, CloudMailMailbox)
 
                 def create_email(self, config=None):
-                    if self._email and self._acct and _fixed_email:
+                    if self._email and self._acct:
                         return {"email": self._email, "service_id": self._acct.account_id, "token": ""}
                     self._acct = _mailbox.get_email()
                     get_current_ids = getattr(_mailbox, "get_current_ids", None)
@@ -115,7 +118,7 @@ class ChatGPTPlatform(BasePlatform):
                 ):
                     if not self._acct:
                         raise RuntimeError("邮箱账户尚未创建，无法获取验证码")
-                    return _mailbox.wait_for_code(
+                    code = _mailbox.wait_for_code(
                         self._acct,
                         keyword="",
                         timeout=_resolve_mailbox_timeout(timeout),
@@ -123,6 +126,8 @@ class ChatGPTPlatform(BasePlatform):
                         otp_sent_at=otp_sent_at,
                         exclude_codes=exclude_codes,
                     )
+                    self._last_message_id = str(getattr(_mailbox, "_last_matched_message_id", "") or "").strip()
+                    return code
 
                 def update_status(self, success, error=None):
                     pass
@@ -194,6 +199,11 @@ class ChatGPTPlatform(BasePlatform):
         )
         result = adapter.run(context)
         if not result or not result.success:
+            if self.mailbox:
+                requeue_account = getattr(self.mailbox, "requeue_account", None)
+                account_to_requeue = getattr(email_service, "_acct", None)
+                if callable(requeue_account) and account_to_requeue is not None:
+                    requeue_account(account_to_requeue)
             raise RuntimeError(result.error_message if result else "注册失败")
 
         return adapter.build_account(result, password)

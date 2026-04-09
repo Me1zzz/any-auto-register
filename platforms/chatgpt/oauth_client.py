@@ -27,6 +27,7 @@ from .utils import (
     normalize_flow_url,
     random_delay,
     seed_oai_device_cookie,
+    wrap_session_request_with_openai_post_delay,
 )
 from .sentinel_token import build_sentinel_token
 from .sentinel_browser import get_sentinel_token_via_browser
@@ -67,6 +68,7 @@ class OAuthClient:
 
         # 创建 session
         self.session = curl_requests.Session()
+        wrap_session_request_with_openai_post_delay(self.session)
         if self.proxy:
             self.session.proxies = build_requests_proxy_config(self.proxy)
 
@@ -82,6 +84,7 @@ class OAuthClient:
         """承接前序浏览器上下文，延续已建立的 cookie / session。"""
         if session is not None:
             self.session = session
+            wrap_session_request_with_openai_post_delay(self.session)
 
         if self.proxy:
             try:
@@ -3083,10 +3086,21 @@ class OAuthClient:
             headers_otp.update(generate_datadog_trace())
             return headers_otp
 
-        if not hasattr(skymail_client, "_used_codes"):
-            skymail_client._used_codes = set()
+        def _coerce_text_set(value):
+            if not isinstance(value, (set, list, tuple)):
+                return set()
+            return {
+                str(item).strip()
+                for item in value
+                if str(item or "").strip()
+            }
 
-        tried_codes = set(getattr(skymail_client, "_used_codes", set()))
+        used_codes = getattr(skymail_client, "_used_codes", set())
+        tried_codes = _coerce_text_set(used_codes)
+        dedupe_flag = getattr(skymail_client, "uses_cloudmail_message_dedupe", False)
+        use_message_dedupe = dedupe_flag if isinstance(dedupe_flag, bool) else False
+        used_message_ids = getattr(skymail_client, "_used_message_ids", set())
+        tried_message_ids = _coerce_text_set(used_message_ids)
         try:
             otp_wait_seconds = int(
                 self.config.get(
@@ -3229,7 +3243,7 @@ class OAuthClient:
                         email,
                         timeout=wait_time,
                         otp_sent_at=otp_sent_at,
-                        exclude_codes=tried_codes,
+                        exclude_codes=tried_message_ids if use_message_dedupe else tried_codes,
                     )
                 except TaskInterruption:
                     self._set_error("任务已手动停止")
@@ -3258,9 +3272,17 @@ class OAuthClient:
                         self._log("OTP 重发失败，继续等待当前可用邮件...")
                     continue
 
-                if code in tried_codes:
+                current_message_id = str(getattr(skymail_client, "_last_message_id", "") or "").strip()
+                if use_message_dedupe and current_message_id and current_message_id in tried_message_ids:
+                    self._log(f"跳过已尝试邮件: {current_message_id}")
+                    continue
+
+                if (not use_message_dedupe) and code in tried_codes:
                     self._log(f"跳过已尝试验证码: {code}")
                     continue
+
+                if use_message_dedupe and current_message_id:
+                    tried_message_ids.add(current_message_id)
 
                 next_state = validate_otp(code)
                 if next_state:

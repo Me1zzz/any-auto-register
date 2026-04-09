@@ -10,6 +10,7 @@ from core.browser_runtime import (
     resolve_browser_headless,
 )
 from core.proxy_utils import build_playwright_proxy_config
+from .utils import sleep_after_openai_call
 
 
 def _flow_page_url(flow: str) -> str:
@@ -94,6 +95,7 @@ def get_sentinel_token_via_browser(
 
             page = context.new_page()
             page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            sleep_after_openai_call(target_url)
             page.wait_for_function(
                 "() => typeof window.SentinelSDK !== 'undefined' && typeof window.SentinelSDK.token === 'function'",
                 timeout=min(timeout_ms, 15000),
@@ -115,6 +117,7 @@ def get_sentinel_token_via_browser(
                 """,
                 {"flow": flow},
             )
+            sleep_after_openai_call(target_url)
 
             if not result or not result.get("success") or not result.get("token"):
                 logger(

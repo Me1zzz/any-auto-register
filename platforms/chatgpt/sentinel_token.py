@@ -8,6 +8,8 @@ import random
 import time
 import uuid
 
+from .utils import request_with_openai_post_delay
+
 
 SENTINEL_REQ_URL = "https://sentinel.openai.com/backend-api/sentinel/req"
 SENTINEL_REFERER = "https://sentinel.openai.com/backend-api/sentinel/frame.html"
@@ -168,7 +170,7 @@ def fetch_sentinel_challenge(
     if impersonate:
         kwargs["impersonate"] = impersonate
     try:
-        response = session.post(SENTINEL_REQ_URL, **kwargs)
+        response = request_with_openai_post_delay(session.post, SENTINEL_REQ_URL, **kwargs)
         if response.status_code == 200:
             return response.json()
     except Exception:

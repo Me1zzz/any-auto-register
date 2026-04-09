@@ -15,6 +15,11 @@ from curl_cffi import CurlMime
 logger = logging.getLogger(__name__)
 
 
+def _build_cpa_upload_filename(email: str, now: datetime | None = None) -> str:
+    current = now or datetime.now(tz=timezone(timedelta(hours=8)))
+    return f"{current.strftime('%m%d')}{email}.json"
+
+
 def _decode_jwt_payload(token: str) -> dict:
     try:
         parts = token.split(".")
@@ -209,7 +214,7 @@ def upload_to_cpa(
 
     upload_url = f"{api_url.rstrip('/')}/v0/management/auth-files"
 
-    filename = f"{token_data['email']}.json"
+    filename = _build_cpa_upload_filename(str(token_data.get("email") or ""))
     file_content = json.dumps(token_data, ensure_ascii=False, indent=2).encode("utf-8")
 
     headers = {

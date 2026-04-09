@@ -29,6 +29,7 @@ from .utils import (
     normalize_flow_url,
     random_delay,
     seed_oai_device_cookie,
+    wrap_session_request_with_openai_post_delay,
 )
 
 
@@ -108,6 +109,7 @@ class ChatGPTClient:
 
         # 创建 session
         self.session = curl_requests.Session(impersonate=self.impersonate)
+        wrap_session_request_with_openai_post_delay(self.session)
 
         if self.proxy:
             self.session.proxies = build_requests_proxy_config(self.proxy)
@@ -229,6 +231,7 @@ class ChatGPTClient:
         )
 
         self.session = curl_requests.Session(impersonate=self.impersonate)
+        wrap_session_request_with_openai_post_delay(self.session)
         if self.proxy:
             self.session.proxies = build_requests_proxy_config(self.proxy)
 

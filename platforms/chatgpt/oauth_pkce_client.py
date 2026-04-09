@@ -20,6 +20,7 @@ from .oauth import (
     generate_oauth_url,
     submit_callback_url,
 )
+from .utils import request_with_openai_post_delay, wrap_session_request_with_openai_post_delay
 
 AUTH_BASE = "https://auth.openai.com"
 SENTINEL_API = "https://sentinel.openai.com/backend-api/sentinel/req"
@@ -58,6 +59,7 @@ class OAuthPkceClient:
             proxies=self._proxies,
             impersonate="chrome",
         )
+        wrap_session_request_with_openai_post_delay(self.session)
 
         self._device_id: Optional[str] = None
         self._sentinel: Optional[str] = None
@@ -80,7 +82,8 @@ class OAuthPkceClient:
         """
         req_body = json.dumps({"p": "", "id": device_id, "flow": flow})
 
-        resp = curl_requests.post(
+        resp = request_with_openai_post_delay(
+            curl_requests.post,
             SENTINEL_API,
             headers={
                 "origin": "https://sentinel.openai.com",

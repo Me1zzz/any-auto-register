@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from curl_cffi import requests as cffi_requests
 from services.chatgpt_account_state import is_account_deactivated_message
+from .utils import request_with_openai_post_delay
 
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 CHATGPT_ME_URL = "https://chatgpt.com/backend-api/me"
@@ -141,7 +142,8 @@ class ProbeHTTPResult:
 
 
 def _perform_get(url: str, headers: dict[str, str], proxy: Optional[str]) -> ProbeHTTPResult:
-    response = cffi_requests.get(
+    response = request_with_openai_post_delay(
+        cffi_requests.get,
         url,
         headers=headers,
         proxies=_build_proxies(proxy),

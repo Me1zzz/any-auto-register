@@ -1089,6 +1089,8 @@ class CloudMailMailbox(BaseMailbox):
     _token_cache: dict[str, tuple[str, float]] = {}
     _seen_ids_lock = threading.Lock()
     _seen_ids: dict[str, set[str]] = {}
+    _skip_logged_ids_lock = threading.Lock()
+    _skip_logged_ids: dict[str, set[str]] = {}
     _alias_pool_lock = threading.Lock()
     _alias_pools: dict[str, dict[str, Any]] = {}
 
@@ -1117,6 +1119,7 @@ class CloudMailMailbox(BaseMailbox):
         self.proxy = build_requests_proxy_config(proxy)
         self._last_account: Optional[MailboxAccount] = None
         self._task_alias_pool_key = ""
+        self._last_matched_message_id = ""
 
     @staticmethod
     def _parse_bool(value: Any) -> bool:
@@ -1549,6 +1552,18 @@ class CloudMailMailbox(BaseMailbox):
         with CloudMailMailbox._seen_ids_lock:
             return set(CloudMailMailbox._seen_ids.get(email, set()))
 
+    def _remember_skip_logged_id(self, email: str, message_id: str) -> None:
+        if not email or not message_id:
+            return
+        with CloudMailMailbox._skip_logged_ids_lock:
+            CloudMailMailbox._skip_logged_ids.setdefault(email, set()).add(message_id)
+
+    def _load_skip_logged_ids(self, email: str) -> set[str]:
+        if not email:
+            return set()
+        with CloudMailMailbox._skip_logged_ids_lock:
+            return set(CloudMailMailbox._skip_logged_ids.get(email, set()))
+
     def get_email(self) -> MailboxAccount:
         self._ensure_config()
         alias_email = self._pick_alias_email()
@@ -1580,10 +1595,18 @@ class CloudMailMailbox(BaseMailbox):
         except Exception:
             return set()
 
-    def _log_skip_reason_once(self, logged_message_ids: set[str], message_id: str, message: str) -> None:
+    def _log_skip_reason_once(
+        self,
+        logged_message_ids: set[str],
+        message_id: str,
+        message: str,
+        persist_key: str = "",
+    ) -> None:
         if message_id in logged_message_ids:
             return
         logged_message_ids.add(message_id)
+        if persist_key:
+            self._remember_skip_logged_id(persist_key, message_id)
         self._log(message)
 
     def wait_for_code(
@@ -1595,17 +1618,18 @@ class CloudMailMailbox(BaseMailbox):
         code_pattern: str = None,
         **kwargs,
     ) -> str:
+        self._last_matched_message_id = ""
         target, alias_email, seen_key = self._resolve_lookup_context(account)
         seen = set(before_ids or set())
         if seen_key:
             seen.update(self._load_seen_ids(seen_key))
         otp_sent_at = kwargs.get("otp_sent_at")
-        exclude_codes = {
-            str(code).strip()
-            for code in (kwargs.get("exclude_codes") or set())
-            if str(code or "").strip()
+        exclude_message_ids = {
+            str(message_id).strip()
+            for message_id in (kwargs.get("exclude_codes") or set())
+            if str(message_id or "").strip()
         }
-        skip_logged_message_ids: set[str] = set()
+        skip_logged_message_ids = self._load_skip_logged_ids(seen_key)
 
         def poll_once() -> Optional[str]:
             try:
@@ -1617,7 +1641,8 @@ class CloudMailMailbox(BaseMailbox):
                         self._log_skip_reason_once(
                             skip_logged_message_ids,
                             mid,
-                            f"[CloudMail] 跳过邮件: alias 不匹配 target={target} alias={alias_email} {summary}"
+                            f"[CloudMail] 跳过邮件: alias 不匹配 target={target} alias={alias_email} {summary}",
+                            seen_key,
                         )
                         continue
                     if mid in seen:
@@ -1625,6 +1650,7 @@ class CloudMailMailbox(BaseMailbox):
                             skip_logged_message_ids,
                             mid,
                             f"[CloudMail] 跳过邮件: 已处理过 {summary}",
+                            seen_key,
                         )
                         continue
                     seen.add(mid)
@@ -1636,7 +1662,8 @@ class CloudMailMailbox(BaseMailbox):
                         self._log_skip_reason_once(
                             skip_logged_message_ids,
                             mid,
-                            f"[CloudMail] 跳过邮件: 早于本次发送时间 otp_sent_at={otp_sent_at} msg_ts={msg_ts} {summary}"
+                            f"[CloudMail] 跳过邮件: 早于本次发送时间 otp_sent_at={otp_sent_at} msg_ts={msg_ts} {summary}",
+                            seen_key,
                         )
                         continue
 
@@ -1653,23 +1680,27 @@ class CloudMailMailbox(BaseMailbox):
                             skip_logged_message_ids,
                             mid,
                             f"[CloudMail] 跳过邮件: keyword 不匹配 keyword={keyword} {summary}",
+                            seen_key,
                         )
                         continue
                     code = self._safe_extract(content, code_pattern)
-                    if code and code in exclude_codes:
+                    if mid in exclude_message_ids:
                         self._log_skip_reason_once(
                             skip_logged_message_ids,
                             mid,
-                            f"[CloudMail] 跳过邮件: 命中排除验证码 code={code} {summary}",
+                            f"[CloudMail] 跳过邮件: 命中排除邮件 emailId={mid} {summary}",
+                            seen_key,
                         )
-                        return None
+                        continue
                     if code:
+                        self._last_matched_message_id = mid
                         self._log(f"[CloudMail] 命中验证码: {code}")
                         return code
                     self._log_skip_reason_once(
                         skip_logged_message_ids,
                         mid,
                         f"[CloudMail] 跳过邮件: 未提取到验证码 {summary}",
+                        seen_key,
                     )
             except Exception:
                 pass

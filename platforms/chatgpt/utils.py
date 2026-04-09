@@ -3,6 +3,7 @@
 """
 
 from dataclasses import dataclass, field
+import logging
 import random
 import string
 import secrets
@@ -10,10 +11,14 @@ import hashlib
 import base64
 import uuid
 import re
+import time
 from urllib.parse import urlparse
 from typing import Any, Dict
 
 from .constants import MAX_REGISTRATION_AGE, MIN_REGISTRATION_AGE
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -223,8 +228,134 @@ def describe_flow_state(state: FlowState):
 
 def random_delay(low=0.3, high=1.0):
     """随机延迟"""
-    import time
     time.sleep(random.uniform(low, high))
+
+
+_OPENAI_DELAY_HOSTS = (
+    "chatgpt.com",
+    "auth.openai.com",
+    "sentinel.openai.com",
+    "api.openai.com",
+)
+
+_SESSION_HTTP_METHOD_URL_INDEX = {
+    "request": 1,
+    "get": 0,
+    "post": 0,
+    "put": 0,
+    "delete": 0,
+    "patch": 0,
+    "head": 0,
+    "options": 0,
+}
+
+
+def is_openai_chatgpt_host(url):
+    """判断 URL 是否属于需要施加随机延时的 OpenAI/ChatGPT 域名。"""
+    value = str(url or "").strip()
+    if not value:
+        return False
+
+    try:
+        hostname = (urlparse(value).hostname or "").strip().lower()
+    except Exception:
+        return False
+
+    if not hostname:
+        return False
+
+    return any(
+        hostname == candidate or hostname.endswith(f".{candidate}")
+        for candidate in _OPENAI_DELAY_HOSTS
+    )
+
+
+def sample_openai_post_call_delay():
+    """采样 OpenAI/ChatGPT 请求后的随机等待秒数。"""
+    return random.uniform(8, 15)
+
+
+def describe_openai_delay_target(url):
+    """将等待日志中的目标 URL 压缩成可读形式。"""
+    value = str(url or "").strip()
+    if not value:
+        return "<unknown>"
+
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return value
+
+    host = (parsed.netloc or parsed.hostname or "").strip()
+    path = (parsed.path or "/").strip() or "/"
+    return f"{host}{path}"
+
+
+def sleep_after_openai_call(url, *, sleeper=time.sleep, sampler=sample_openai_post_call_delay):
+    """在 OpenAI/ChatGPT 请求完成后注入 3-6 秒随机等待。"""
+    if not is_openai_chatgpt_host(url):
+        return
+
+    try:
+        delay_seconds = float(sampler())
+    except Exception:
+        delay_seconds = 15
+
+    message = "OpenAI/ChatGPT 接口等待 %.2f 秒: %s" % (
+        delay_seconds,
+        describe_openai_delay_target(url),
+    )
+    logger.info(message)
+    print(message)
+    sleeper(delay_seconds)
+
+
+def request_with_openai_post_delay(request_callable, url, *args, **kwargs):
+    """执行一次请求，并在 OpenAI/ChatGPT 请求完成后统一等待。"""
+    bound_target = getattr(request_callable, "__self__", None)
+    if getattr(bound_target, "_openai_post_delay_wrapped", False):
+        return request_callable(url, *args, **kwargs)
+
+    response = request_callable(url, *args, **kwargs)
+    response_url = getattr(response, "url", None) or url
+    sleep_after_openai_call(response_url)
+    return response
+
+
+def wrap_session_request_with_openai_post_delay(session):
+    """为 session 常用 HTTP 方法注入 OpenAI/ChatGPT 请求后的随机等待。"""
+    if session is None or getattr(session, "_openai_post_delay_wrapped", False):
+        return session
+
+    session._openai_post_delay_call_depth = 0
+
+    for method_name, url_arg_index in _SESSION_HTTP_METHOD_URL_INDEX.items():
+        original_method = getattr(session, method_name, None)
+        if not callable(original_method):
+            continue
+
+        def delayed_method(*args, __original_method=original_method, __url_arg_index=url_arg_index, **kwargs):
+            prior_depth = int(getattr(session, "_openai_post_delay_call_depth", 0) or 0)
+            session._openai_post_delay_call_depth = prior_depth + 1
+            response = None
+            try:
+                response = __original_method(*args, **kwargs)
+            finally:
+                session._openai_post_delay_call_depth = prior_depth
+            if response is None:
+                return response
+            request_url = ""
+            if len(args) > __url_arg_index:
+                request_url = args[__url_arg_index]
+            response_url = getattr(response, "url", None) or request_url
+            if prior_depth == 0:
+                sleep_after_openai_call(response_url)
+            return response
+
+        setattr(session, method_name, delayed_method)
+
+    session._openai_post_delay_wrapped = True
+    return session
 
 
 def extract_chrome_full_version(user_agent):

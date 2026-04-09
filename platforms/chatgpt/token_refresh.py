@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from curl_cffi import requests as cffi_requests
+from .utils import wrap_session_request_with_openai_post_delay
 
 # from ..config.settings import get_settings  # removed: external dep
 # from ..database.session import get_db  # removed: external dep
@@ -59,6 +60,7 @@ class TokenRefreshManager:
     def _create_session(self) -> cffi_requests.Session:
         """创建 HTTP 会话"""
         session = cffi_requests.Session(impersonate="chrome120", proxy=self.proxy_url)
+        wrap_session_request_with_openai_post_delay(session)
         return session
 
     def refresh_by_session_token(self, session_token: str) -> TokenRefreshResult:

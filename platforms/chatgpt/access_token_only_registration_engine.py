@@ -23,16 +23,23 @@ class EmailServiceAdapter:
         self.email = email
         self.log_fn = log_fn
         self._used_codes = set()
+        self._used_message_ids = set()
+        self._last_message_id = ""
 
     def wait_for_verification_code(self, email, timeout=60, otp_sent_at=None, exclude_codes=None):
         msg = f"\u6b63\u5728\u7b49\u5f85\u90ae\u7bb1 {email} \u7684\u9a8c\u8bc1\u7801 ({timeout}s)..."
         self.log_fn(msg)
+        dedupe_flag = getattr(self.es, "_cloudmail_message_dedupe", False)
+        use_message_dedupe = dedupe_flag if isinstance(dedupe_flag, bool) else False
         code = self.es.get_verification_code(
             timeout=timeout,
             otp_sent_at=otp_sent_at,
-            exclude_codes=exclude_codes or self._used_codes,
+            exclude_codes=exclude_codes or (self._used_message_ids if use_message_dedupe else self._used_codes),
         )
         if code:
+            self._last_message_id = str(getattr(self.es, "_last_message_id", "") or "").strip()
+            if use_message_dedupe and self._last_message_id:
+                self._used_message_ids.add(self._last_message_id)
             self._used_codes.add(code)
             self.log_fn(f"\u6210\u529f\u83b7\u53d6\u9a8c\u8bc1\u7801: {code}")
         return code

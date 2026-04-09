@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from curl_cffi import requests as cffi_requests
 from core.proxy_utils import build_requests_proxy_config
+from .utils import request_with_openai_post_delay
 
 from .constants import (
     OAUTH_CLIENT_ID,
@@ -150,7 +151,8 @@ def _post_form(
 
     try:
         # 使用 curl_cffi 发送请求，支持代理和浏览器指纹
-        response = cffi_requests.post(
+        response = request_with_openai_post_delay(
+            cffi_requests.post,
             url,
             data=data,
             headers=headers,

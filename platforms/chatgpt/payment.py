@@ -12,6 +12,7 @@ from typing import Any, Optional
 from curl_cffi import requests as cffi_requests
 from core.browser_runtime import ensure_browser_display_available
 from core.proxy_utils import build_requests_proxy_config
+from .utils import request_with_openai_post_delay
 
 # from ..database.models import Account  # removed: external dep
 
@@ -23,6 +24,11 @@ TEAM_CHECKOUT_BASE_URL = "https://chatgpt.com/checkout/openai_llc/"
 
 def _build_proxies(proxy: Optional[str]) -> Optional[dict]:
     return build_requests_proxy_config(proxy)
+
+
+def _openai_request(method: str, url: str, **kwargs):
+    request_callable = getattr(cffi_requests, str(method or "").lower())
+    return request_with_openai_post_delay(request_callable, url, **kwargs)
 
 
 _COUNTRY_CURRENCY_MAP = {
@@ -128,7 +134,8 @@ def generate_plus_link(
         "checkout_ui_mode": "custom",
     }
 
-    resp = cffi_requests.post(
+    resp = _openai_request(
+        "post",
         PAYMENT_CHECKOUT_URL,
         headers=headers,
         json=payload,
@@ -183,7 +190,8 @@ def generate_team_link(
         "checkout_ui_mode": "custom",
     }
 
-    resp = cffi_requests.post(
+    resp = _openai_request(
+        "post",
         PAYMENT_CHECKOUT_URL,
         headers=headers,
         json=payload,
@@ -242,7 +250,8 @@ def check_subscription_status(account: Any, proxy: Optional[str] = None) -> str:
         "Content-Type": "application/json",
     }
 
-    resp = cffi_requests.get(
+    resp = _openai_request(
+        "get",
         "https://chatgpt.com/backend-api/me",
         headers=headers,
         proxies=_build_proxies(proxy),
