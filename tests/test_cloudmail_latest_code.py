@@ -2,7 +2,7 @@ import argparse
 import unittest
 from unittest import mock
 
-from core.base_mailbox import MailboxAccount
+from core.base_mailbox import MailboxAccount, create_mailbox
 from scripts import cloudmail_latest_code
 
 
@@ -207,6 +207,139 @@ class CloudMailLatestCodeScriptTests(unittest.TestCase):
             lines,
             [
                 "code=123456 id=m-2 toEmail=real@example.com recipient=alias@example.com subject=ChatGPT verification code 123456"
+            ],
+        )
+
+    def test_scan_once_matches_alias_when_sender_contains_alias(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@example.com",
+            account_id="real@example.com",
+        )
+
+        messages = [
+            {
+                "emailId": "m-1",
+                "toEmail": "real@example.com",
+                "recipient": '[{"address":"other@example.com","name":""}]',
+                "from": "Support <alias@example.com>",
+                "subject": "Your verification code is 123456",
+                "content": "",
+            }
+        ]
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=messages):
+            lines = cloudmail_latest_code._scan_once(
+                mailbox,
+                account,
+                keyword="",
+                code_pattern="",
+                printed_ids=set(),
+            )
+
+        self.assertEqual(
+            lines,
+            [
+                "code=123456 id=m-1 toEmail=real@example.com recipient=other@example.com subject=Your verification code is 123456"
+            ],
+        )
+
+    def test_scan_once_matches_alias_when_send_email_contains_alias(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@example.com",
+            account_id="real@example.com",
+        )
+
+        messages = [
+            {
+                "emailId": "m-1",
+                "toEmail": "real@example.com",
+                "recipient": '[{"address":"other@example.com","name":""}]',
+                "sendEmail": "alias@example.com",
+                "sendName": "Support",
+                "subject": "Your verification code is 123456",
+                "content": "",
+            }
+        ]
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=messages):
+            lines = cloudmail_latest_code._scan_once(
+                mailbox,
+                account,
+                keyword="",
+                code_pattern="",
+                printed_ids=set(),
+            )
+
+        self.assertEqual(
+            lines,
+            [
+                "code=123456 id=m-1 toEmail=real@example.com recipient=other@example.com subject=Your verification code is 123456"
+            ],
+        )
+
+    def test_scan_once_filters_shared_mailbox_by_alias_when_mailbox_email_provided(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@example.com",
+            account_id="real@example.com",
+        )
+
+        messages = [
+            {
+                "emailId": "m-1",
+                "toEmail": "real@example.com",
+                "recipient": '[{"address":"other@example.com","name":""}]',
+                "subject": "Your verification code is 654321",
+                "content": "",
+            },
+            {
+                "emailId": "m-2",
+                "toEmail": "real@example.com",
+                "recipient": '[{"address":"alias@example.com","name":""}]',
+                "subject": "Your verification code is 123456",
+                "content": "",
+            },
+        ]
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=messages):
+            lines = cloudmail_latest_code._scan_once(
+                mailbox,
+                account,
+                keyword="",
+                code_pattern="",
+                printed_ids=set(),
+            )
+
+        self.assertEqual(
+            lines,
+            [
+                "code=123456 id=m-2 toEmail=real@example.com recipient=alias@example.com subject=Your verification code is 123456"
             ],
         )
 

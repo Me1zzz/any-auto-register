@@ -202,7 +202,7 @@ def _scan_once(
         mid = str(mail_id(message, index) or "").strip()
         if not mid or mid in printed_ids:
             continue
-        if alias_email and not target and not match_alias_receipt(message, alias_email):
+        if alias_email and not match_alias_receipt(message, alias_email):
             continue
 
         content = " ".join(

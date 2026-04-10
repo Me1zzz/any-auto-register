@@ -561,6 +561,49 @@ class OAuthClientPasswordlessTests(unittest.TestCase):
         self.assertIsNone(next_state)
         self.assertIn("已重发 2/2 次", client.last_error)
 
+    def test_handle_otp_verification_keeps_original_otp_sent_at_across_resends(self):
+        client = self._make_client()
+        client.config = {
+            "chatgpt_oauth_otp_wait_seconds": 30,
+            "chatgpt_oauth_otp_max_resends": 2,
+        }
+        state = FlowState(
+            page_type="email_otp_verification",
+            continue_url="https://auth.openai.com/email-verification",
+            current_url="https://auth.openai.com/email-verification",
+        )
+        mail_client = mock.Mock()
+        mail_client._used_codes = set()
+        observed_otp_sent_at = []
+
+        def _wait_for_verification_code(*args, **kwargs):
+            observed_otp_sent_at.append(kwargs["otp_sent_at"])
+            raise TimeoutError(f"t{len(observed_otp_sent_at)}")
+
+        mail_client.wait_for_verification_code.side_effect = _wait_for_verification_code
+
+        with mock.patch("platforms.chatgpt.oauth_client.get_sentinel_token_via_browser", return_value="sentinel"), \
+            mock.patch.object(client, "_headers", return_value={}), \
+            mock.patch.object(client, "_browser_pause"), \
+            mock.patch.object(client, "_log"), \
+            mock.patch.object(type(client), "_sample_otp_wait_timeout", side_effect=[30, 30, 30]), \
+            mock.patch.object(client.session, "post", return_value=mock.Mock(status_code=200, url="https://auth.openai.com/api/accounts/passwordless/send-otp", text="", json=mock.Mock(return_value={}))), \
+            mock.patch.object(client.session, "get", return_value=mock.Mock(status_code=200, url="https://auth.openai.com/api/accounts/email-otp/send", text="", json=mock.Mock(return_value={}))):
+            next_state = client._handle_otp_verification(
+                "user@example.com",
+                "device-fixed",
+                "UA",
+                '"Chromium";v="136"',
+                "chrome136",
+                mail_client,
+                state,
+                prefer_passwordless_login=True,
+            )
+
+        self.assertIsNone(next_state)
+        self.assertEqual(len(observed_otp_sent_at), 3)
+        self.assertTrue(all(value == observed_otp_sent_at[0] for value in observed_otp_sent_at))
+
     def test_handle_otp_verification_uses_message_id_dedupe_for_cloudmail(self):
         client = self._make_client()
         client.config = {

@@ -319,6 +319,164 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "sss@me1zzz.tech")
 
     @mock.patch("requests.post")
+    def test_wait_for_code_matches_alias_when_sender_contains_alias(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "real@mail.example.com",
+                            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+                            "from": "OpenAI <alias@alias.example.com>",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@alias.example.com",
+            account_id="real@mail.example.com",
+        )
+
+        code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "654321")
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_matches_alias_when_send_email_contains_alias(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "real@mail.example.com",
+                            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+                            "sendEmail": "alias@alias.example.com",
+                            "sendName": "OpenAI",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@alias.example.com",
+            account_id="real@mail.example.com",
+        )
+
+        code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "654321")
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_prefers_send_email_over_legacy_from(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "real@mail.example.com",
+                            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+                            "sendEmail": "alias@alias.example.com",
+                            "from": "OpenAI <support@example.com>",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@alias.example.com",
+            account_id="real@mail.example.com",
+        )
+
+        code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "654321")
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_matches_alias_when_body_contains_alias(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "real@mail.example.com",
+                            "recipient": '[{"address":"other@alias.example.com","name":""}]',
+                            "from": "OpenAI <support@example.com>",
+                            "subject": "Your verification code is 654321",
+                            "content": "Delivery target: alias@alias.example.com",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@alias.example.com",
+            account_id="real@mail.example.com",
+        )
+
+        code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "654321")
+
+    @mock.patch("requests.post")
     def test_get_current_ids_filters_by_recipient_when_real_mailbox_missing(self, mock_post):
         mock_post.side_effect = [
             _json_response({"code": 200, "data": {"token": "tok-1"}}),

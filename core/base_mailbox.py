@@ -1297,6 +1297,30 @@ class CloudMailMailbox(BaseMailbox):
         collect(value)
         return addresses
 
+    def _contains_alias_email(self, value: Any, normalized_alias: str) -> bool:
+        if not normalized_alias or value in (None, ""):
+            return False
+
+        if isinstance(value, dict):
+            return any(self._contains_alias_email(item, normalized_alias) for item in value.values())
+
+        if isinstance(value, (list, tuple, set)):
+            return any(self._contains_alias_email(item, normalized_alias) for item in value)
+
+        text = str(value).strip()
+        if not text:
+            return False
+
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                return self._contains_alias_email(parsed, normalized_alias)
+
+        return normalized_alias in text.lower()
+
     def _match_alias_receipt(self, message: dict, alias_email: str) -> bool:
         if not alias_email:
             return True
@@ -1304,9 +1328,29 @@ class CloudMailMailbox(BaseMailbox):
         recipient_addresses = set()
         for key in ("recipt", "receipt", "recipient", "recipients"):
             recipient_addresses.update(self._collect_recipient_addresses(message.get(key)))
-        if not recipient_addresses:
-            return False
-        return normalized_alias in recipient_addresses
+        if normalized_alias in recipient_addresses:
+            return True
+
+        for key in (
+            "sendEmail",
+            "sendName",
+            "from",
+            "fromEmail",
+            "from_email",
+            "sender",
+            "senderEmail",
+            "sender_email",
+            "mailFrom",
+            "mail_from",
+        ):
+            if self._contains_alias_email(message.get(key), normalized_alias):
+                return True
+
+        for key in ("content", "text", "html"):
+            if self._contains_alias_email(message.get(key), normalized_alias):
+                return True
+
+        return False
 
     def _domain_candidates(self) -> list[str]:
         candidates: list[str] = []

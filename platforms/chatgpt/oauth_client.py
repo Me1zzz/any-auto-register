@@ -3266,7 +3266,6 @@ class OAuthClient:
                     )
                     resend_ok = _resend_email_otp()
                     if resend_ok:
-                        otp_sent_at = time.time()
                         self._log("已触发新的 OTP，继续等待...")
                     else:
                         self._log("OTP 重发失败，继续等待当前可用邮件...")

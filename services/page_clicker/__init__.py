@@ -1,4 +1,4 @@
-"""Minimal page auto-click framework built on Playwright."""
+"""Dual-backend page click framework with Playwright and PyAutoGUI."""
 
 from .config import build_config_from_args
 from .models import ClickResult, PageClickConfig

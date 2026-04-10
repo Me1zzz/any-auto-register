@@ -20,11 +20,14 @@ def main() -> int:
     result = run_click_flow(config)
     payload = {
         "success": result.success,
+        "backend": result.backend,
         "url": result.url,
+        "target_kind": result.target_kind,
+        "target_value": result.target_value,
         "final_url": result.final_url,
         "title": result.title,
-        "click_selector": result.click_selector,
         "clicked_text": result.clicked_text,
+        "clicked_position": result.clicked_position,
         "screenshot_path": str(result.screenshot_path) if result.screenshot_path else None,
         "error": result.error,
     }
