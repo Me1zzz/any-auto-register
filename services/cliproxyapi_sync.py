@@ -168,6 +168,27 @@ def list_auth_files(*, api_url: str | None = None, api_key: str | None = None) -
     return [item for item in files if isinstance(item, dict)]
 
 
+def get_codex_auth_url(
+    *,
+    api_url: str | None = None,
+    api_key: str | None = None,
+    is_webui: bool = True,
+) -> dict[str, Any]:
+    suffix = "true" if is_webui else "false"
+    data = _request_json(
+        "GET",
+        f"/v0/management/codex-auth-url?is_webui={suffix}",
+        api_url=api_url,
+        api_key=api_key,
+    )
+    if not isinstance(data, dict):
+        raise RuntimeError("CLIProxyAPI codex-auth-url 返回格式异常")
+    url = str(data.get("url") or "").strip()
+    if not url:
+        raise RuntimeError("CLIProxyAPI codex-auth-url 未返回有效 OAuth 链接")
+    return data
+
+
 def _status_rank(status: str) -> int:
     order = {
         "active": 0,

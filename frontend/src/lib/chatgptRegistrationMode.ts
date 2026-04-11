@@ -1,10 +1,12 @@
 export const CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN = 'refresh_token'
 export const CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY = 'access_token_only'
+export const CHATGPT_REGISTRATION_MODE_CODEX_GUI = 'codex_gui'
 export const CHATGPT_REGISTRATION_MODE_STORAGE_KEY = 'chatgpt-registration-mode'
 
 export type ChatGPTRegistrationMode =
   | typeof CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
   | typeof CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
+  | typeof CHATGPT_REGISTRATION_MODE_CODEX_GUI
 
 export const DEFAULT_CHATGPT_REGISTRATION_MODE: ChatGPTRegistrationMode =
   CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
@@ -12,6 +14,9 @@ export const DEFAULT_CHATGPT_REGISTRATION_MODE: ChatGPTRegistrationMode =
 export function normalizeChatGPTRegistrationMode(
   value: unknown,
 ): ChatGPTRegistrationMode {
+  if (value === CHATGPT_REGISTRATION_MODE_CODEX_GUI) {
+    return CHATGPT_REGISTRATION_MODE_CODEX_GUI
+  }
   if (value === CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY) {
     return CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
   }

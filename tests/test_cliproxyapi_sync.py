@@ -1,7 +1,13 @@
 import unittest
 from unittest import mock
+import sys
+import types
 
-from services.cliproxyapi_sync import _probe_remote_auth, sync_chatgpt_cliproxyapi_status, sync_chatgpt_cliproxyapi_status_batch
+curl_cffi_stub = types.ModuleType("curl_cffi")
+setattr(curl_cffi_stub, "requests", types.SimpleNamespace(Session=lambda *args, **kwargs: mock.Mock()))
+sys.modules.setdefault("curl_cffi", curl_cffi_stub)
+
+from services.cliproxyapi_sync import _probe_remote_auth, get_codex_auth_url, sync_chatgpt_cliproxyapi_status, sync_chatgpt_cliproxyapi_status_batch
 
 
 class DummyAccount:
@@ -10,9 +16,29 @@ class DummyAccount:
         self.token = token
         self.extra = dict(extra or {})
         self.user_id = user_id
+        self.id = 0
 
 
 class CliproxyapiSyncTests(unittest.TestCase):
+    def test_get_codex_auth_url_returns_payload(self):
+        with mock.patch(
+            "services.cliproxyapi_sync._request_json",
+            return_value={"status": "ok", "state": "demo", "url": "https://auth.openai.com/oauth/authorize?state=demo"},
+        ) as request_mock:
+            payload = get_codex_auth_url(api_url="http://127.0.0.1:8317", api_key="demo")
+
+        self.assertEqual(payload["state"], "demo")
+        self.assertIn("auth.openai.com", payload["url"])
+        request_mock.assert_called_once()
+
+    def test_get_codex_auth_url_rejects_missing_url(self):
+        with mock.patch(
+            "services.cliproxyapi_sync._request_json",
+            return_value={"status": "ok", "state": "demo"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "未返回有效 OAuth 链接"):
+                get_codex_auth_url(api_url="http://127.0.0.1:8317", api_key="demo")
+
     def test_sync_returns_unreachable_when_service_down(self):
         account = DummyAccount()
 

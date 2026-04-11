@@ -273,6 +273,30 @@ class RefreshTokenRegistrationEngineTests(unittest.TestCase):
             exclude_codes={"654321"},
         )
 
+    def test_email_service_adapter_builds_exclude_codes_for_cloudmail_message_dedupe(self):
+        email_service = mock.Mock()
+        email_service._cloudmail_message_dedupe = True
+        adapter = EmailServiceAdapter(
+            email_service=email_service,
+            email="user@example.com",
+            log_fn=lambda _msg: None,
+        )
+        adapter._used_message_ids.update({"msg-1", "msg-2"})
+
+        self.assertEqual(adapter.build_exclude_codes(), {"msg-1", "msg-2"})
+
+    def test_email_service_adapter_builds_exclude_codes_for_regular_codes(self):
+        email_service = mock.Mock()
+        email_service._cloudmail_message_dedupe = False
+        adapter = EmailServiceAdapter(
+            email_service=email_service,
+            email="user@example.com",
+            log_fn=lambda _msg: None,
+        )
+        adapter._used_codes.update({"111111", "222222"})
+
+        self.assertEqual(adapter.build_exclude_codes(), {"111111", "222222"})
+
     def test_run_uses_mailbox_timeout_as_register_wait_base(self):
         engine = self._make_engine(
             extra_config={

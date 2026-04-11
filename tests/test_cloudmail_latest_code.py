@@ -6,6 +6,22 @@ from core.base_mailbox import MailboxAccount, create_mailbox
 from scripts import cloudmail_latest_code
 
 
+def _json_response(payload, status_code=200, text=None):
+    response = mock.Mock()
+    response.status_code = status_code
+    response.text = text if text is not None else str(payload)
+    response.json.return_value = payload
+    return response
+
+
+def _text_response(status_code, text):
+    response = mock.Mock()
+    response.status_code = status_code
+    response.text = text
+    response.json.side_effect = ValueError("not json")
+    return response
+
+
 class CloudMailLatestCodeScriptTests(unittest.TestCase):
     def test_build_mailbox_extra_uses_cli_then_config_fallbacks(self):
         args = argparse.Namespace(
@@ -340,6 +356,107 @@ class CloudMailLatestCodeScriptTests(unittest.TestCase):
             lines,
             [
                 "code=123456 id=m-2 toEmail=real@example.com recipient=alias@example.com subject=Your verification code is 123456"
+            ],
+        )
+
+    @mock.patch("scripts.cloudmail_latest_code.requests.post")
+    def test_local_cloudmail_client_retries_after_auth_failure(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _text_response(401, "unauthorized"),
+            _json_response({"code": 200, "data": {"token": "tok-2"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "demo@example.com",
+                            "subject": "Your verification code is 654321",
+                            "content": "",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = cloudmail_latest_code.create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+
+        messages = mailbox._list_mails("demo@example.com")
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["emailId"], "m-1")
+        self.assertEqual(mock_post.call_count, 4)
+        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "demo@example.com")
+        self.assertEqual(mock_post.call_args_list[3].kwargs["headers"]["authorization"], "tok-2")
+
+    @mock.patch("scripts.cloudmail_latest_code.requests.post")
+    def test_local_cloudmail_client_omits_to_email_for_global_polling(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response({"code": 200, "data": []}),
+        ]
+
+        mailbox = cloudmail_latest_code.create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+            },
+        )
+
+        mailbox._list_mails("")
+
+        self.assertNotIn("toEmail", mock_post.call_args_list[1].kwargs["json"])
+
+    def test_scan_once_uses_local_cloudmail_client_alias_matching(self):
+        mailbox = cloudmail_latest_code.create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        account = cloudmail_latest_code.MailboxAccount(
+            email="alias@example.com",
+            account_id="real@example.com",
+        )
+
+        messages = [
+            {
+                "emailId": "m-1",
+                "toEmail": "real@example.com",
+                "recipient": '[{"address":"other@example.com","name":""}]',
+                "sendEmail": "alias@example.com",
+                "subject": "Your verification code is 123456",
+                "content": "",
+            }
+        ]
+
+        with mock.patch.object(mailbox, "_list_mails", return_value=messages):
+            lines = cloudmail_latest_code._scan_once(
+                mailbox,
+                account,
+                keyword="",
+                code_pattern="",
+                printed_ids=set(),
+            )
+
+        self.assertEqual(
+            lines,
+            [
+                "code=123456 id=m-1 toEmail=real@example.com recipient=other@example.com subject=Your verification code is 123456"
             ],
         )
 

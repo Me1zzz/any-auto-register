@@ -11,6 +11,7 @@ import {
   Space,
   Typography,
   Descriptions,
+  Alert,
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -23,7 +24,11 @@ import { TaskLogPanel } from '@/components/TaskLogPanel'
 import { usePersistentChatGPTRegistrationMode } from '@/hooks/usePersistentChatGPTRegistrationMode'
 import { parseBooleanConfigValue } from '@/lib/configValueParsers'
 import { buildChatGPTRegistrationRequestAdapter } from '@/lib/chatgptRegistrationRequestAdapter'
-import { getExecutorOptions, normalizeExecutorForPlatform } from '@/lib/platformExecutorOptions'
+import {
+  getExecutorOptions,
+  normalizeExecutorForPlatform,
+  resolveChatGPTExecutorType,
+} from '@/lib/platformExecutorOptions'
 import { apiFetch } from '@/lib/utils'
 
 const { Text } = Typography
@@ -184,6 +189,11 @@ export default function RegisterTaskPage() {
         values.platform,
         chatgptRegistrationMode,
       )
+    const executorType = resolveChatGPTExecutorType(
+      values.platform,
+      chatgptRegistrationMode,
+      values.executor_type,
+    )
     const adaptedRegisterExtra = chatgptRegistrationRequestAdapter
       ? chatgptRegistrationRequestAdapter.extendExtra(registerExtra)
       : registerExtra
@@ -198,7 +208,7 @@ export default function RegisterTaskPage() {
         concurrency: values.concurrency,
         register_delay_seconds: values.register_delay_seconds || 0,
         proxy: values.proxy || null,
-        executor_type: values.executor_type,
+        executor_type: executorType,
         captcha_solver: values.captcha_solver,
         extra: adaptedRegisterExtra,
       }),
@@ -310,10 +320,19 @@ export default function RegisterTaskPage() {
           </Space>
           {platform === 'chatgpt' && (
             <Form.Item label="ChatGPT Token 方案">
-              <ChatGPTRegistrationModeSwitch
-                mode={chatgptRegistrationMode}
-                onChange={setChatgptRegistrationMode}
-              />
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <ChatGPTRegistrationModeSwitch
+                  mode={chatgptRegistrationMode}
+                  onChange={setChatgptRegistrationMode}
+                />
+                {chatgptRegistrationMode === 'codex_gui' ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="GUI 模式会自动切换为有头浏览器执行，无需单独调整执行器。"
+                  />
+                ) : null}
+              </Space>
             </Form.Item>
           )}
         </Card>

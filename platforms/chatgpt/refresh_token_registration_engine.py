@@ -116,6 +116,11 @@ class EmailServiceAdapter:
     def uses_cloudmail_message_dedupe(self) -> bool:
         return bool(getattr(self.email_service, "_cloudmail_message_dedupe", False))
 
+    def build_exclude_codes(self) -> set[str]:
+        if self.uses_cloudmail_message_dedupe:
+            return set(self._used_message_ids)
+        return set(self._used_codes)
+
     def remember_successful_code(self, code: str) -> None:
         self._remember_code(code, successful=True)
 

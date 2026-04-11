@@ -22,5 +22,5 @@ def rename_files(folder_path: str, old_prefix: str = "xxx（占位）", new_pref
 
 
 if __name__ == "__main__":
-    target_folder = r"C:\Users\blue\.cli-proxy-api"
+    target_folder = r"C:\Users\M\.cli-proxy-api"
     rename_files(target_folder, 'codex', 'zzz')

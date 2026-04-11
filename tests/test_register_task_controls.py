@@ -60,6 +60,17 @@ class _FakeAliasMailbox(_FakeMailbox):
     def get_email(self) -> MailboxAccount:
         return self._last_account
 
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+        **kwargs,
+    ) -> str:
+        return "123456"
+
 
 class _FakePlatform(BasePlatform):
     name = "fake"

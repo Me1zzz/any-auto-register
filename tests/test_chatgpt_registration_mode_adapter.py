@@ -3,6 +3,7 @@ from unittest import mock
 
 from platforms.chatgpt.chatgpt_registration_mode_adapter import (
     CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY,
+    CHATGPT_REGISTRATION_MODE_CODEX_GUI,
     CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
     ChatGPTRegistrationContext,
     build_chatgpt_registration_mode_adapter,
@@ -23,6 +24,12 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
                 {"chatgpt_has_refresh_token_solution": False}
             ),
             CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY,
+        )
+
+    def test_resolve_supports_codex_gui_mode(self):
+        self.assertEqual(
+            resolve_chatgpt_registration_mode({"chatgpt_registration_mode": "codex_gui"}),
+            CHATGPT_REGISTRATION_MODE_CODEX_GUI,
         )
 
     def test_build_account_marks_selected_mode(self):
@@ -83,9 +90,20 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
             extra_config={"register_max_retries": 5},
         )
 
+        def _build_engine(_self, runtime_context):
+            return FakeEngine(
+                email_service=runtime_context.email_service,
+                proxy_url=runtime_context.proxy_url,
+                browser_mode=runtime_context.browser_mode,
+                callback_logger=runtime_context.callback_logger,
+                max_retries=runtime_context.max_retries,
+                extra_config=runtime_context.extra_config,
+            )
+
         with mock.patch(
-            "platforms.chatgpt.access_token_only_registration_engine.AccessTokenOnlyRegistrationEngine",
-            FakeEngine,
+            "platforms.chatgpt.chatgpt_registration_mode_adapter.AccessTokenOnlyChatGPTRegistrationAdapter._create_engine",
+            side_effect=_build_engine,
+            autospec=True,
         ):
             adapter.run(context)
 
@@ -93,6 +111,56 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
         self.assertEqual(created["password"], "pw-demo")
         self.assertEqual(created["kwargs"]["browser_mode"], "headed")
         self.assertEqual(created["kwargs"]["max_retries"], 5)
+
+    def test_codex_gui_adapter_passes_runtime_context_to_engine(self):
+        created = {}
+
+        class FakeEngine:
+            def __init__(self, **kwargs):
+                created["kwargs"] = kwargs
+                self.email = None
+                self.password = None
+
+            def run(self):
+                created["email"] = self.email
+                created["password"] = self.password
+                return type("Result", (), {"success": True})()
+
+        adapter = build_chatgpt_registration_mode_adapter(
+            {"chatgpt_registration_mode": "codex_gui"}
+        )
+        context = ChatGPTRegistrationContext(
+            email_service=object(),
+            proxy_url="http://127.0.0.1:7890",
+            callback_logger=lambda _msg: None,
+            email="demo@example.com",
+            password="pw-demo",
+            browser_mode="headed",
+            max_retries=2,
+            extra_config={"chatgpt_registration_mode": "codex_gui"},
+        )
+
+        def _build_engine(_self, runtime_context):
+            return FakeEngine(
+                email_service=runtime_context.email_service,
+                proxy_url=runtime_context.proxy_url,
+                browser_mode=runtime_context.browser_mode,
+                callback_logger=runtime_context.callback_logger,
+                max_retries=runtime_context.max_retries,
+                extra_config=runtime_context.extra_config,
+            )
+
+        with mock.patch(
+            "platforms.chatgpt.chatgpt_registration_mode_adapter.CodexGuiChatGPTRegistrationAdapter._create_engine",
+            side_effect=_build_engine,
+            autospec=True,
+        ):
+            adapter.run(context)
+
+        self.assertEqual(created["email"], "demo@example.com")
+        self.assertEqual(created["password"], "pw-demo")
+        self.assertEqual(created["kwargs"]["browser_mode"], "headed")
+        self.assertEqual(created["kwargs"]["max_retries"], 2)
 
 
 if __name__ == "__main__":

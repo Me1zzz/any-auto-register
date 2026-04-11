@@ -1,8 +1,5 @@
 """ChatGPT / Codex CLI 平台插件"""
 
-import random
-import string
-
 from core.base_mailbox import CloudMailMailbox
 from core.base_mailbox import BaseMailbox
 from core.base_platform import Account, BasePlatform, RegisterConfig
@@ -11,6 +8,7 @@ from platforms.chatgpt.chatgpt_registration_mode_adapter import (
     ChatGPTRegistrationContext,
     build_chatgpt_registration_mode_adapter,
 )
+from platforms.chatgpt.utils import generate_random_password
 
 
 @register
@@ -41,7 +39,7 @@ class ChatGPTPlatform(BasePlatform):
 
     def register(self, email: str = None, password: str = None) -> Account:
         if not password:
-            password = "".join(random.choices(string.ascii_letters + string.digits + "!@#$", k=16))
+            password = generate_random_password(16)
 
         proxy = self.config.proxy if self.config else None
         browser_mode = (self.config.executor_type if self.config else None) or "protocol"

@@ -29,3 +29,15 @@ export function normalizeExecutorForPlatform(platform: string | undefined, execu
   if (executor && supported.includes(executor)) return executor
   return supported[0] || 'protocol'
 }
+
+export function resolveChatGPTExecutorType(
+  platform: string | undefined,
+  mode: string | undefined,
+  executor: string | undefined,
+) {
+  if (platform === 'chatgpt' && mode === 'codex_gui') {
+    return 'headed'
+  }
+
+  return normalizeExecutorForPlatform(platform, executor)
+}

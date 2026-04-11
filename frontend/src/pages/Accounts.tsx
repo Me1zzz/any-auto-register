@@ -36,7 +36,10 @@ import { usePersistentChatGPTRegistrationMode } from '@/hooks/usePersistentChatG
 import { parseBooleanConfigValue } from '@/lib/configValueParsers'
 import { buildChatGPTRegistrationRequestAdapter } from '@/lib/chatgptRegistrationRequestAdapter'
 import { apiFetch } from '@/lib/utils'
-import { normalizeExecutorForPlatform } from '@/lib/platformExecutorOptions'
+import {
+  normalizeExecutorForPlatform,
+  resolveChatGPTExecutorType,
+} from '@/lib/platformExecutorOptions'
 
 const { Text } = Typography
 
@@ -744,7 +747,11 @@ export default function Accounts() {
     setRegisterLoading(true)
     try {
       const cfg = await apiFetch('/config')
-      const executorType = normalizeExecutorForPlatform(currentPlatform, cfg.default_executor)
+      const executorType = resolveChatGPTExecutorType(
+        currentPlatform,
+        chatgptRegistrationMode,
+        normalizeExecutorForPlatform(currentPlatform, cfg.default_executor),
+      )
       const registerExtra = {
         mail_provider: cfg.mail_provider || 'luckmail',
         applemail_base_url: cfg.applemail_base_url,
@@ -1402,10 +1409,19 @@ export default function Accounts() {
             </Form.Item>
             {currentPlatform === 'chatgpt' && (
               <Form.Item label="ChatGPT Token 方案">
-                <ChatGPTRegistrationModeSwitch
-                  mode={chatgptRegistrationMode}
-                  onChange={setChatgptRegistrationMode}
-                />
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <ChatGPTRegistrationModeSwitch
+                    mode={chatgptRegistrationMode}
+                    onChange={setChatgptRegistrationMode}
+                  />
+                  {chatgptRegistrationMode === 'codex_gui' ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="GUI 模式会自动使用有头浏览器执行。"
+                    />
+                  ) : null}
+                </Space>
               </Form.Item>
             )}
             <Form.Item>

@@ -1,5 +1,6 @@
 import {
   CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY,
+  CHATGPT_REGISTRATION_MODE_CODEX_GUI,
   CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
   type ChatGPTRegistrationMode,
 } from '@/lib/chatgptRegistrationMode'
@@ -39,11 +40,28 @@ class AccessTokenOnlyChatGPTRegistrationRequestAdapter
   }
 }
 
+class CodexGuiChatGPTRegistrationRequestAdapter
+  implements ChatGPTRegistrationRequestAdapter
+{
+  readonly mode = CHATGPT_REGISTRATION_MODE_CODEX_GUI
+
+  extendExtra(extra: RegistrationExtra): RegistrationExtra {
+    return {
+      ...extra,
+      chatgpt_registration_mode: this.mode,
+    }
+  }
+}
+
 export function buildChatGPTRegistrationRequestAdapter(
   platform: string | undefined,
   mode: ChatGPTRegistrationMode,
 ): ChatGPTRegistrationRequestAdapter | null {
   if (platform !== 'chatgpt') return null
+
+  if (mode === CHATGPT_REGISTRATION_MODE_CODEX_GUI) {
+    return new CodexGuiChatGPTRegistrationRequestAdapter()
+  }
 
   if (mode === CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY) {
     return new AccessTokenOnlyChatGPTRegistrationRequestAdapter()

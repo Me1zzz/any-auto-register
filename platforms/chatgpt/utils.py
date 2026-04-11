@@ -81,6 +81,15 @@ def generate_random_birthday():
     return f"{year:04d}-{month:02d}-{day:02d}"
 
 
+def generate_random_age(min_age=20, max_age=60):
+    """生成随机年龄整数，默认范围 20~60 岁。"""
+    minimum = int(min_age)
+    maximum = int(max_age)
+    if minimum > maximum:
+        minimum, maximum = maximum, minimum
+    return random.randint(minimum, maximum)
+
+
 def generate_datadog_trace():
     """生成 Datadog APM 追踪头"""
     trace_id = str(random.getrandbits(64))

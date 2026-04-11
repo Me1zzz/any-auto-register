@@ -20,11 +20,19 @@ from platforms.chatgpt.plugin import ChatGPTPlatform  # noqa: E402
 
 
 class _ConfigStoreLike(Protocol):
+    """Minimal protocol for optional config-store lookups used by this script."""
+
     def get(self, key: str, default: str = "") -> str:
         raise NotImplementedError
 
 
 def _load_config_store() -> Optional[_ConfigStoreLike]:
+    """Best-effort load of the shared config store.
+
+    The script is designed to work even when the optional config module is not
+    available, so import failures are swallowed and treated as "no store".
+    """
+
     try:
         from core.config_store import config_store
     except Exception:
@@ -33,6 +41,15 @@ def _load_config_store() -> Optional[_ConfigStoreLike]:
 
 
 def _get_config_value(cli_value: Any, *keys: str, default: str = "") -> str:
+    """Resolve a config value from CLI, config store, or environment.
+
+    Resolution order is intentionally strict:
+    1. explicit CLI argument
+    2. optional config store entries
+    3. environment variables (original key, then upper-case key)
+    4. provided default
+    """
+
     value = str(cli_value or "").strip()
     if value:
         return value
@@ -56,6 +73,8 @@ def _get_config_value(cli_value: Any, *keys: str, default: str = "") -> str:
 
 
 def _parse_bool(value: Any, default: bool = False) -> bool:
+    """Parse common truthy/falsey string values into a bool."""
+
     if isinstance(value, bool):
         return value
     text = str(value or "").strip().lower()
@@ -69,6 +88,8 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
 
 
 def _read_text_file(file_path: str) -> str:
+    """Read a UTF-8 text file used for alias-email input."""
+
     path = Path(str(file_path or "").strip())
     if not path:
         return ""
@@ -78,6 +99,12 @@ def _read_text_file(file_path: str) -> str:
 
 
 def _normalize_alias_emails(*values: Any) -> list[str]:
+    """Normalize alias email inputs into a deduplicated lower-case list.
+
+    Inputs may come from CLI text, a file, or existing config values, so this
+    helper accepts mixed types and multiple separators.
+    """
+
     items: list[str] = []
     seen: set[str] = set()
 
@@ -102,6 +129,8 @@ def _normalize_alias_emails(*values: Any) -> list[str]:
 
 
 def _to_int(value: Any) -> Optional[int]:
+    """Convert a value to int when possible, otherwise return None."""
+
     if value in (None, ""):
         return None
     try:
@@ -111,6 +140,8 @@ def _to_int(value: Any) -> Optional[int]:
 
 
 def _parse_args() -> argparse.Namespace:
+    """Define and parse CLI arguments for the registration script."""
+
     parser = argparse.ArgumentParser(
         description="Run ChatGPT RT registration with CloudMail alias support.",
     )
@@ -190,16 +221,21 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _build_cloudmail_extra(args: argparse.Namespace) -> dict[str, Any]:
+    """Assemble mailbox creation options from CLI/config/env sources."""
+
     alias_file_content = ""
     if str(args.cloudmail_alias_emails_file or "").strip():
         alias_file_content = _read_text_file(args.cloudmail_alias_emails_file)
 
+    # Alias candidates can be supplied from several places; normalize them into
+    # a single stable list before handing them to the mailbox layer.
     alias_emails = _normalize_alias_emails(
         args.cloudmail_alias_emails,
         alias_file_content,
         _get_config_value("", "cloudmail_alias_emails"),
     )
 
+    # The explicit CLI switch wins, otherwise fall back to config/env parsing.
     alias_enabled = args.cloudmail_alias_enabled or _parse_bool(
         _get_config_value("", "cloudmail_alias_enabled"),
         default=False,
@@ -244,13 +280,18 @@ def _build_cloudmail_extra(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _add_int_if_present(target: dict[str, Any], key: str, value: Any) -> None:
+    """Add an integer field only when the provided value is valid."""
+
     resolved = _to_int(value)
     if resolved is not None:
         target[key] = resolved
 
 
 def _build_chatgpt_extra(args: argparse.Namespace) -> dict[str, Any]:
+    """Build ChatGPT registration options consumed by the platform plugin."""
+
     extra: dict[str, Any] = {
+        # This script is dedicated to the refresh-token registration flow.
         "chatgpt_registration_mode": "refresh_token",
         "chatgpt_has_refresh_token_solution": True,
     }
@@ -293,6 +334,8 @@ def _build_chatgpt_extra(args: argparse.Namespace) -> dict[str, Any]:
 
 
 class ScriptLogger:
+    """Collect script logs and optionally mirror engine logs to stderr."""
+
     def __init__(self, *, verbose: bool):
         self.verbose = verbose
         self.lines: list[str] = []
@@ -310,6 +353,8 @@ class ScriptLogger:
 
 
 def _normalize_account_payload(account: Account) -> dict[str, Any]:
+    """Convert the Account model into a JSON-serializable response payload."""
+
     extra = dict(account.extra or {})
     return {
         "platform": account.platform,
@@ -326,6 +371,12 @@ def _normalize_account_payload(account: Account) -> dict[str, Any]:
 
 
 def _cloudmail_payload(mailbox: Any, task_alias_pool_key: str) -> dict[str, Any]:
+    """Extract alias/mailbox state for the final script response.
+
+    alias_active indicates that alias mode is enabled and the effective alias
+    email differs from the underlying real mailbox account.
+    """
+
     last_account = getattr(mailbox, "_last_account", None)
     alias_email = str(getattr(last_account, "email", "") or "").strip()
     mailbox_email = str(getattr(last_account, "account_id", "") or "").strip()
@@ -348,6 +399,8 @@ def _cloudmail_payload(mailbox: Any, task_alias_pool_key: str) -> dict[str, Any]
 
 
 def _dump_json(payload: dict[str, Any], *, pretty: bool) -> None:
+    """Print the result payload as compact or pretty JSON."""
+
     if pretty:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -355,9 +408,13 @@ def _dump_json(payload: dict[str, Any], *, pretty: bool) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+    """Execute the end-to-end mailbox setup and ChatGPT registration flow."""
+
     logger = ScriptLogger(verbose=bool(args.verbose))
     task_alias_pool_key = str(args.task_alias_pool_key or "").strip()
     if not task_alias_pool_key and args.release_alias_pool:
+        # Generate a temporary pool key so the script can release any reserved
+        # alias resources on exit, even when the caller did not provide one.
         task_alias_pool_key = f"script-{uuid4().hex[:12]}"
 
     mailbox = None
@@ -366,10 +423,14 @@ def run(args: argparse.Namespace) -> int:
         cloudmail_extra = _build_cloudmail_extra(args)
         chatgpt_extra = _build_chatgpt_extra(args)
         logger.script("creating CloudMail mailbox")
+        # Mailbox creation is delegated to the shared factory so the script
+        # stays aligned with the rest of the project.
         mailbox = create_mailbox("cloudmail", extra=cloudmail_extra, proxy=str(args.proxy or ""))
         if task_alias_pool_key:
             setattr(mailbox, "_task_alias_pool_key", task_alias_pool_key)
 
+        # RegisterConfig controls how the platform plugin launches the browser
+        # executor and how registration-specific timing parameters are applied.
         config = RegisterConfig(
             executor_type=args.browser_mode,
             proxy=(args.proxy or None),
@@ -378,10 +439,14 @@ def run(args: argparse.Namespace) -> int:
 
         logger.script("starting ChatGPT RT registration")
         platform = ChatGPTPlatform(config=config)
+        # The platform implementation expects the mailbox/log callback to be
+        # attached dynamically by scripts like this one.
         setattr(platform, "mailbox", mailbox)
         setattr(platform, "_log_fn", logger.emit)
         account = cast(Any, platform).register(email="", password=str(args.password or ""))
 
+        # Return a machine-friendly success payload so callers can both inspect
+        # the created account and persist operational metadata.
         payload = {
             "ok": True,
             "account": _normalize_account_payload(account),
@@ -397,6 +462,8 @@ def run(args: argparse.Namespace) -> int:
         _dump_json(payload, pretty=bool(args.pretty))
         return 0
     except Exception as exc:
+        # Failures are reported as structured JSON too, which keeps the script
+        # easy to integrate into higher-level automation.
         logger.script(f"registration failed: {exc}")
         if args.verbose:
             traceback.print_exc(file=sys.stderr)
@@ -421,6 +488,8 @@ def run(args: argparse.Namespace) -> int:
             releaser = getattr(CloudMailMailbox, "release_alias_pool", None)
             if callable(releaser):
                 try:
+                    # Best-effort cleanup: release any alias pool reservation so
+                    # repeated runs do not leak task-scoped alias assignments.
                     releaser(task_alias_pool_key)
                 except Exception as release_error:
                     print(
@@ -430,6 +499,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """CLI entry point."""
+
     return run(_parse_args())
 
 

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from core.base_platform import Account, AccountStatus
 
 CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN = "refresh_token"
 CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY = "access_token_only"
+CHATGPT_REGISTRATION_MODE_CODEX_GUI = "codex_gui"
 DEFAULT_CHATGPT_REGISTRATION_MODE = CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
 
 
@@ -26,6 +27,14 @@ def normalize_chatgpt_registration_mode(value) -> str:
         "false",
     }:
         return CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
+    if normalized in {
+        CHATGPT_REGISTRATION_MODE_CODEX_GUI,
+        "codex",
+        "codexgui",
+        "codex_gui_flow",
+        "codex_register_login_gui",
+    }:
+        return CHATGPT_REGISTRATION_MODE_CODEX_GUI
     if normalized in {
         CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
         "rt",
@@ -67,11 +76,13 @@ class BaseChatGPTRegistrationModeAdapter(ABC):
     mode: str
 
     @abstractmethod
-    def _create_engine(self, context: ChatGPTRegistrationContext):
+    def _create_engine(self, context: ChatGPTRegistrationContext) -> Any:
         """按模式构造底层注册引擎。"""
 
     def run(self, context: ChatGPTRegistrationContext):
         engine = self._create_engine(context)
+        if engine is None:
+            raise RuntimeError(f"未能创建注册引擎: mode={self.mode}")
         if context.email is not None:
             engine.email = context.email
         if context.password is not None:
@@ -90,7 +101,7 @@ class BaseChatGPTRegistrationModeAdapter(ABC):
         )
 
     def _build_account_extra(self, result) -> dict:
-        return {
+        extra = {
             "access_token": getattr(result, "access_token", ""),
             "refresh_token": getattr(result, "refresh_token", ""),
             "id_token": getattr(result, "id_token", ""),
@@ -100,6 +111,10 @@ class BaseChatGPTRegistrationModeAdapter(ABC):
             "chatgpt_has_refresh_token_solution": self.mode == CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
             "chatgpt_token_source": getattr(result, "source", "register"),
         }
+        metadata = getattr(result, "metadata", None)
+        if isinstance(metadata, dict):
+            extra.update(metadata)
+        return extra
 
 
 class RefreshTokenChatGPTRegistrationAdapter(BaseChatGPTRegistrationModeAdapter):
@@ -134,10 +149,28 @@ class AccessTokenOnlyChatGPTRegistrationAdapter(BaseChatGPTRegistrationModeAdapt
         )
 
 
+class CodexGuiChatGPTRegistrationAdapter(BaseChatGPTRegistrationModeAdapter):
+    mode = CHATGPT_REGISTRATION_MODE_CODEX_GUI
+
+    def _create_engine(self, context: ChatGPTRegistrationContext):
+        from platforms.chatgpt.codex_gui_registration_engine import CodexGUIRegistrationEngine
+
+        return CodexGUIRegistrationEngine(
+            email_service=context.email_service,
+            proxy_url=context.proxy_url,
+            browser_mode=context.browser_mode,
+            callback_logger=context.callback_logger,
+            max_retries=context.max_retries,
+            extra_config=context.extra_config,
+        )
+
+
 def build_chatgpt_registration_mode_adapter(
     extra: Optional[dict],
 ) -> BaseChatGPTRegistrationModeAdapter:
     mode = resolve_chatgpt_registration_mode(extra)
+    if mode == CHATGPT_REGISTRATION_MODE_CODEX_GUI:
+        return CodexGuiChatGPTRegistrationAdapter()
     if mode == CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY:
         return AccessTokenOnlyChatGPTRegistrationAdapter()
     return RefreshTokenChatGPTRegistrationAdapter()
