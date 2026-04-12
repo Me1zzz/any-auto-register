@@ -808,6 +808,9 @@ export default function Accounts() {
         luckmail_api_key: cfg.luckmail_api_key,
         luckmail_email_type: cfg.luckmail_email_type,
         luckmail_domain: cfg.luckmail_domain,
+        codex_gui_target_detector: values.codex_gui_target_detector || 'playwright',
+        codex_gui_edge_user_data_dir: values.codex_gui_edge_user_data_dir,
+        codex_gui_edge_profile_directory: values.codex_gui_edge_profile_directory,
       }
       const chatgptRegistrationRequestAdapter =
         buildChatGPTRegistrationRequestAdapter(
@@ -1397,7 +1400,12 @@ export default function Accounts() {
         maskClosable={false}
       >
         {!taskId ? (
-          <Form form={registerForm} layout="vertical" onFinish={handleRegister}>
+          <Form
+            form={registerForm}
+            layout="vertical"
+            onFinish={handleRegister}
+            initialValues={{ codex_gui_target_detector: 'playwright' }}
+          >
             <Form.Item name="count" label="注册数量" initialValue={1} rules={[{ required: true }]}>
               <Input type="number" min={1} />
             </Form.Item>
@@ -1415,11 +1423,39 @@ export default function Accounts() {
                     onChange={setChatgptRegistrationMode}
                   />
                   {chatgptRegistrationMode === 'codex_gui' ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="GUI 模式会自动使用有头浏览器执行。"
-                    />
+                    <>
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="GUI 模式会自动使用有头浏览器执行。"
+                      />
+                      <Form.Item
+                        name="codex_gui_target_detector"
+                        label="GUI 检测后端"
+                        extra="默认 Playwright；如窗口识别不稳定可切换 pywinauto。"
+                      >
+                        <Select
+                          options={[
+                            { value: 'playwright', label: 'Playwright（默认）' },
+                            { value: 'pywinauto', label: 'pywinauto' },
+                          ]}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        name="codex_gui_edge_user_data_dir"
+                        label="Edge 用户数据目录"
+                        extra="可选，常见值如 User Data；留空则使用默认目录。"
+                      >
+                        <Input placeholder="例如：C:\\Users\\用户名\\AppData\\Local\\Microsoft\\Edge\\User Data" />
+                      </Form.Item>
+                      <Form.Item
+                        name="codex_gui_edge_profile_directory"
+                        label="Edge Profile 目录"
+                        extra="可选，常见值如 Default、Profile 1；通常与上面的用户数据目录配合使用。"
+                      >
+                        <Input placeholder="例如：Default" />
+                      </Form.Item>
+                    </>
                   ) : null}
                 </Space>
               </Form.Item>
