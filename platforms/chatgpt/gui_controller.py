@@ -22,10 +22,33 @@ class PyAutoGUICodexGUIController:
     def _log_debug(self, message: str) -> None:
         self.logger_fn(message)
 
-    def _random_action_delay(self, reason: str) -> float:
-        delay = random.uniform(0.2, 1.5)
+    def _wait_range(self, min_key: str, max_key: str, default_min: float, default_max: float) -> tuple[float, float]:
+        min_value = self.extra_config.get(min_key, default_min)
+        max_value = self.extra_config.get(max_key, default_max)
+        try:
+            parsed_min = max(0.0, float(min_value or default_min))
+        except Exception:
+            parsed_min = default_min
+        try:
+            parsed_max = max(parsed_min, float(max_value or default_max))
+        except Exception:
+            parsed_max = max(default_max, parsed_min)
+        return parsed_min, parsed_max
+
+    def _random_wait_from_config(self, reason: str, min_key: str, max_key: str, default_min: float, default_max: float) -> float:
+        wait_min, wait_max = self._wait_range(min_key, max_key, default_min, default_max)
+        delay = random.uniform(wait_min, wait_max)
         self._log_debug(f"[节奏] 操作后随机停顿: reason={reason}, delay={delay * 1000:.1f}ms")
         return delay
+
+    def _random_action_delay(self, reason: str) -> float:
+        return self._random_wait_from_config(
+            reason,
+            "codex_gui_post_action_pause_seconds_min",
+            "codex_gui_post_action_pause_seconds_max",
+            0.2,
+            1.5,
+        )
 
     def random_post_action_pause(self, reason: str) -> None:
         delay = self._random_action_delay(reason)
@@ -36,13 +59,13 @@ class PyAutoGUICodexGUIController:
             start_x, start_y = pyautogui.position()
         except Exception:
             start_x, start_y = x, y
-        total_duration = max(duration, 0.05)
+        total_duration = max(duration, 0.01)
         distance = max(((x - start_x) ** 2 + (y - start_y) ** 2) ** 0.5, 1.0)
         gravity = float(self.extra_config.get("codex_gui_windmouse_gravity", 9.0) or 9.0)
         wind = float(self.extra_config.get("codex_gui_windmouse_wind", 3.0) or 3.0)
         max_step = float(self.extra_config.get("codex_gui_windmouse_max_step", 15.0) or 15.0)
         target_area = float(self.extra_config.get("codex_gui_windmouse_target_area", 8.0) or 8.0)
-        max_steps = max(10, int(self.extra_config.get("codex_gui_windmouse_max_steps", 80) or 80))
+        max_steps = max(100, int(self.extra_config.get("codex_gui_windmouse_max_steps", 160) or 160))
         self._log_debug(
             f"[GUI] WindMouse 移动: start=({start_x},{start_y}), target=({x},{y}), gravity={gravity:.2f}, wind={wind:.2f}, max_step={max_step:.2f}, target_area={target_area:.2f}, max_steps={max_steps}"
         )
@@ -98,23 +121,28 @@ class PyAutoGUICodexGUIController:
         if not path or path[-1] != (x, y):
             path.append((x, y))
 
-        step_duration = total_duration / max(len(path), 1)
+        step_duration = max(total_duration / max(len(path), 1), 0.0005)
+        self._log_debug(
+            f"[GUI] WindMouse 轨迹摘要: steps={len(path)}, start=({start_x},{start_y}), end=({x},{y}), step_duration={step_duration:.3f}s"
+        )
         for index, (step_x, step_y) in enumerate(path, start=1):
-            self._log_debug(
-                f"[GUI] WindMouse 轨迹点: step={index}/{len(path)}, point=({step_x},{step_y}), duration={step_duration:.3f}s"
-            )
             pyautogui.moveTo(step_x, step_y, duration=0)
             time.sleep(step_duration)
 
     def type_text_humanized(self, pyautogui, text: str) -> None:
         content = str(text or "")
-        for index, char in enumerate(content, start=1):
-            delay = random.uniform(0.05, 0.15)
-            self._log_debug(f"[GUI] 键入字符: index={index}/{len(content)}, char={repr(char)}, delay={delay * 1000:.1f}ms")
-            pyautogui.write(char, interval=0)
-            time.sleep(delay)
-        if content:
-            self.random_post_action_pause("type_text")
+        if not content:
+            return
+        self.paste_text(pyautogui, content, reason="field_input")
+        settle = self._random_wait_from_config(
+            "type_text",
+            "codex_gui_typing_paste_settle_seconds_min",
+            "codex_gui_typing_paste_settle_seconds_max",
+            0.05,
+            0.15,
+        )
+        time.sleep(settle)
+        self.random_post_action_pause("type_text")
 
     def type_text_fast(self, pyautogui, text: str, *, reason: str = "fast_type") -> None:
         content = str(text or "")
@@ -151,8 +179,20 @@ class PyAutoGUICodexGUIController:
     def click_screen_point(self, name: str, x: int, y: int) -> None:
         pyautogui = self._pyautogui_getter()
         move_duration = float(self.extra_config.get("codex_gui_move_duration_ms", 200) or 200) / 1000
-        pre_click_delay = random.uniform(0.2, 1.5)
-        post_click_delay = random.uniform(0.2, 1.5)
+        pre_min, pre_max = self._wait_range(
+            "codex_gui_pre_click_delay_seconds_min",
+            "codex_gui_pre_click_delay_seconds_max",
+            0.2,
+            1.5,
+        )
+        post_min, post_max = self._wait_range(
+            "codex_gui_post_click_delay_seconds_min",
+            "codex_gui_post_click_delay_seconds_max",
+            0.2,
+            1.5,
+        )
+        pre_click_delay = random.uniform(pre_min, pre_max)
+        post_click_delay = random.uniform(post_min, post_max)
         self._log_debug(f"[GUI] 移动鼠标: name={name}, to=({x}, {y}), duration={move_duration:.3f}s")
         self.human_move_to(pyautogui, x, y, move_duration)
         time.sleep(max(pre_click_delay, 0))
@@ -205,12 +245,24 @@ class PyAutoGUICodexGUIController:
         pyautogui = self._pyautogui_getter()
         try:
             pyautogui.hotkey("ctrl", "space")
-            time.sleep(random.uniform(0.2, 1.5))
+            ime_min, ime_max = self._wait_range(
+                "codex_gui_ime_switch_wait_seconds_min",
+                "codex_gui_ime_switch_wait_seconds_max",
+                0.2,
+                1.5,
+            )
+            time.sleep(random.uniform(ime_min, ime_max))
             self._log_debug("[输入法] 已通过 Ctrl+Space 尝试切换到英文输入模式")
         except Exception as exc:
             self._log_debug(f"[输入法] Ctrl+Space 切换失败，尝试 Shift: {exc}")
             pyautogui.press("shift")
-            time.sleep(random.uniform(0.2, 1.5))
+            ime_min, ime_max = self._wait_range(
+                "codex_gui_ime_switch_wait_seconds_min",
+                "codex_gui_ime_switch_wait_seconds_max",
+                0.2,
+                1.5,
+            )
+            time.sleep(random.uniform(ime_min, ime_max))
             self._log_debug("[输入法] 已通过 Shift 尝试切换到英文输入模式")
 
     def press_keys(self, *keys: str) -> None:

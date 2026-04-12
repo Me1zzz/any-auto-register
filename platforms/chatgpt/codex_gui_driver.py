@@ -86,6 +86,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             logger_fn=self._log_debug,
             pyautogui_getter=self._import_pyautogui,
         )
+        self._load_codex_gui_config()
 
     def _resolve_edge_command(self) -> str:
         configured = str(
@@ -114,6 +115,29 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
 
     def _log_debug(self, message: str) -> None:
         self.logger_fn(message)
+
+    def _load_codex_gui_config(self) -> None:
+        if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
+            return
+        waits = self._target_detector.waits_config()
+        for key in (
+            "stage_probe_interval_seconds_min",
+            "stage_probe_interval_seconds_max",
+            "post_action_pause_seconds_min",
+            "post_action_pause_seconds_max",
+            "pre_click_delay_seconds_min",
+            "pre_click_delay_seconds_max",
+            "post_click_delay_seconds_min",
+            "post_click_delay_seconds_max",
+            "typing_paste_settle_seconds_min",
+            "typing_paste_settle_seconds_max",
+            "ime_switch_wait_seconds_min",
+            "ime_switch_wait_seconds_max",
+        ):
+            if key in waits:
+                self.extra_config[f"codex_gui_{key}"] = waits[key]
+        self._gui_controller.extra_config = dict(self.extra_config)
+        self._gui_controller.extra_config = dict(self.extra_config)
 
     def _build_target_detector(self):
         detector_kind = str(self.extra_config.get("codex_gui_target_detector") or "playwright").strip().lower()
@@ -245,6 +269,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         config = self._target_detector.blank_area_click_config_for_target(name)
         if not config.enabled or not config.box:
             return
+        started_at = time.perf_counter()
         click_count = random.randint(config.click_count_min, config.click_count_max)
         self._log_debug(
             f"[UIA] 输入框识别前点击空白区域: name={name}, count={click_count}, box={config.box}, interval=({config.interval_seconds_min:.2f},{config.interval_seconds_max:.2f})"
@@ -255,6 +280,8 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             self._click_screen_point(f"blank_area:{name}:{index + 1}", blank_x, blank_y)
             if index < click_count - 1:
                 time.sleep(random.uniform(config.interval_seconds_min, config.interval_seconds_max))
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 输入框识别前空白区域点击完成: name={name}, elapsed={elapsed_ms:.1f}ms")
 
     def _verify_pywinauto_input(self, name: str, text: str) -> None:
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
@@ -289,7 +316,11 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
     def page_marker_matched(self, stage: str) -> tuple[bool, str | None]:
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return False, None
-        return self._target_detector.page_marker_matched(stage)
+        started_at = time.perf_counter()
+        result = self._target_detector.page_marker_matched(stage)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 页面 marker 检查完成: stage={stage}, elapsed={elapsed_ms:.1f}ms")
+        return result
 
     def _ensure_browser_session(self):
         self._sync_components_from_facade()
@@ -387,11 +418,14 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return metrics
 
     def _resolve_target_locator(self, name: str) -> CodexGUITargetResolution:
+        started_at = time.perf_counter()
         if self._detector_kind() == "pywinauto":
             self._pre_click_blank_area_for_input_detection(name)
         self._sync_components_from_facade()
         resolved = self._target_detector.resolve_target(name)
         self._sync_facade_from_components()
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 目标识别完成: name={name}, elapsed={elapsed_ms:.1f}ms")
         return resolved
 
     def peek_target(self, name: str) -> tuple[str, str, dict[str, float] | None]:
@@ -434,7 +468,11 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             raise RuntimeError("当前检测器不支持 pywinauto 地址栏导航")
         pyautogui = self._import_pyautogui()
+        started_at = time.perf_counter()
+        locate_started_at = time.perf_counter()
         control, box = self._target_detector.locate_address_bar()
+        locate_elapsed_ms = (time.perf_counter() - locate_started_at) * 1000
+        self._log_debug(f"[耗时] 地址栏定位完成: elapsed={locate_elapsed_ms:.1f}ms")
         try:
             control.set_focus()
         except Exception:
@@ -462,6 +500,8 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             self._gui_controller.paste_text(pyautogui, target_url, reason="address_bar_fallback")
             pyautogui.press("enter")
         time.sleep(max(0.1, self._browser_settle_seconds))
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 地址栏导航完成: elapsed={elapsed_ms:.1f}ms")
 
     def _random_page_hover_point(self) -> tuple[int, int]:
         if self._detector_kind() == "pywinauto":
@@ -551,6 +591,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         attempts = self._pywinauto_input_retry_count if self._detector_kind() == "pywinauto" else 1
         last_error: Exception | None = None
         for attempt in range(1, max(attempts, 1) + 1):
+            started_at = time.perf_counter()
             self.click_named_target(name)
             self._switch_to_english_input()
             self._focus_and_clear_input(name)
@@ -560,6 +601,8 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
                 return
             try:
                 self._verify_pywinauto_input(name, target_text)
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log_debug(f"[耗时] 输入流程完成: name={name}, attempt={attempt}, elapsed={elapsed_ms:.1f}ms")
                 return
             except Exception as exc:
                 last_error = exc
@@ -573,11 +616,14 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         if self._detector_kind() == "pywinauto":
             if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
                 raise RuntimeError("当前检测器不支持 pywinauto 地址栏读取")
+            locate_started_at = time.perf_counter()
             control, _box = self._target_detector.locate_address_bar()
+            locate_elapsed_ms = (time.perf_counter() - locate_started_at) * 1000
             try:
                 value = str(control.window_text() or "").strip()
             except Exception as exc:
                 raise RuntimeError(f"读取浏览器地址栏失败: {exc}") from exc
+            self._log_debug(f"[耗时] 地址栏读取完成: locate_elapsed={locate_elapsed_ms:.1f}ms")
             self._log_debug(f"[浏览器] 当前地址栏 URL: {value}")
             return value
         self._sync_components_from_facade()

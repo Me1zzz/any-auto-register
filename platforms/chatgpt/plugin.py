@@ -116,10 +116,13 @@ class ChatGPTPlatform(BasePlatform):
                 ):
                     if not self._acct:
                         raise RuntimeError("邮箱账户尚未创建，无法获取验证码")
+                    effective_timeout = timeout
+                    if str(extra_config.get("chatgpt_registration_mode") or "").strip().lower() != "codex_gui":
+                        effective_timeout = _resolve_mailbox_timeout(timeout)
                     code = _mailbox.wait_for_code(
                         self._acct,
                         keyword="",
-                        timeout=_resolve_mailbox_timeout(timeout),
+                        timeout=effective_timeout,
                         before_ids=self._before_ids,
                         otp_sent_at=otp_sent_at,
                         exclude_codes=exclude_codes,
@@ -166,10 +169,13 @@ class ChatGPTPlatform(BasePlatform):
                     otp_sent_at=None,
                     exclude_codes=None,
                 ):
+                    effective_timeout = timeout
+                    if str(extra_config.get("chatgpt_registration_mode") or "").strip().lower() != "codex_gui":
+                        effective_timeout = _resolve_mailbox_timeout(timeout)
                     return _tmail.wait_for_code(
                         self._acct,
                         keyword="",
-                        timeout=_resolve_mailbox_timeout(timeout),
+                        timeout=effective_timeout,
                         before_ids=self._before_ids,
                         otp_sent_at=otp_sent_at,
                         exclude_codes=exclude_codes,

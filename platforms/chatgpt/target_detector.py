@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Callable
 
 from services.page_clicker.dom import extract_clickable_candidates
@@ -169,8 +170,7 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         self.logger_fn = logger_fn
         self.browser_session = browser_session
         self._locator = NullCodexGUILocator()
-        self._page_markers_cache: dict[str, list[str]] | None = None
-        self._blank_area_clicks_cache: dict[str, Any] | None = None
+        self._codex_gui_config_cache: dict[str, Any] | None = None
 
     def _log_debug(self, message: str) -> None:
         self.logger_fn(message)
@@ -191,50 +191,49 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         target = targets.get(name)
         return target if isinstance(target, dict) else None
 
-    def _page_markers_file_path(self) -> Path:
-        configured = str(self.extra_config.get("codex_gui_page_markers_file") or "").strip()
+    def _config_file_path(self) -> Path:
+        configured = str(
+            self.extra_config.get("codex_gui_config_file")
+            or self.extra_config.get("codex_gui_page_markers_file")
+            or self.extra_config.get("codex_gui_blank_area_clicks_file")
+            or ""
+        ).strip()
         if configured:
             return Path(configured)
-        return Path(__file__).with_name("codex_gui_page_markers.json")
+        return Path(__file__).with_name("codex_gui_config.json")
 
-    def _blank_area_clicks_file_path(self) -> Path:
-        configured = str(self.extra_config.get("codex_gui_blank_area_clicks_file") or "").strip()
-        if configured:
-            return Path(configured)
-        return Path(__file__).with_name("codex_gui_blank_area_clicks.json")
-
-    def page_markers(self) -> dict[str, list[str]]:
-        if self._page_markers_cache is not None:
-            return self._page_markers_cache
-        path = self._page_markers_file_path()
+    def codex_gui_config(self) -> dict[str, Any]:
+        if self._codex_gui_config_cache is not None:
+            return self._codex_gui_config_cache
+        path = self._config_file_path()
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            self._page_markers_cache = {}
-            return self._page_markers_cache
+            self._codex_gui_config_cache = {}
+            return self._codex_gui_config_cache
         if not isinstance(payload, dict):
-            raise RuntimeError(f"页面文本配置格式错误: {path}")
+            raise RuntimeError(f"Codex GUI 配置格式错误: {path}")
+        self._codex_gui_config_cache = payload
+        return payload
+
+    def page_markers(self) -> dict[str, list[str]]:
+        payload = self.codex_gui_config().get("page_markers")
+        if not isinstance(payload, dict):
+            return {}
         markers: dict[str, list[str]] = {}
         for stage, values in payload.items():
             if not isinstance(values, list):
                 continue
             markers[str(stage)] = [str(item or "").strip() for item in values if str(item or "").strip()]
-        self._page_markers_cache = markers
         return markers
 
     def blank_area_clicks(self) -> dict[str, Any]:
-        if self._blank_area_clicks_cache is not None:
-            return self._blank_area_clicks_cache
-        path = self._blank_area_clicks_file_path()
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            self._blank_area_clicks_cache = {}
-            return self._blank_area_clicks_cache
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"空白区域点击配置格式错误: {path}")
-        self._blank_area_clicks_cache = payload
-        return payload
+        payload = self.codex_gui_config().get("blank_area_clicks")
+        return payload if isinstance(payload, dict) else {}
+
+    def waits_config(self) -> dict[str, Any]:
+        payload = self.codex_gui_config().get("waits")
+        return payload if isinstance(payload, dict) else {}
 
     def blank_area_click_config_for_target(self, name: str) -> PywinautoBlankAreaClickConfig:
         payload = self.blank_area_clicks()
@@ -305,6 +304,7 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         return app.window(handle=handles[0])
 
     def locate_address_bar(self):
+        started_at = time.perf_counter()
         window = self._find_edge_window()
         title_hints = [
             str(item or "").strip()
@@ -335,6 +335,8 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
                 if width <= 0 or height <= 0:
                     continue
                 self._log_debug(f"[UIA] 地址栏定位成功: criteria={criteria}, rect={rect}")
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log_debug(f"[耗时] 地址栏定位(primary)完成: elapsed={elapsed_ms:.1f}ms")
                 return control, {
                     "x": float(int(rect.left)),
                     "y": float(int(rect.top)),
@@ -343,15 +345,12 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
                 }
             except Exception as exc:
                 last_error = exc
-        self._log_debug(f"4")
         try:
             descendants = window.descendants(control_type="Edit")
         except Exception as exc:
             last_error = exc
             descendants = []
-        self._log_debug(f"5")
         for control in descendants:
-            self._log_debug(f"6")
             try:
                 rect = control.rectangle()
                 width = int(rect.width())
@@ -361,6 +360,8 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
                 if int(rect.top) < 0:
                     continue
                 self._log_debug(f"[UIA] 地址栏通过 Edit 回退定位成功: rect={rect}")
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log_debug(f"[耗时] 地址栏定位(fallback)完成: elapsed={elapsed_ms:.1f}ms")
                 return control, {
                     "x": float(int(rect.left)),
                     "y": float(int(rect.top)),
@@ -466,6 +467,7 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         return candidates
 
     def visible_text_candidates(self) -> list[PywinautoTextCandidate]:
+        started_at = time.perf_counter()
         candidates: list[PywinautoTextCandidate] = []
         for control, text, box in self.iter_visible_controls():
             value = self._value_from_control(control)
@@ -473,9 +475,12 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
             if not candidate_text:
                 continue
             candidates.append(PywinautoTextCandidate(text=candidate_text, box={**box}))
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 可见文本候选收集完成: count={len(candidates)}, elapsed={elapsed_ms:.1f}ms")
         return candidates
 
     def page_marker_matched(self, stage: str) -> tuple[bool, str | None]:
+        started_at = time.perf_counter()
         markers = self.page_text_markers_for_stage(stage)
         if not markers:
             return False, None
@@ -491,18 +496,25 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         missing_markers = [marker for marker in markers if marker not in matched_markers]
         if missing_markers:
             self._log_debug(f"[UIA] 页面文本未全部命中: stage={stage}, missing={missing_markers}")
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            self._log_debug(f"[耗时] 页面文本匹配完成(未命中): stage={stage}, elapsed={elapsed_ms:.1f}ms")
             return False, ", ".join(missing_markers)
         self._log_debug(f"[UIA] 页面文本全部命中: stage={stage}, markers={markers}")
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 页面文本匹配完成(命中): stage={stage}, elapsed={elapsed_ms:.1f}ms")
         if markers:
             return True, markers[0]
         return False, None
 
     def iter_visible_controls(self):
+        started_at = time.perf_counter()
         window = self._find_edge_window()
         try:
             descendants = window.iter_descendants()
         except AttributeError:
             descendants = window.descendants()
+        setup_elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] 可见控件枚举准备完成: elapsed={setup_elapsed_ms:.1f}ms")
         for control in descendants:
             try:
                 text = str(control.window_text() or "").strip()
@@ -524,6 +536,7 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
             }
 
     def resolve_target(self, name: str) -> CodexGUITargetResolution:
+        started_at = time.perf_counter()
         configured = self.configured_uia_target(name)
         keywords: list[str] = []
         if configured:
@@ -560,6 +573,8 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         self._log_debug(
             f"[UIA] 定位成功: name={name}, keyword={matched_keyword}, score={score}, box={box}"
         )
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._log_debug(f"[耗时] UIA 目标匹配完成: name={name}, candidates={len(candidates)}, elapsed={elapsed_ms:.1f}ms")
         return CodexGUITargetResolution(
             locator=self._locator,
             strategy_kind="uia_text",

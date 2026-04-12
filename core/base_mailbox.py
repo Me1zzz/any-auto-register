@@ -1750,7 +1750,7 @@ class CloudMailMailbox(BaseMailbox):
                 pass
             return None
 
-        poll_interval = random.uniform(2, 3)
+        poll_interval = 3
         return self._run_polling_wait(
             timeout=timeout,
             poll_interval=poll_interval,

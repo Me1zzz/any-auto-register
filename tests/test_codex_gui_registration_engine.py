@@ -28,6 +28,7 @@ sys.modules.setdefault("smstome_tool", smstome_tool_stub)
 from platforms.chatgpt.codex_gui_registration_engine import (
     CodexGUIDriver,
     CodexGUIRegistrationEngine,
+    EmailServiceAdapter,
     PyAutoGUICodexGUIDriver,
 )
 
@@ -322,6 +323,37 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertEqual(email_service.calls[1]["exclude_codes"], {"111111"})
         self.assertEqual(email_service.calls[2]["exclude_codes"], {"111111"})
         self.assertIn(("click", "resend_email_button"), driver.events)
+
+    def test_collect_verification_code_uses_pywinauto_resend_strategy(self):
+        email_service = _DummyEmailService([None, None, None])
+        driver = _FakeDriver()
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_otp_resend_wait_seconds_min": 5,
+                "codex_gui_otp_resend_wait_seconds_max": 8,
+                "codex_gui_otp_max_resends_min": 8,
+                "codex_gui_otp_max_resends_max": 8,
+            },
+        )
+        engine._driver = driver
+        adapter = mock.Mock(spec=EmailServiceAdapter)
+        adapter.email = "user@example.com"
+        adapter.build_exclude_codes.return_value = set()
+        adapter.wait_for_verification_code.return_value = None
+
+        with self.assertRaisesRegex(RuntimeError, "多次重发后仍未收到验证码"), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.random.uniform", return_value=5.5
+        ):
+            engine._collect_verification_code(adapter, stage="注册")
+
+        self.assertEqual(adapter.wait_for_verification_code.call_count, 8)
+        resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
+        self.assertEqual(len(resend_clicks), 7)
 
     def test_run_retries_last_action_when_error_page_detected(self):
         email_service = _DummyEmailService(["111111", "222222"])
@@ -655,7 +687,8 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertGreaterEqual(len(fake_gui.moves), 1)
         self.assertEqual(fake_gui.clicks[-1], (100, 200))
         self.assertTrue(any("[GUI] WindMouse 移动" in entry for entry in logs))
-        self.assertTrue(any("[GUI] WindMouse 轨迹点" in entry for entry in logs))
+        self.assertTrue(any("[GUI] WindMouse 轨迹摘要" in entry for entry in logs))
+        self.assertFalse(any("[GUI] WindMouse 轨迹点" in entry for entry in logs))
         self.assertTrue(any("[节奏] 操作后随机停顿: reason=click:register_button" in entry for entry in logs))
 
     def test_driver_resolves_builtin_text_target(self):
@@ -887,6 +920,32 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertEqual(resolved.strategy_value, "注册")
         self.assertEqual(resolved.box, {"x": 1.0, "y": 2.0, "width": 30.0, "height": 12.0})
 
+    def test_pywinauto_detector_reads_unified_codex_gui_config(self):
+        detector = PywinautoCodexGUITargetDetector(
+            extra_config={},
+            logger_fn=lambda _msg: None,
+            browser_session=mock.Mock(),
+        )
+
+        markers = detector.page_text_markers_for_stage("注册-创建账户页")
+        blank_config = detector.blank_area_click_config_for_target("email_input")
+        waits = detector.waits_config()
+
+        self.assertIn("创建帐户", markers)
+        self.assertTrue(blank_config.enabled)
+        self.assertGreater(blank_config.click_count_min, 0)
+        self.assertIn("stage_probe_interval_seconds_min", waits)
+
+    def test_driver_loads_unified_waits_into_controller_config(self):
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=lambda _msg: None,
+        )
+
+        self.assertEqual(driver.extra_config.get("codex_gui_pre_click_delay_seconds_min"), 0)
+        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_pre_click_delay_seconds_min"), 0)
+        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_stage_probe_interval_seconds_min"), 0.05)
+
     def test_input_text_switches_to_english_input_before_typing(self):
         logs = []
         driver = PyAutoGUICodexGUIDriver(extra_config={}, logger_fn=logs.append)
@@ -899,15 +958,15 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         with mock.patch.object(driver, "_import_pyautogui", return_value=fake_gui), mock.patch(
             "platforms.chatgpt.gui_controller.random.uniform",
             return_value=0.05,
-        ), mock.patch("platforms.chatgpt.gui_controller.time.sleep"):
+        ), mock.patch("platforms.chatgpt.gui_controller.time.sleep"), mock.patch.object(
+            driver._gui_controller, "paste_text"
+        ) as paste_mock:
             driver.input_text("email_input", "user@example.com")
 
         driver.click_named_target.assert_called_once_with("email_input")
         driver._switch_to_english_input.assert_called_once()
         driver._focus_and_clear_input.assert_called_once_with("email_input")
-        self.assertEqual(len(fake_gui.write_calls), len("user@example.com"))
-        self.assertTrue(all(interval == 0 for _text, interval in fake_gui.write_calls))
-        self.assertEqual("".join(text for text, _interval in fake_gui.write_calls), "user@example.com")
+        paste_mock.assert_called_once_with(fake_gui, "user@example.com", reason="field_input")
         self.assertTrue(any("delay=50.0ms" in entry for entry in logs))
         self.assertTrue(any("[节奏] 操作后随机停顿: reason=type_text" in entry for entry in logs))
         driver._verify_pywinauto_input.assert_not_called()
@@ -1072,6 +1131,22 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         controller.navigate_with_address_bar(fake_gui, "https://auth.openai.com/log-in")
 
         self.assertEqual(fake_gui.write_calls, [("https://auth.openai.com/log-in", 0)])
+
+    def test_gui_controller_type_text_humanized_uses_clipboard_paste(self):
+        logs = []
+        fake_gui = _FakePyAutoGUI()
+        controller = PyAutoGUICodexGUIController(
+            extra_config={},
+            logger_fn=logs.append,
+            pyautogui_getter=lambda: fake_gui,
+        )
+
+        with mock.patch.object(controller, "paste_text") as paste_mock, mock.patch(
+            "platforms.chatgpt.gui_controller.random.uniform", return_value=0.05
+        ), mock.patch("platforms.chatgpt.gui_controller.time.sleep"):
+            controller.type_text_humanized(fake_gui, "user@example.com")
+
+        paste_mock.assert_called_once_with(fake_gui, "user@example.com", reason="field_input")
 
     def test_gui_controller_paste_text_uses_clipboard_and_ctrl_v(self):
         logs = []
@@ -1374,6 +1449,19 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         with mock.patch("platforms.chatgpt.codex_gui_registration_engine.random.uniform", return_value=1.1):
             self.assertEqual(engine._stage_probe_interval_seconds(), 1.1)
+
+    def test_stage_probe_interval_uses_configured_range(self):
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_stage_probe_interval_seconds_min": 0.9,
+                "codex_gui_stage_probe_interval_seconds_max": 1.2,
+            },
+        )
+
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.random.uniform", return_value=1.05):
+            self.assertEqual(engine._stage_probe_interval_seconds(), 1.05)
 
     def test_stage_dom_probe_timeout_defaults_to_one_second(self):
         engine = CodexGUIRegistrationEngine(

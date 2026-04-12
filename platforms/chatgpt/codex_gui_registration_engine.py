@@ -114,7 +114,17 @@ class CodexGUIRegistrationEngine:
                 return max(0.1, float(value or 1))
             except Exception:
                 return 1.0
-        return random.uniform(0.8, 1.5)
+        min_value = self.extra_config.get("codex_gui_stage_probe_interval_seconds_min", 0.8)
+        max_value = self.extra_config.get("codex_gui_stage_probe_interval_seconds_max", 1.5)
+        try:
+            parsed_min = max(0.1, float(min_value or 0.8))
+        except Exception:
+            parsed_min = 0.8
+        try:
+            parsed_max = max(parsed_min, float(max_value or 1.5))
+        except Exception:
+            parsed_max = max(parsed_min, 1.5)
+        return random.uniform(parsed_min, parsed_max)
 
     def _stage_dom_probe_timeout_ms(self) -> int:
         value = self.extra_config.get("codex_gui_stage_dom_probe_timeout_ms", 1000)
@@ -214,9 +224,12 @@ class CodexGUIRegistrationEngine:
         if driver is None:
             raise RuntimeError("Codex GUI 驱动未初始化")
         self._log_step(stage, "等待页面文本全部命中")
+        started_at = time.perf_counter()
         deadline = time.time() + max(1, timeout)
         while time.time() <= deadline:
             if self._page_marker_match(stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[{stage}] 页面文本等待完成: elapsed={elapsed_ms:.1f}ms")
                 return
             current_url = str(driver.read_current_url() or "").strip()
             if self._is_retry_page(current_url):
@@ -232,11 +245,16 @@ class CodexGUIRegistrationEngine:
         if driver is None:
             raise RuntimeError("Codex GUI 驱动未初始化")
         self._log_step(f"{prefix}-终态判断", "等待终态页面命中")
+        started_at = time.perf_counter()
         deadline = time.time() + max(1, timeout)
         while time.time() <= deadline:
             if self._page_marker_match(consent_stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[{prefix}-终态判断] consent 命中: elapsed={elapsed_ms:.1f}ms")
                 return "consent"
             if self._page_marker_match(add_stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[{prefix}-终态判断] add-phone 命中: elapsed={elapsed_ms:.1f}ms")
                 return "add-phone"
             current_url = str(driver.read_current_url() or "").strip()
             if self._is_retry_page(current_url):
@@ -305,6 +323,34 @@ class CodexGUIRegistrationEngine:
         driver = self._driver
         if driver is None:
             raise RuntimeError("Codex GUI 驱动未初始化")
+        detector_kind = str(self.extra_config.get("codex_gui_target_detector") or "").strip().lower()
+        if detector_kind == "pywinauto":
+            resend_wait_min = float(self.extra_config.get("codex_gui_otp_resend_wait_seconds_min", 5) or 5)
+            resend_wait_max = float(self.extra_config.get("codex_gui_otp_resend_wait_seconds_max", 8) or 8)
+            resend_attempts_min = int(self.extra_config.get("codex_gui_otp_max_resends_min", 8) or 8)
+            resend_attempts_max = int(self.extra_config.get("codex_gui_otp_max_resends_max", 10) or 10)
+            resend_attempts = max(resend_attempts_min, resend_attempts_max)
+            resend_target = str(self.extra_config.get("codex_gui_resend_target") or "resend_email_button").strip()
+            for attempt in range(1, resend_attempts + 1):
+                wait_seconds = random.uniform(resend_wait_min, resend_wait_max)
+                self._log(f"[{stage}] 第 {attempt}/{resend_attempts} 次等待验证码，等待 {wait_seconds:.1f}s")
+                exclude_codes = adapter.build_exclude_codes()
+                code = adapter.wait_for_verification_code(
+                    adapter.email,
+                    timeout=max(1, int(round(wait_seconds))),
+                    otp_sent_at=time.time(),
+                    exclude_codes=exclude_codes,
+                )
+                if code:
+                    return str(code or "").strip()
+                if attempt >= resend_attempts:
+                    break
+                self._log(f"[{stage}] {wait_seconds:.1f}s 内未收到验证码，点击“重新发送电子邮件”")
+                self._run_action(
+                    f"[{stage}] 点击重新发送邮件",
+                    lambda: driver.click_named_target(resend_target),
+                )
+            raise RuntimeError(f"[{stage}] 多次重发后仍未收到验证码，判定当前 OAuth 失败")
         resend_timeout = self._wait_timeout("codex_gui_otp_wait_seconds", 55)
         resend_attempts = self._wait_timeout("codex_gui_otp_max_resends", 1)
         otp_sent_at = time.time()

@@ -69,7 +69,7 @@ if __name__ == "__main__":
         RenameRule(
             prefix_to_add="00000",
             priority=100,
-            contains_any=("me1zzz.tech", "tempforward.com", "cxwsss.online"),
+            contains_any=("me1zzz.tech", "tempforward.com"),
         ),
         RenameRule(
             prefix_to_add="zzz",

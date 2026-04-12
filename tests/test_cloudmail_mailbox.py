@@ -227,7 +227,7 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 4)
 
     @mock.patch("requests.post")
-    def test_wait_for_code_uses_shorter_random_poll_interval(self, mock_post):
+    def test_wait_for_code_uses_fixed_three_second_poll_interval(self, mock_post):
         mock_post.side_effect = [
             _json_response({"code": 200, "data": {"token": "tok-1"}}),
             _json_response(
@@ -256,13 +256,13 @@ class CloudMailMailboxTests(unittest.TestCase):
         )
         account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
 
-        with mock.patch("core.base_mailbox.random.uniform", return_value=2.5), mock.patch.object(
+        with mock.patch.object(
             mailbox, "_run_polling_wait", wraps=mailbox._run_polling_wait
         ) as polling_mock:
             code = mailbox.wait_for_code(account, timeout=5)
 
         self.assertEqual(code, "654321")
-        self.assertEqual(polling_mock.call_args.kwargs["poll_interval"], 2.5)
+        self.assertEqual(polling_mock.call_args.kwargs["poll_interval"], 3)
 
     @mock.patch("requests.post")
     def test_wait_for_code_filters_by_recipt_for_alias(self, mock_post):
@@ -1029,16 +1029,11 @@ class CloudMailMailboxTests(unittest.TestCase):
         assert isinstance(mailbox, CloudMailMailbox)
         account = MailboxAccount(email="demo@example.com", account_id="demo@example.com")
 
-        with mock.patch("core.base_mailbox.random.uniform", return_value=2.5) as mock_uniform, mock.patch.object(
-            mailbox,
-            "_run_polling_wait",
-            return_value="123456",
-        ) as mock_run_polling_wait:
+        with mock.patch.object(mailbox, "_run_polling_wait", return_value="123456") as mock_run_polling_wait:
             code = mailbox.wait_for_code(account, timeout=5)
 
         self.assertEqual(code, "123456")
-        mock_uniform.assert_called_once_with(2, 3)
-        self.assertEqual(mock_run_polling_wait.call_args.kwargs["poll_interval"], 2.5)
+        self.assertEqual(mock_run_polling_wait.call_args.kwargs["poll_interval"], 3)
         self.assertEqual(mock_run_polling_wait.call_args.kwargs["timeout"], 5)
         self.assertTrue(callable(mock_run_polling_wait.call_args.kwargs["poll_once"]))
 

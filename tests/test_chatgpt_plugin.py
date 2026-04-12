@@ -170,6 +170,65 @@ class ChatGPTPluginTests(unittest.TestCase):
         _, kwargs = mailbox.wait_call
         self.assertEqual(kwargs.get("timeout"), 90)
 
+    def test_custom_provider_codex_gui_uses_passed_timeout_directly(self):
+        mailbox = _TrackingMailbox()
+        platform = ChatGPTPlatform(
+            config=RegisterConfig(
+                extra={
+                    "chatgpt_registration_mode": "codex_gui",
+                    "mailbox_otp_timeout_seconds": 90,
+                }
+            ),
+            mailbox=mailbox,
+        )
+        adapter = _VerificationAdapter()
+
+        with mock.patch(
+            "platforms.chatgpt.plugin.build_chatgpt_registration_mode_adapter",
+            return_value=adapter,
+        ):
+            platform.register()
+
+        _, kwargs = mailbox.wait_call
+        self.assertEqual(kwargs.get("timeout"), 30)
+
+    def test_tempmail_codex_gui_uses_passed_timeout_directly(self):
+        class _TrackingTempMail:
+            def __init__(self):
+                self.account = MailboxAccount(email="temp@example.com", account_id="temp@example.com")
+                self.wait_call = None
+
+            def get_email(self):
+                return self.account
+
+            def get_current_ids(self, account):
+                return set()
+
+            def wait_for_code(self, *args, **kwargs):
+                self.wait_call = (args, kwargs)
+                return "123456"
+
+        mailbox = _TrackingTempMail()
+        platform = ChatGPTPlatform(
+            config=RegisterConfig(
+                extra={
+                    "chatgpt_registration_mode": "codex_gui",
+                    "mailbox_otp_timeout_seconds": 90,
+                }
+            ),
+            mailbox=None,
+        )
+        adapter = _VerificationAdapter()
+
+        with mock.patch("core.base_mailbox.TempMailLolMailbox", return_value=mailbox), mock.patch(
+            "platforms.chatgpt.plugin.build_chatgpt_registration_mode_adapter",
+            return_value=adapter,
+        ):
+            platform.register()
+
+        _, kwargs = mailbox.wait_call
+        self.assertEqual(kwargs.get("timeout"), 30)
+
     def test_custom_provider_requeues_mailbox_account_on_failure(self):
         mailbox = _RequeueMailbox()
         platform = ChatGPTPlatform(

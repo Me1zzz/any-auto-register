@@ -1,0 +1,47 @@
+{
+  "page_markers": {
+    "注册-打开登录页": ["欢迎回来", "注册", "继续"],
+    "注册-创建账户页": ["创建帐户", "电子邮件地址", "继续", "登录"],
+    "注册-密码页": ["创建密码", "继续", "登录"],
+    "注册-验证码页": ["检查您的收件箱", "验证码", "重新发送电子邮件"],
+    "注册-about-you": ["你的年龄是多少？", "完成帐户创建"],
+    "注册-终态判断-add/phone": ["电话号码是必填项", "继续"],
+    "注册-终态判断-consent": ["使用 ChatGPT 登录到 Codex", "继续", "取消"],
+    "注册-成功标志页": ["You can close this window."],
+    "登录-打开登录页": ["继续", "电子邮件地址"],
+    "登录-密码页": ["输入密码", "忘记了密码", "使用一次性验证码登录", "继续"],
+    "登录-验证码页": ["检查您的收件箱", "验证码", "重新发送电子邮件"],
+    "登录-终态判断-add/phone": ["电话号码是必填项", "继续"],
+    "登录-终态判断-consent": ["使用 ChatGPT 登录到 Codex", "继续", "取消"],
+    "登录-成功标志页": ["You can close this window."]
+  },
+  "blank_area_clicks": {
+    "default": {
+      "enabled": true,
+      "bbox": {
+        "x": 500,
+        "y": 500,
+        "width": 400,
+        "height": 300
+      },
+      "click_count_min": 1,
+      "click_count_max": 1,
+      "interval_seconds_min": 0.01,
+      "interval_seconds_max": 0.05
+    }
+  },
+  "waits": {
+    "stage_probe_interval_seconds_min": 0.05,
+    "stage_probe_interval_seconds_max": 0.1,
+    "post_action_pause_seconds_min": 0,
+    "post_action_pause_seconds_max": 0.04,
+    "pre_click_delay_seconds_min": 0,
+    "pre_click_delay_seconds_max": 0.02,
+    "post_click_delay_seconds_min": 0,
+    "post_click_delay_seconds_max": 0.02,
+    "typing_paste_settle_seconds_min": 0.01,
+    "typing_paste_settle_seconds_max": 0.03,
+    "ime_switch_wait_seconds_min": 0.01,
+    "ime_switch_wait_seconds_max": 0.03
+  }
+}
