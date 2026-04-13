@@ -47,6 +47,11 @@ const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
     { label: 'API 协议（无浏览器）', value: 'protocol' },
     { label: '无头浏览器', value: 'headless' },
     { label: '有头浏览器', value: 'headed' },
+    { label: 'GUI操控', value: 'gui_control' },
+  ],
+  codex_gui_target_detector: [
+    { label: 'pywinauto', value: 'pywinauto' },
+    { label: 'playwright', value: 'playwright' },
   ],
   default_captcha_solver: [
     { label: 'YesCaptcha', value: 'yescaptcha' },
@@ -576,7 +581,7 @@ function ConfigField({ field }: { field: FieldConfig }) {
   const isTextareaField = field.type === 'textarea'
   const helpText =
     field.key === 'default_executor'
-      ? '仅对支持的平台生效；ChatGPT、Cursor、Grok、Kiro、Tavily、Trae 支持浏览器模式，OpenBlockLabs 仅支持纯协议。'
+      ? '仅对支持的平台生效；ChatGPT、Cursor、Grok、Kiro、Tavily、Trae 支持浏览器模式，其中 GUI操控 仅对 ChatGPT 生效；OpenBlockLabs 仅支持纯协议。'
       : field.description
 
   return (
@@ -614,6 +619,61 @@ function ConfigSection({ section }: { section: SectionConfig }) {
       {section.fields.map((field) => (
         <ConfigField key={field.key} field={field} />
       ))}
+    </Card>
+  )
+}
+
+function RegisterSettingsSection({ form }: { form: any }) {
+  const defaultExecutor = String(Form.useWatch('default_executor', form) || 'protocol')
+  const guiTargetDetector = String(Form.useWatch('codex_gui_target_detector', form) || 'pywinauto')
+  const showGuiSettings = defaultExecutor === 'gui_control'
+  const showPlaywrightFields = showGuiSettings && guiTargetDetector === 'playwright'
+
+  return (
+    <Card
+      title="默认注册方式"
+      extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>控制注册任务如何执行</span>}
+      style={{ marginBottom: 16 }}
+    >
+      <ConfigField field={{ key: 'default_executor', label: '执行器类型', type: 'select' }} />
+      {showGuiSettings ? (
+        <>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="GUI操控仅对 ChatGPT 生效，运行时会自动切换为有头浏览器，并使用 Codex GUI 注册流。"
+          />
+          <ConfigField
+            field={{
+              key: 'codex_gui_target_detector',
+              label: 'GUI 检测后端',
+              type: 'select',
+              description: '默认使用 pywinauto；如需通过浏览器上下文辅助识别，可切换为 playwright。',
+            }}
+          />
+          {showPlaywrightFields ? (
+            <>
+              <ConfigField
+                field={{
+                  key: 'codex_gui_edge_user_data_dir',
+                  label: 'Edge 用户数据目录',
+                  placeholder: '例如：C:\\Users\\用户名\\AppData\\Local\\Microsoft\\Edge\\User Data',
+                  description: 'playwright 模式下可选；留空则使用系统默认目录。',
+                }}
+              />
+              <ConfigField
+                field={{
+                  key: 'codex_gui_edge_profile_directory',
+                  label: 'Edge Profile 目录',
+                  placeholder: '例如：Default / Profile 1',
+                  description: 'playwright 模式下可选；通常与上面的用户数据目录配合使用。',
+                }}
+              />
+            </>
+          ) : null}
+        </>
+      ) : null}
     </Card>
   )
 }
@@ -1588,6 +1648,9 @@ export default function Settings() {
       if (!data.luckmail_base_url) {
         data.luckmail_base_url = 'https://mails.luckyous.com/'
       }
+      if (!data.codex_gui_target_detector) {
+        data.codex_gui_target_detector = 'pywinauto'
+      }
       if (!String(data.contribution_enabled ?? '').trim()) {
         data.contribution_enabled = false
       }
@@ -1788,6 +1851,8 @@ export default function Settings() {
                       ))}
                       {currentMailProviderRaw !== 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
                     </>
+                  ) : activeTab === 'register' ? (
+                    <RegisterSettingsSection form={form} />
                   ) : (
                     currentTab.sections.map((section) => (
                       <ConfigSection key={section.title} section={section} />

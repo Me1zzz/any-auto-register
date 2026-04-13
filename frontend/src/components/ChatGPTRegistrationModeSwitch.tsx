@@ -18,8 +18,13 @@ export function ChatGPTRegistrationModeSwitch({
   mode,
   onChange,
 }: ChatGPTRegistrationModeSwitchProps) {
+  const displayMode =
+    mode === CHATGPT_REGISTRATION_MODE_CODEX_GUI
+      ? CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
+      : mode
+
   const modeMeta: Record<
-    ChatGPTRegistrationMode,
+    typeof CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN | typeof CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY,
     {
       tagColor: string
       tagLabel: string
@@ -38,15 +43,9 @@ export function ChatGPTRegistrationModeSwitch({
       description:
         '无 RT 方案会走当前旧链路，只产出 Access Token / Session，依赖 RT 的能力可能不可用。',
     },
-    [CHATGPT_REGISTRATION_MODE_CODEX_GUI]: {
-      tagColor: 'processing',
-      tagLabel: 'GUI 模式',
-      description:
-        'GUI 方案会走 Codex GUI 注册流，并自动使用有头浏览器执行。',
-    },
   }
 
-  const currentModeMeta = modeMeta[mode]
+  const currentModeMeta = modeMeta[displayMode]
 
   return (
     <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -54,7 +53,7 @@ export function ChatGPTRegistrationModeSwitch({
         <Radio.Group
           optionType="button"
           buttonStyle="solid"
-          value={mode}
+           value={displayMode}
           onChange={(event) => onChange(event.target.value as ChatGPTRegistrationMode)}
           options={[
             {
@@ -64,10 +63,6 @@ export function ChatGPTRegistrationModeSwitch({
             {
               value: CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY,
               label: '无 RT',
-            },
-            {
-              value: CHATGPT_REGISTRATION_MODE_CODEX_GUI,
-              label: 'GUI',
             },
           ]}
         />

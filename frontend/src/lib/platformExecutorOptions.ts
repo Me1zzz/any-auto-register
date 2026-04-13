@@ -2,10 +2,13 @@ export const EXECUTOR_OPTIONS = [
   { value: 'protocol', label: '纯协议' },
   { value: 'headless', label: '无头浏览器' },
   { value: 'headed', label: '有头浏览器' },
+  { value: 'gui_control', label: 'GUI操控' },
 ] as const
 
+export const GUI_CONTROL_EXECUTOR = 'gui_control'
+
 const PLATFORM_EXECUTORS: Record<string, string[]> = {
-  chatgpt: ['protocol', 'headless', 'headed'],
+  chatgpt: ['protocol', 'headless', 'headed', GUI_CONTROL_EXECUTOR],
   cursor: ['protocol', 'headless', 'headed'],
   grok: ['protocol', 'headless', 'headed'],
   kiro: ['protocol', 'headless', 'headed'],
@@ -35,7 +38,7 @@ export function resolveChatGPTExecutorType(
   mode: string | undefined,
   executor: string | undefined,
 ) {
-  if (platform === 'chatgpt' && mode === 'codex_gui') {
+  if (platform === 'chatgpt' && (mode === 'codex_gui' || executor === GUI_CONTROL_EXECUTOR)) {
     return 'headed'
   }
 
