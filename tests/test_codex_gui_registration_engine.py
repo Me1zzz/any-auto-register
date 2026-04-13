@@ -1387,6 +1387,69 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         driver._click_screen_point.assert_called_once_with("browser_address_bar", 130, 74)
 
+    def test_pywinauto_target_detector_reuses_cached_address_bar_control(self):
+        logs = []
+        detector = PywinautoCodexGUITargetDetector(extra_config={}, logger_fn=logs.append, browser_session=mock.Mock())
+
+        class _FakeRect:
+            left = 100
+            top = 60
+
+            @staticmethod
+            def width():
+                return 200
+
+            @staticmethod
+            def height():
+                return 20
+
+        fake_control = mock.Mock()
+        fake_control.rectangle.return_value = _FakeRect()
+        fake_window = mock.Mock()
+        fake_window.child_window.return_value.wrapper_object.return_value = fake_control
+
+        with mock.patch.object(detector, "_find_edge_window", side_effect=[fake_window, AssertionError("should not resolve window again")]):
+            first_control, first_box = detector.locate_address_bar()
+            second_control, second_box = detector.locate_address_bar()
+
+        self.assertIs(first_control, fake_control)
+        self.assertIs(second_control, fake_control)
+        self.assertEqual(first_box, second_box)
+        self.assertTrue(any("地址栏定位(cache)完成" in entry for entry in logs))
+
+    def test_pywinauto_target_detector_prefers_focused_edit_before_descendants_fallback(self):
+        logs = []
+        detector = PywinautoCodexGUITargetDetector(extra_config={}, logger_fn=logs.append, browser_session=mock.Mock())
+
+        class _FakeRect:
+            left = 120
+            top = 70
+
+            @staticmethod
+            def width():
+                return 240
+
+            @staticmethod
+            def height():
+                return 24
+
+        focused_control = mock.Mock()
+        focused_control.rectangle.return_value = _FakeRect()
+        focused_control.window_text.return_value = "https://auth.openai.com/log-in"
+
+        fake_window = mock.Mock()
+        fake_window.child_window.return_value.wrapper_object.side_effect = RuntimeError("primary miss")
+        fake_window.get_focus.return_value = focused_control
+        fake_window.descendants.side_effect = AssertionError("should not use descendants fallback")
+
+        with mock.patch.object(detector, "_find_edge_window", return_value=fake_window):
+            resolved_control, resolved_box = detector.locate_address_bar()
+
+        self.assertIs(resolved_control, focused_control)
+        self.assertEqual(resolved_box["x"], 120.0)
+        self.assertEqual(resolved_box["width"], 240.0)
+        self.assertTrue(any("地址栏定位(focused)完成" in entry for entry in logs))
+
     def test_wait_for_terminal_outcome_returns_add_phone(self):
         logs = []
         engine = CodexGUIRegistrationEngine(
@@ -1402,6 +1465,94 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             terminal = engine._wait_for_terminal_outcome(prefix="注册", timeout=1)
 
         self.assertEqual(terminal, "add-phone")
+
+    def test_wait_for_stage_marker_in_pywinauto_mode_retries_text_only_before_15s(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_stage_probe_interval_seconds": 0.1,
+            },
+        )
+        driver = _FakeDriverWithStrictMarkers()
+        driver.read_current_url = mock.Mock(side_effect=RuntimeError("should not read url before 15s window expires"))
+        engine._driver = driver
+
+        marker_results = iter([
+            (False, None),
+            (False, None),
+            (True, "创建帐户"),
+        ])
+        driver.page_marker_matched = mock.Mock(side_effect=lambda _stage: next(marker_results))
+
+        perf_values = iter([0.0, 1.0, 2.0, 3.0])
+        time_values = iter([100.0, 100.1, 100.2, 100.3])
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.perf_counter", side_effect=lambda: next(perf_values)), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=lambda: next(time_values)
+        ), mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.sleep"):
+            engine._wait_for_stage_marker("注册-创建账户页", timeout=30)
+
+        driver.read_current_url.assert_not_called()
+        self.assertEqual(driver.page_marker_matched.call_count, 3)
+
+    def test_wait_for_stage_marker_in_pywinauto_mode_reads_url_after_15s_window(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_stage_probe_interval_seconds": 0.1,
+            },
+        )
+        driver = _FakeDriverWithStrictMarkers()
+        driver.read_current_url = mock.Mock(return_value="https://auth.openai.com/error")
+        engine._driver = driver
+        driver.page_marker_matched = mock.Mock(return_value=(False, None))
+        engine._handle_retry_page = mock.Mock(side_effect=RuntimeError("retry handled"))
+
+        perf_values = iter([0.0, 5.0, 10.0, 15.1])
+        time_values = iter([200.0, 200.1, 200.2, 200.3])
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.perf_counter", side_effect=lambda: next(perf_values)), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=lambda: next(time_values)
+        ), mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "retry handled"):
+                engine._wait_for_stage_marker("注册-密码页", timeout=30)
+
+        driver.read_current_url.assert_called_once()
+        engine._handle_retry_page.assert_called_once_with("注册-密码页")
+
+    def test_wait_for_terminal_outcome_in_pywinauto_mode_delays_url_fallback_until_15s(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_stage_probe_interval_seconds": 0.1,
+            },
+        )
+        driver = _FakeDriverWithStrictMarkers()
+        driver.read_current_url = mock.Mock(return_value="https://auth.openai.com/error")
+        engine._driver = driver
+        driver.page_marker_matched = mock.Mock(return_value=(False, None))
+        engine._handle_retry_page = mock.Mock(side_effect=RuntimeError("terminal retry handled"))
+
+        perf_values = iter([0.0, 4.0, 8.0, 12.0, 15.2])
+        time_values = iter([300.0, 300.1, 300.2, 300.3, 300.4])
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.perf_counter", side_effect=lambda: next(perf_values)), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=lambda: next(time_values)
+        ), mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "terminal retry handled"):
+                engine._wait_for_terminal_outcome(prefix="注册", timeout=30)
+
+        driver.read_current_url.assert_called_once()
+        engine._handle_retry_page.assert_called_once_with("注册-终态判断")
 
     def test_stage_probe_interval_uses_random_range_when_not_configured(self):
         engine = CodexGUIRegistrationEngine(

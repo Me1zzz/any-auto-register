@@ -64,7 +64,7 @@ def rename_files(
 
 
 if __name__ == "__main__":
-    target_folder = r"C:\Users\M\.cli-proxy-api"
+    target_folder = r"C:\Users\blue\.cli-proxy-api"
     rename_rules = [
         RenameRule(
             prefix_to_add="00000",

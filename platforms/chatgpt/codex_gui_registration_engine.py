@@ -219,6 +219,30 @@ class CodexGUIRegistrationEngine:
             self._log(f"[{stage}] 页面文本命中成功: marker={marker}")
         return matched
 
+    def _is_pywinauto_mode(self) -> bool:
+        return str(self.extra_config.get("codex_gui_target_detector") or "").strip().lower() == "pywinauto"
+
+    def _marker_retry_window_seconds(self) -> float:
+        value = self.extra_config.get("codex_gui_stage_marker_retry_window_seconds", 15)
+        try:
+            return max(0.0, float(value or 15))
+        except Exception:
+            return 15.0
+
+    def _retry_page_from_url_after_marker_window(self, stage: str, *, started_at: float) -> bool:
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI 驱动未初始化")
+        if self._is_pywinauto_mode():
+            elapsed_seconds = time.perf_counter() - started_at
+            if elapsed_seconds < self._marker_retry_window_seconds():
+                return False
+        current_url = str(driver.read_current_url() or "").strip()
+        if self._is_retry_page(current_url):
+            self._handle_retry_page(stage)
+            return True
+        return False
+
     def _wait_for_stage_marker(self, stage: str, *, timeout: int) -> None:
         driver = self._driver
         if driver is None:
@@ -231,9 +255,7 @@ class CodexGUIRegistrationEngine:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 self._log(f"[{stage}] 页面文本等待完成: elapsed={elapsed_ms:.1f}ms")
                 return
-            current_url = str(driver.read_current_url() or "").strip()
-            if self._is_retry_page(current_url):
-                self._handle_retry_page(stage)
+            self._retry_page_from_url_after_marker_window(stage, started_at=started_at)
             driver.wander_while_waiting(stage)
             time.sleep(self._stage_probe_interval_seconds())
         raise RuntimeError(f"[{stage}] 等待页面文本命中超时")
@@ -256,9 +278,7 @@ class CodexGUIRegistrationEngine:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 self._log(f"[{prefix}-终态判断] add-phone 命中: elapsed={elapsed_ms:.1f}ms")
                 return "add-phone"
-            current_url = str(driver.read_current_url() or "").strip()
-            if self._is_retry_page(current_url):
-                self._handle_retry_page(f"{prefix}-终态判断")
+            self._retry_page_from_url_after_marker_window(f"{prefix}-终态判断", started_at=started_at)
             driver.wander_while_waiting(f"{prefix}-终态判断")
             time.sleep(self._stage_probe_interval_seconds())
         raise RuntimeError(f"[{prefix}-终态判断] 等待终态页面超时")

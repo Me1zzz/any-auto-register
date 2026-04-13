@@ -171,6 +171,7 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         self.browser_session = browser_session
         self._locator = NullCodexGUILocator()
         self._codex_gui_config_cache: dict[str, Any] | None = None
+        self._address_bar_cache: tuple[Any, dict[str, float]] | None = None
 
     def _log_debug(self, message: str) -> None:
         self.logger_fn(message)
@@ -303,8 +304,88 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         app = Application(backend="uia").connect(handle=handles[0])
         return app.window(handle=handles[0])
 
+    @staticmethod
+    def _box_from_rect(rect) -> dict[str, float]:
+        return {
+            "x": float(int(rect.left)),
+            "y": float(int(rect.top)),
+            "width": float(int(rect.width())),
+            "height": float(int(rect.height())),
+        }
+
+    def _validate_address_bar_control(self, control) -> tuple[Any, dict[str, float]] | None:
+        rect_getter = getattr(control, "rectangle", None)
+        if not callable(rect_getter):
+            return None
+        try:
+            rect = rect_getter()
+            width_getter = getattr(rect, "width", None)
+            height_getter = getattr(rect, "height", None)
+            top_value = getattr(rect, "top", None)
+            if not callable(width_getter) or not callable(height_getter) or top_value is None:
+                return None
+            width = int(float(str(width_getter())))
+            height = int(float(str(height_getter())))
+            top = int(float(str(top_value)))
+        except Exception:
+            return None
+        if width <= 0 or height <= 0 or top < 0:
+            return None
+        return control, self._box_from_rect(rect)
+
+    def _get_cached_address_bar(self) -> tuple[Any, dict[str, float]] | None:
+        cached = self._address_bar_cache
+        if cached is None:
+            return None
+        control, _box = cached
+        validated = self._validate_address_bar_control(control)
+        if validated is None:
+            self._address_bar_cache = None
+            return None
+        self._address_bar_cache = validated
+        self._log_debug("[UIA] 复用已缓存地址栏控件")
+        return validated
+
+    def _cache_address_bar(self, control) -> tuple[Any, dict[str, float]] | None:
+        validated = self._validate_address_bar_control(control)
+        if validated is None:
+            self._address_bar_cache = None
+            return None
+        self._address_bar_cache = validated
+        return validated
+
+    def _focused_edit_control(self, window) -> Any | None:
+        for attr_name in ("get_focus", "get_active"):
+            getter = getattr(window, attr_name, None)
+            if not callable(getter):
+                continue
+            try:
+                focused = getter()
+            except Exception:
+                continue
+            if focused is None:
+                continue
+            candidates: list[Any] = []
+            wrapper_getter = getattr(focused, "wrapper_object", None)
+            if callable(wrapper_getter):
+                try:
+                    candidates.append(wrapper_getter())
+                except Exception:
+                    pass
+            candidates.append(focused)
+            for candidate in candidates:
+                validated = self._validate_address_bar_control(candidate)
+                if validated is not None:
+                    return candidate
+        return None
+
     def locate_address_bar(self):
         started_at = time.perf_counter()
+        cached = self._get_cached_address_bar()
+        if cached is not None:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            self._log_debug(f"[耗时] 地址栏定位(cache)完成: elapsed={elapsed_ms:.1f}ms")
+            return cached
         window = self._find_edge_window()
         title_hints = [
             str(item or "").strip()
@@ -330,21 +411,23 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
             try:
                 control = window.child_window(**criteria).wrapper_object()
                 rect = control.rectangle()
-                width = int(rect.width())
-                height = int(rect.height())
-                if width <= 0 or height <= 0:
+                validated = self._cache_address_bar(control)
+                if validated is None:
                     continue
                 self._log_debug(f"[UIA] 地址栏定位成功: criteria={criteria}, rect={rect}")
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 self._log_debug(f"[耗时] 地址栏定位(primary)完成: elapsed={elapsed_ms:.1f}ms")
-                return control, {
-                    "x": float(int(rect.left)),
-                    "y": float(int(rect.top)),
-                    "width": float(width),
-                    "height": float(height),
-                }
+                return validated
             except Exception as exc:
                 last_error = exc
+        focused_control = self._focused_edit_control(window)
+        if focused_control is not None:
+            validated = self._cache_address_bar(focused_control)
+            if validated is not None:
+                self._log_debug(f"[UIA] 地址栏通过焦点 Edit 快速定位成功: control={focused_control}")
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log_debug(f"[耗时] 地址栏定位(focused)完成: elapsed={elapsed_ms:.1f}ms")
+                return validated
         try:
             descendants = window.descendants(control_type="Edit")
         except Exception as exc:
@@ -353,21 +436,13 @@ class PywinautoCodexGUITargetDetector(CodexGUITargetDetector):
         for control in descendants:
             try:
                 rect = control.rectangle()
-                width = int(rect.width())
-                height = int(rect.height())
-                if width <= 0 or height <= 0:
-                    continue
-                if int(rect.top) < 0:
+                validated = self._cache_address_bar(control)
+                if validated is None:
                     continue
                 self._log_debug(f"[UIA] 地址栏通过 Edit 回退定位成功: rect={rect}")
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 self._log_debug(f"[耗时] 地址栏定位(fallback)完成: elapsed={elapsed_ms:.1f}ms")
-                return control, {
-                    "x": float(int(rect.left)),
-                    "y": float(int(rect.top)),
-                    "width": float(width),
-                    "height": float(height),
-                }
+                return validated
             except Exception as exc:
                 last_error = exc
 
