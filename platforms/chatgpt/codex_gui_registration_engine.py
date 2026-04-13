@@ -5,28 +5,21 @@ from __future__ import annotations
 import logging
 import random
 import time
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
 
 from core.task_runtime import TaskInterruption
 from services.cliproxyapi_sync import get_codex_auth_url
 
+from .codex_gui.context import CodexGUIFlowContext
 from .codex_gui_driver import CodexGUIDriver, PyAutoGUICodexGUIDriver
-from .refresh_token_registration_engine import EmailServiceAdapter, RegistrationResult
+from .codex_gui.models import CodexGUIIdentity
+from .codex_gui.services.email_code_service import EmailCodeServiceAdapter as EmailServiceAdapter
+from .codex_gui.workflows import LoginWorkflow, RegistrationWorkflow
+from .refresh_token_registration_engine import RegistrationResult
 from .utils import generate_random_age, generate_random_name, generate_random_password
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class CodexGUIIdentity:
-    email: str
-    password: str
-    full_name: str
-    age: int
-    service_id: str = ""
-
 
 class CodexGUIRegistrationEngine:
     def __init__(
@@ -53,6 +46,8 @@ class CodexGUIRegistrationEngine:
         self._last_retry_action: Optional[Callable[[], None]] = None
         self._driver: Optional[CodexGUIDriver] = None
         self._oauth_login_completed = False
+        self._registration_workflow = RegistrationWorkflow()
+        self._login_workflow = LoginWorkflow()
 
     def _log(self, message: str, level: str = "info") -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -99,6 +94,50 @@ class CodexGUIRegistrationEngine:
             age=age,
             service_id=service_id,
         )
+
+    def _build_flow_context(self, *, identity: CodexGUIIdentity, auth_url: str, email_adapter) -> CodexGUIFlowContext:
+        return CodexGUIFlowContext(
+            identity=identity,
+            auth_url=auth_url,
+            auth_state="",
+            email_adapter=email_adapter,
+            logger=self._log,
+            extra_config=self.extra_config,
+            oauth_login_completed=self._oauth_login_completed,
+        )
+
+    def _log_identity_summary(self, identity: CodexGUIIdentity) -> None:
+        self._log("=" * 60)
+        self._log("开始 Codex GUI 注册/登录流程")
+        self._log(f"邮箱: {identity.email}")
+        self._log(f"全名: {identity.full_name}, 年龄: {identity.age}")
+        self._log("=" * 60)
+
+    def _initialize_run_result(self) -> RegistrationResult:
+        return RegistrationResult(success=False, logs=self.logs, source="codex_gui")
+
+    def _finalize_success_result(
+        self,
+        result: RegistrationResult,
+        *,
+        identity: CodexGUIIdentity,
+        auth_state: str,
+        auth_url: str,
+    ) -> RegistrationResult:
+        result.success = True
+        result.email = identity.email
+        result.password = identity.password
+        result.account_id = identity.service_id or identity.email
+        result.metadata = {
+            "codex_gui_register_completed": True,
+            "codex_gui_login_completed": True,
+            "codex_gui_oauth_login_completed": True,
+            "codex_gui_auth_state": auth_state,
+            "codex_gui_auth_url": auth_url,
+            "codex_gui_full_name": identity.full_name,
+            "codex_gui_age": identity.age,
+        }
+        return result
 
     def _wait_timeout(self, key: str, default: int) -> int:
         value = self.extra_config.get(key, default)
@@ -403,68 +442,21 @@ class CodexGUIRegistrationEngine:
         raise RuntimeError(f"[{stage}] 等待验证码失败")
 
     def _run_registration_flow(self, auth_url: str, identity: CodexGUIIdentity, adapter: EmailServiceAdapter) -> None:
-        wait_timeout = self._wait_timeout("codex_gui_wait_timeout_seconds", 60)
-        driver = self._driver
-        if driver is None:
-            raise RuntimeError("Codex GUI 驱动未初始化")
-        self._log_step("注册", "使用 Edge 最大化窗口打开 OAuth 授权链接")
-        print('_log_step')
-        driver.open_url(auth_url, reuse_current=False)
-        print('driver.open_url')
-        self._wait_for_url("/log-in", timeout=wait_timeout, stage="注册-打开登录页")
-        print('/log-in 注册-打开登录页')
-        self._run_action("[注册] 点击注册按钮", lambda: driver.click_named_target("register_button"))
-        self._wait_for_url("/create-account", timeout=wait_timeout, stage="注册-创建账户页")
-        print('/create-account 注册-创建账户页')
-        self._run_action("[注册] 输入邮箱地址", lambda: driver.input_text("email_input", identity.email))
-        self._run_action("[注册] 点击继续按钮", lambda: driver.click_named_target("continue_button"))
-        self._wait_for_url("/create-account/password", timeout=wait_timeout, stage="注册-密码页")
-        self._run_action("[注册] 输入密码", lambda: driver.input_text("password_input", identity.password))
-        self._run_action("[注册] 提交密码", lambda: driver.click_named_target("continue_button"))
-        self._wait_for_url("/email-verification", timeout=wait_timeout, stage="注册-验证码页")
-        register_code = self._collect_verification_code(adapter, stage="注册")
-        self._run_action("[注册] 输入邮箱验证码", lambda: driver.input_text("verification_code_input", register_code))
-        self._run_action("[注册] 提交验证码", lambda: driver.click_named_target("continue_button"))
-        self._wait_for_url("/about-you", timeout=wait_timeout, stage="注册-about-you")
-        self._run_action("[注册] 输入全名", lambda: driver.input_text("fullname_input", identity.full_name))
-        self._run_action("[注册] 输入年龄", lambda: driver.input_text("age_input", str(identity.age)))
-        self._run_action("[注册] 完成帐户创建", lambda: driver.click_named_target("complete_account_button"))
-        terminal_state = self._wait_for_terminal_outcome(prefix="注册", timeout=wait_timeout)
-        if terminal_state == "consent":
-            self._run_action("[注册] 命中 consent 页面，点击继续完成 OAuth 登录", lambda: driver.click_named_target("continue_button"))
-            self._wait_for_oauth_success_page("注册", timeout=wait_timeout)
-            return
+        ctx = self._build_flow_context(identity=identity, auth_url=auth_url, email_adapter=adapter)
+        result = self._registration_workflow.run(self, ctx)
+        self._oauth_login_completed = ctx.oauth_login_completed
+        if result.terminal_state:
+            self._log(f"[注册] 终态: {result.terminal_state}")
 
     def _run_login_flow(self, auth_url: str, identity: CodexGUIIdentity, adapter: EmailServiceAdapter) -> None:
-        wait_timeout = self._wait_timeout("codex_gui_wait_timeout_seconds", 60)
-        driver = self._driver
-        if driver is None:
-            raise RuntimeError("Codex GUI 驱动未初始化")
-        self._log_step("登录", "在当前 Edge 窗口中重新打开 OAuth 授权链接")
-        driver.open_url(auth_url, reuse_current=True)
-        self._wait_for_url("/log-in", timeout=wait_timeout, stage="登录-打开登录页")
-        self._run_action("[登录] 输入邮箱地址", lambda: driver.input_text("email_input", identity.email))
-        self._run_action("[登录] 点击继续按钮", lambda: driver.click_named_target("continue_button"))
-        self._wait_for_url("/log-in/password", timeout=wait_timeout, stage="登录-密码页")
-        self._run_action("[登录] 切换到一次性验证码登录", lambda: driver.click_named_target("otp_login_button"))
-        self._wait_for_url("/email-verification", timeout=wait_timeout, stage="登录-验证码页")
-        login_code = self._collect_verification_code(adapter, stage="登录")
-        self._run_action("[登录] 输入邮箱验证码", lambda: driver.input_text("verification_code_input", login_code))
-        if self._complete_oauth_if_on_consent("登录-输入验证码后"):
-            return
-        self._run_action("[登录] 提交验证码", lambda: driver.click_named_target("continue_button"))
-        if self._complete_oauth_if_on_consent("登录-提交验证码后"):
-            return
-        terminal_state = self._wait_for_terminal_outcome(prefix="登录", timeout=wait_timeout)
-        if terminal_state == "consent":
-            self._run_action("[登录] 命中 consent 页面，点击继续完成 OAuth 登录", lambda: driver.click_named_target("continue_button"))
-            self._wait_for_oauth_success_page("登录", timeout=wait_timeout)
-            return
-        if terminal_state == "add-phone":
-            raise RuntimeError("登录流程进入 add-phone 页面，未进入 Codex consent 页面")
+        ctx = self._build_flow_context(identity=identity, auth_url=auth_url, email_adapter=adapter)
+        result = self._login_workflow.run(self, ctx)
+        self._oauth_login_completed = ctx.oauth_login_completed
+        if result.terminal_state:
+            self._log(f"[登录] 终态: {result.terminal_state}")
 
     def run(self) -> RegistrationResult:
-        result = RegistrationResult(success=False, logs=self.logs, source="codex_gui")
+        result = self._initialize_run_result()
         try:
             self._log_step("准备", "初始化 Codex GUI 注册/登录流程")
             identity = self._create_identity()
@@ -476,11 +468,7 @@ class CodexGUIRegistrationEngine:
             self._log_step("准备", "初始化邮箱验证码适配器")
             adapter = EmailServiceAdapter(self.email_service, identity.email, self._log)
 
-            self._log("=" * 60)
-            self._log("开始 Codex GUI 注册/登录流程")
-            self._log(f"邮箱: {identity.email}")
-            self._log(f"全名: {identity.full_name}, 年龄: {identity.age}")
-            self._log("=" * 60)
+            self._log_identity_summary(identity)
 
             self._oauth_login_completed = False
             self._run_registration_flow(auth_url, identity, adapter)
@@ -495,20 +483,7 @@ class CodexGUIRegistrationEngine:
                 else:
                     raise RuntimeError("登录流程结束后未完成 OAuth 登录")
 
-            result.success = True
-            result.email = identity.email
-            result.password = identity.password
-            result.account_id = identity.service_id or identity.email
-            result.metadata = {
-                "codex_gui_register_completed": True,
-                "codex_gui_login_completed": True,
-                "codex_gui_oauth_login_completed": True,
-                "codex_gui_auth_state": state,
-                "codex_gui_auth_url": auth_url,
-                "codex_gui_full_name": identity.full_name,
-                "codex_gui_age": identity.age,
-            }
-            return result
+            return self._finalize_success_result(result, identity=identity, auth_state=state, auth_url=auth_url)
         except TaskInterruption:
             raise
         except Exception as exc:

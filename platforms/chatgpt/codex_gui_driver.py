@@ -120,6 +120,10 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return
         waits = self._target_detector.waits_config()
+        legacy_compat_overrides = {
+            "stage_probe_interval_seconds_min": 0.1,
+            "pre_click_delay_seconds_min": 0.02,
+        }
         for key in (
             "stage_probe_interval_seconds_min",
             "stage_probe_interval_seconds_max",
@@ -136,7 +140,14 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             "pywinauto_input_confirmation_retry_count",
         ):
             if key in waits:
-                self.extra_config[f"codex_gui_{key}"] = waits[key]
+                value = waits[key]
+                if key in legacy_compat_overrides:
+                    override_value = legacy_compat_overrides[key]
+                    try:
+                        value = min(float(value), float(override_value))
+                    except (TypeError, ValueError):
+                        value = override_value
+                self.extra_config[f"codex_gui_{key}"] = value
         self._gui_controller.extra_config = dict(self.extra_config)
         self._gui_controller.extra_config = dict(self.extra_config)
 
@@ -345,10 +356,11 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return result
 
     def _ensure_browser_session(self):
-        self._sync_components_from_facade()
-        page = self._browser_session.ensure_browser_session()
-        self._sync_facade_from_components()
-        return page
+        attach_mode = str(self.extra_config.get("codex_gui_browser_attach_mode") or "cdp").strip().lower()
+        self._log_debug(f"[浏览器] 开始: 初始化 Edge 浏览器会话 attach_mode={attach_mode}")
+        if attach_mode == "launch":
+            return self._ensure_playwright_launch_session()
+        return self._ensure_edge_cdp_session()
 
     def _get_free_port(self) -> int:
         self._sync_components_from_facade()
