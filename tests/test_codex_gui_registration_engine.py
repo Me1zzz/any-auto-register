@@ -992,6 +992,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertTrue(blank_config.enabled)
         self.assertGreater(blank_config.click_count_min, 0)
         self.assertIn("stage_probe_interval_seconds_min", waits)
+        self.assertEqual(waits.get("pywinauto_input_confirmation_retry_count"), 10)
 
     def test_driver_loads_unified_waits_into_controller_config(self):
         driver = PyAutoGUICodexGUIDriver(
@@ -999,9 +1000,11 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             logger_fn=lambda _msg: None,
         )
 
-        self.assertEqual(driver.extra_config.get("codex_gui_pre_click_delay_seconds_min"), 0)
-        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_pre_click_delay_seconds_min"), 0)
-        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_stage_probe_interval_seconds_min"), 0.05)
+        self.assertEqual(driver.extra_config.get("codex_gui_pre_click_delay_seconds_min"), 0.02)
+        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_pre_click_delay_seconds_min"), 0.02)
+        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_stage_probe_interval_seconds_min"), 0.1)
+        self.assertEqual(driver.extra_config.get("codex_gui_pywinauto_input_confirmation_retry_count"), 10)
+        self.assertEqual(driver._gui_controller.extra_config.get("codex_gui_pywinauto_input_confirmation_retry_count"), 10)
 
     def test_input_text_switches_to_english_input_before_typing(self):
         logs = []
@@ -1132,6 +1135,66 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         detector.text_candidates_in_region.assert_called_once()
 
+    def test_verify_pywinauto_password_rejects_empty_text(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=logs.append,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "输入确认失败"):
+            driver._verify_pywinauto_input("password_input", "   ")
+
+    def test_verify_pywinauto_password_rejects_unmasked_focused_superstring(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_pywinauto_input_verify_timeout_seconds": 0.1,
+            },
+            logger_fn=logs.append,
+        )
+        detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
+        detector.focused_edit_candidate.return_value = mock.Mock(
+            text="prefix-super-secret-password-suffix",
+            box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+        )
+        detector.boxes_intersect.return_value = True
+        detector.text_candidates_in_region.return_value = []
+        driver._target_detector = detector
+        driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
+
+        with self.assertRaisesRegex(RuntimeError, "输入确认失败"), mock.patch(
+            "platforms.chatgpt.codex_gui_driver.time.sleep"
+        ):
+            driver._verify_pywinauto_input("password_input", "super-secret-password")
+
+    def test_verify_pywinauto_password_rejects_unmasked_region_superstring(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_pywinauto_input_verify_timeout_seconds": 0.1,
+            },
+            logger_fn=logs.append,
+        )
+        detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
+        detector.focused_edit_candidate.return_value = mock.Mock(
+            text="",
+            box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+        )
+        detector.boxes_intersect.return_value = True
+        detector.text_candidates_in_region.return_value = [
+            mock.Mock(text="prefix-super-secret-password-suffix", box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
+        ]
+        driver._target_detector = detector
+        driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
+
+        with self.assertRaisesRegex(RuntimeError, "输入确认失败"), mock.patch(
+            "platforms.chatgpt.codex_gui_driver.time.sleep"
+        ):
+            driver._verify_pywinauto_input("password_input", "super-secret-password")
+
     def test_verify_pywinauto_input_raises_when_no_match_found(self):
         logs = []
         driver = PyAutoGUICodexGUIDriver(
@@ -1175,6 +1238,55 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         self.assertEqual(driver.click_named_target.call_count, 2)
         self.assertEqual(driver._verify_pywinauto_input.call_count, 2)
+
+    def test_input_text_uses_configured_confirmation_retry_count_from_json_backed_config(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=logs.append,
+        )
+        fake_gui = _FakePyAutoGUI()
+        driver.click_named_target = mock.Mock()
+        driver._focus_and_clear_input = mock.Mock()
+        driver._switch_to_english_input = mock.Mock()
+        verification_outcomes = [RuntimeError(f"fail-{index}") for index in range(10)] + [None]
+        driver._verify_pywinauto_input = mock.Mock(side_effect=verification_outcomes)
+
+        with mock.patch.object(driver, "_import_pyautogui", return_value=fake_gui), mock.patch(
+            "platforms.chatgpt.gui_controller.random.uniform",
+            return_value=0.05,
+        ), mock.patch("platforms.chatgpt.gui_controller.time.sleep"):
+            driver.input_text("verification_code_input", "832833")
+
+        self.assertEqual(driver.click_named_target.call_count, 11)
+        self.assertEqual(driver._focus_and_clear_input.call_count, 11)
+        self.assertEqual(driver._switch_to_english_input.call_count, 11)
+        self.assertEqual(driver._verify_pywinauto_input.call_count, 11)
+
+    def test_input_text_preserves_legacy_total_attempt_semantics_without_new_retry_key(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_pywinauto_input_retry_count": 3,
+                "codex_gui_pywinauto_input_confirmation_retry_count": None,
+            },
+            logger_fn=logs.append,
+        )
+        fake_gui = _FakePyAutoGUI()
+        driver.click_named_target = mock.Mock()
+        driver._focus_and_clear_input = mock.Mock()
+        driver._switch_to_english_input = mock.Mock()
+        driver._verify_pywinauto_input = mock.Mock(side_effect=[RuntimeError("fail-1"), RuntimeError("fail-2"), None])
+
+        with mock.patch.object(driver, "_import_pyautogui", return_value=fake_gui), mock.patch(
+            "platforms.chatgpt.gui_controller.random.uniform",
+            return_value=0.05,
+        ), mock.patch("platforms.chatgpt.gui_controller.time.sleep"):
+            driver.input_text("email_input", "user@example.com")
+
+        self.assertEqual(driver.click_named_target.call_count, 3)
+        self.assertEqual(driver._verify_pywinauto_input.call_count, 3)
 
     def test_gui_controller_fast_navigation_types_full_url_without_per_char_delay(self):
         logs = []

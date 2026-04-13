@@ -26,22 +26,23 @@
       },
       "click_count_min": 1,
       "click_count_max": 1,
-      "interval_seconds_min": 0.01,
-      "interval_seconds_max": 0.05
+      "interval_seconds_min": 0.05,
+      "interval_seconds_max": 0.1
     }
   },
   "waits": {
-    "stage_probe_interval_seconds_min": 0.05,
-    "stage_probe_interval_seconds_max": 0.1,
-    "post_action_pause_seconds_min": 0.02,
-    "post_action_pause_seconds_max": 0.04,
-    "pre_click_delay_seconds_min": 0.01,
-    "pre_click_delay_seconds_max": 0.02,
-    "post_click_delay_seconds_min": 0.01,
-    "post_click_delay_seconds_max": 0.02,
-    "typing_paste_settle_seconds_min": 0.01,
-    "typing_paste_settle_seconds_max": 0.03,
-    "ime_switch_wait_seconds_min": 0.01,
-    "ime_switch_wait_seconds_max": 0.03
+    "stage_probe_interval_seconds_min": 0.15,
+    "stage_probe_interval_seconds_max": 0.25,
+    "post_action_pause_seconds_min": 0.05,
+    "post_action_pause_seconds_max": 0.1,
+    "pre_click_delay_seconds_min": 0.05,
+    "pre_click_delay_seconds_max": 0.1,
+    "post_click_delay_seconds_min": 0.05,
+    "post_click_delay_seconds_max": 0.1,
+    "typing_paste_settle_seconds_min": 0.05,
+    "typing_paste_settle_seconds_max": 0.1,
+    "ime_switch_wait_seconds_min": 0.05,
+    "ime_switch_wait_seconds_max": 0.1,
+    "pywinauto_input_confirmation_retry_count": 10
   }
 }

@@ -133,11 +133,27 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             "typing_paste_settle_seconds_max",
             "ime_switch_wait_seconds_min",
             "ime_switch_wait_seconds_max",
+            "pywinauto_input_confirmation_retry_count",
         ):
             if key in waits:
                 self.extra_config[f"codex_gui_{key}"] = waits[key]
         self._gui_controller.extra_config = dict(self.extra_config)
         self._gui_controller.extra_config = dict(self.extra_config)
+
+    def _pywinauto_input_attempts(self) -> int:
+        confirmation_retry_count = self.extra_config.get("codex_gui_pywinauto_input_confirmation_retry_count")
+        if confirmation_retry_count is not None:
+            try:
+                parsed_retries = max(0, int(confirmation_retry_count or 0))
+            except (TypeError, ValueError):
+                parsed_retries = 0
+            return parsed_retries + 1
+
+        try:
+            legacy_attempts = int(self.extra_config.get("codex_gui_pywinauto_input_retry_count", 2) or 2)
+        except (TypeError, ValueError):
+            legacy_attempts = 2
+        return max(legacy_attempts, 1)
 
     def _build_target_detector(self):
         detector_kind = str(self.extra_config.get("codex_gui_target_detector") or "playwright").strip().lower()
@@ -289,6 +305,8 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         target_text = str(text or "").strip()
         normalized_target = self._normalize_visible_text(target_text)
         if not normalized_target:
+            if self._is_password_target(name):
+                raise RuntimeError(f"[UIA] 输入确认失败: name={name}, text={target_text}")
             return
         _strategy_kind, _strategy_value, box = self.peek_target(name)
         expanded_box = self._expand_box(box)
@@ -297,17 +315,21 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             focused = self._target_detector.focused_edit_candidate()
             if focused and expanded_box and self._target_detector.boxes_intersect(focused.box, expanded_box):
                 focused_text = self._normalize_visible_text(focused.text)
-                if normalized_target in focused_text or (
-                    self._is_password_target(name) and self._contains_password_mask(focused.text)
-                ):
+                focused_matches = (
+                    focused_text == normalized_target if self._is_password_target(name) else normalized_target in focused_text
+                )
+                if focused_matches or (self._is_password_target(name) and self._contains_password_mask(focused.text)):
                     self._log_debug(f"[UIA] 输入确认成功(焦点值): name={name}, text={target_text}, box={focused.box}")
                     return
             if expanded_box:
                 for candidate in self._target_detector.text_candidates_in_region(expanded_box):
                     candidate_text = self._normalize_visible_text(candidate.text)
-                    if normalized_target in candidate_text or (
-                        self._is_password_target(name) and self._contains_password_mask(candidate.text)
-                    ):
+                    candidate_matches = (
+                        candidate_text == normalized_target
+                        if self._is_password_target(name)
+                        else normalized_target in candidate_text
+                    )
+                    if candidate_matches or (self._is_password_target(name) and self._contains_password_mask(candidate.text)):
                         self._log_debug(f"[UIA] 输入确认成功(区域交集): name={name}, text={target_text}, box={candidate.box}")
                         return
             time.sleep(0.25)
@@ -588,7 +610,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         pyautogui = self._import_pyautogui()
         target_text = str(text or "")
         self._log_debug(f"[操作] 开始输入: name={name}, text={target_text}")
-        attempts = self._pywinauto_input_retry_count if self._detector_kind() == "pywinauto" else 1
+        attempts = self._pywinauto_input_attempts() if self._detector_kind() == "pywinauto" else 1
         last_error: Exception | None = None
         for attempt in range(1, max(attempts, 1) + 1):
             started_at = time.perf_counter()
