@@ -18,39 +18,54 @@ from .target_detector import (
 
 
 class CodexGUIDriver:
+    """Codex GUI 驱动抽象接口。"""
+
     def open_url(self, url: str, *, reuse_current: bool = False) -> None:
+        """打开指定 URL。"""
         raise NotImplementedError
 
     def click_named_target(self, name: str) -> None:
+        """点击一个命名 GUI 目标。"""
         raise NotImplementedError
 
     def input_text(self, name: str, text: str) -> None:
+        """向命名输入目标写入文本。"""
         raise NotImplementedError
 
     def read_current_url(self) -> str:
+        """读取当前页面 URL。"""
         raise NotImplementedError
 
     def press_keys(self, *keys: str) -> None:
+        """发送按键序列。"""
         raise NotImplementedError
 
     def peek_target(self, name: str) -> tuple[str, str, dict[str, float] | None]:
+        """轻量探测一个命名目标。"""
         raise NotImplementedError
 
     def peek_target_with_timeout(self, name: str, timeout_ms: int) -> tuple[str, str, dict[str, float] | None]:
+        """带超时的轻量目标探测。"""
         raise NotImplementedError
 
     def page_marker_matched(self, stage: str) -> tuple[bool, str | None]:
+        """检查当前页面是否命中某个阶段 marker。"""
         raise NotImplementedError
 
     def wander_while_waiting(self, stage: str) -> None:
+        """在等待期间执行轻量游走动作。"""
         raise NotImplementedError
 
     def close(self) -> None:
+        """关闭底层浏览器与相关资源。"""
         raise NotImplementedError
 
 
 class PyAutoGUICodexGUIDriver(CodexGUIDriver):
+    """基于 Playwright + pyautogui + detector 的 GUI driver 实现。"""
+
     def __init__(self, *, extra_config: dict[str, Any], logger_fn: Callable[[str], None]):
+        """初始化浏览器会话、检测器、几何辅助器和 GUI 控制器。"""
         self.extra_config = dict(extra_config or {})
         self.logger_fn = logger_fn
         self._type_interval = float(self.extra_config.get("codex_gui_type_interval", 0.02) or 0.02)
@@ -89,6 +104,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         self._load_codex_gui_config()
 
     def _resolve_edge_command(self) -> str:
+        """解析本机 Edge 可执行文件路径。"""
         configured = str(
             self.extra_config.get("codex_gui_edge_command")
             or self.extra_config.get("codex_gui_browser_command")
@@ -114,9 +130,11 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return "msedge"
 
     def _log_debug(self, message: str) -> None:
+        """输出 driver 级调试日志。"""
         self.logger_fn(message)
 
     def _load_codex_gui_config(self) -> None:
+        """在 pywinauto 模式下把 waits 配置同步回 driver extra_config。"""
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return
         waits = self._target_detector.waits_config()
@@ -152,6 +170,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         self._gui_controller.extra_config = dict(self.extra_config)
 
     def _pywinauto_input_attempts(self) -> int:
+        """计算 pywinauto 输入确认的总尝试次数。"""
         confirmation_retry_count = self.extra_config.get("codex_gui_pywinauto_input_confirmation_retry_count")
         if confirmation_retry_count is not None:
             try:
@@ -167,6 +186,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return max(legacy_attempts, 1)
 
     def _build_target_detector(self):
+        """按配置选择 Playwright 或 pywinauto 目标检测器。"""
         detector_kind = str(self.extra_config.get("codex_gui_target_detector") or "playwright").strip().lower()
         detector_cls = PlaywrightCodexGUITargetDetector
         if detector_kind == "pywinauto":
@@ -179,6 +199,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         )
 
     def _sync_components_from_facade(self) -> None:
+        """把 facade 上维护的运行时状态同步到各组件。"""
         self._browser_session._import_playwright = self._import_playwright
         self._browser_session._resolve_edge_command = self._resolve_edge_command
         self._browser_session._pw = self._pw
@@ -192,6 +213,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         self._gui_controller._pyautogui_getter = self._import_pyautogui
 
     def _sync_facade_from_components(self) -> None:
+        """把组件内部最新状态回写到 facade。"""
         self._pw = self._browser_session._pw
         self._browser = self._browser_session._browser
         self._context = self._browser_session._context
@@ -201,12 +223,14 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         self._cdp_port = self._browser_session._cdp_port
 
     def _require_page(self):
+        """确保当前有可用 Playwright page。"""
         self._sync_components_from_facade()
         page = self._browser_session.require_page()
         self._sync_facade_from_components()
         return page
 
     def _import_playwright(self):
+        """懒加载 Playwright 运行时依赖。"""
         try:
             from playwright.sync_api import sync_playwright
         except ModuleNotFoundError as exc:
@@ -216,6 +240,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return sync_playwright
 
     def _import_pyautogui(self):
+        """懒加载 pyautogui，并设置 pause 参数。"""
         try:
             import pyautogui  # type: ignore
         except ModuleNotFoundError as exc:
@@ -226,10 +251,12 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return pyautogui
 
     def _detector_kind(self) -> str:
+        """返回当前 detector 后端名称。"""
         return str(self.extra_config.get("codex_gui_target_detector") or "playwright").strip().lower()
 
     @staticmethod
     def _is_input_target(name: str) -> bool:
+        """判断目标名是否属于输入类控件。"""
         normalized = str(name or "").strip().lower()
         return normalized in {
             "email_input",
@@ -241,19 +268,23 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
 
     @staticmethod
     def _normalize_visible_text(text: str) -> str:
+        """将可见文本规整为便于比较的形式。"""
         return "".join(str(text or "").strip().lower().split())
 
     @staticmethod
     def _is_password_target(name: str) -> bool:
+        """判断目标是否为密码输入框。"""
         return str(name or "").strip().lower() == "password_input"
 
     @staticmethod
     def _contains_password_mask(text: str) -> bool:
+        """判断文本是否表现为密码掩码。"""
         value = str(text or "")
         return "••••" in value or "****" in value
 
     @staticmethod
     def _expand_box(box: dict[str, float] | None, *, x_scale: float = 1.35, y_scale: float = 1.9) -> dict[str, float] | None:
+        """放大一个矩形区域，提升 UIA 输入确认的鲁棒性。"""
         if not box:
             return None
         width = float(box.get("width") or 0)
@@ -271,6 +302,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
 
     @staticmethod
     def _random_inner80_screen_point(box: dict[str, float] | None) -> tuple[int, int]:
+        """在目标框的内侧 80% 区域中随机选择点击点。"""
         if not box:
             raise RuntimeError("无法获取 UIA 屏幕位置")
         x = float(box.get("x") or 0)
@@ -284,11 +316,13 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return int(round(inner_x)), int(round(inner_y))
 
     def _click_pywinauto_box(self, name: str, box: dict[str, float] | None) -> None:
+        """在 pywinauto 模式下按目标 box 执行随机点击。"""
         screen_x, screen_y = self._random_inner80_screen_point(box)
         self._log_debug(f"[UIA] 随机点击点: name={name}, box={box}, point=({screen_x}, {screen_y})")
         self._click_screen_point(name, screen_x, screen_y)
 
     def _pre_click_blank_area_for_input_detection(self, name: str) -> None:
+        """在识别输入框前先点击空白区域，降低焦点干扰。"""
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return
         if not self._is_input_target(name):
@@ -303,6 +337,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         )
         pyautogui = self._import_pyautogui()
         for index in range(click_count):
+            # 多次空白点击用于让浏览器或系统焦点回到稳定状态。
             blank_x, blank_y = self._random_inner80_screen_point(config.box)
             self._click_screen_point(f"blank_area:{name}:{index + 1}", blank_x, blank_y)
             if index < click_count - 1:
@@ -311,6 +346,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         self._log_debug(f"[耗时] 输入框识别前空白区域点击完成: name={name}, elapsed={elapsed_ms:.1f}ms")
 
     def _verify_pywinauto_input(self, name: str, text: str) -> None:
+        """在 pywinauto 模式下确认输入内容已真实进入页面。"""
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return
         target_text = str(text or "").strip()
@@ -323,6 +359,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         expanded_box = self._expand_box(box)
         deadline = time.monotonic() + max(self._pywinauto_input_verify_timeout_seconds, 0.5)
         while time.monotonic() <= deadline:
+            # 先看焦点输入框，再看放大后的邻域文本，避免仅凭一次读取误判输入失败。
             focused = self._target_detector.focused_edit_candidate()
             if focused and expanded_box and self._target_detector.boxes_intersect(focused.box, expanded_box):
                 focused_text = self._normalize_visible_text(focused.text)
@@ -347,6 +384,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         raise RuntimeError(f"[UIA] 输入确认失败: name={name}, text={target_text}")
 
     def page_marker_matched(self, stage: str) -> tuple[bool, str | None]:
+        """委派到底层 detector 执行 marker 匹配，并记录耗时。"""
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return False, None
         started_at = time.perf_counter()
@@ -356,6 +394,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return result
 
     def _ensure_browser_session(self):
+        """按 attach_mode 初始化浏览器会话。"""
         attach_mode = str(self.extra_config.get("codex_gui_browser_attach_mode") or "cdp").strip().lower()
         self._log_debug(f"[浏览器] 开始: 初始化 Edge 浏览器会话 attach_mode={attach_mode}")
         if attach_mode == "launch":

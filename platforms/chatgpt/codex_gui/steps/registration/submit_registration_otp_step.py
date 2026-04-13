@@ -22,14 +22,18 @@ class SubmitRegistrationOtpStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保 driver 可用，验证码收取依赖底层邮箱服务自行检查。"""
         require_driver(engine)
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """拉取注册 OTP 并提交到 about-you 页面。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
+        # OTP 必须先从邮箱服务中取回，再进入“输入+提交+等待页面跳转”的统一模板。
         register_code = collect_otp_code(engine, ctx.email_adapter, stage="注册")
         matched_url = input_and_click_then_wait(
             engine,
@@ -46,8 +50,10 @@ class SubmitRegistrationOtpStep(BaseFlowStep):
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url, payload={"otp": register_code})
 
     def verify(self, engine, ctx, result) -> None:
+        """验证 OTP 已经被成功取回并记录到结果中。"""
         verify_success(result, step_id=self.step_id)
         require_non_empty(str(result.payload.get("otp") or ""), field_name="registration_otp")
 
     def on_error(self, engine, ctx, error: Exception):
+        """OTP 相关失败统一终止当前流程。"""
         return otp_abort(error)

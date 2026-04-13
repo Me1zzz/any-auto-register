@@ -22,22 +22,28 @@ class CompleteRegistrationStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保提交创建账户前 driver 可用。"""
         require_driver(engine)
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """点击完成创建并等待注册终态。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
+        # 完成账户创建后，下一步的关键不是 URL，而是终态（consent / add-phone）。
         run_named_action(engine, "[注册] 完成帐户创建", lambda: driver.click_named_target("complete_account_button"))
         terminal_state = wait_for_terminal(engine, prefix="注册", timeout=wait_timeout)
         ctx.terminal_state = terminal_state
         return FlowStepResult(success=True, stage_name=self.stage_name, terminal_state=terminal_state)
 
     def verify(self, engine, ctx, result) -> None:
+        """验证终态属于注册链路允许的状态集合。"""
         verify_success(result, step_id=self.step_id)
         verify_terminal_state(ctx, {"consent", "add-phone"}, step_id=self.step_id)
 
     def on_error(self, engine, ctx, error: Exception):
+        """终态解析失败时优先重放最后动作。"""
         return retry_last_action_or_abort(error=error, attempt=ctx.step_attempts.get(self.step_id, 1), max_attempts=self.max_attempts)

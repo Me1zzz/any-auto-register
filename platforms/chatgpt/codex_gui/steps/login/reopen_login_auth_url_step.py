@@ -23,13 +23,16 @@ class ReopenLoginAuthUrlStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保重新打开授权页前 driver 与 auth_url 已准备好。"""
         require_driver(engine)
         require_non_empty(ctx.auth_url, field_name="auth_url")
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """在现有窗口中重新打开授权页，进入登录补偿流程。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
         engine._log_step("登录", "在当前 Edge 窗口中重新打开 OAuth 授权链接")
@@ -38,7 +41,9 @@ class ReopenLoginAuthUrlStep(BaseFlowStep):
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url)
 
     def verify(self, engine, ctx, result) -> None:
+        """验证登录入口页已打开。"""
         verify_success(result, step_id=self.step_id)
 
     def on_error(self, engine, ctx, error: Exception):
+        """重新打开授权页失败时按整步重试。"""
         return retry_step_or_abort(error=error, attempt=ctx.step_attempts.get(self.step_id, 1), max_attempts=self.max_attempts)

@@ -21,23 +21,29 @@ class SubmitLoginOtpStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保 driver 可用，OTP 前置条件由邮箱服务自身保证。"""
         require_driver(engine)
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """拉取登录 OTP、输入验证码，并尝试直接命中 consent。"""
         driver = require_driver(engine)
         login_code = collect_otp_code(engine, ctx.email_adapter, stage="登录")
         run_named_action(engine, "[登录] 输入邮箱验证码", lambda: driver.input_text("verification_code_input", login_code))
+        # 某些情况下输入验证码后会直接进入 consent，因此这里先做一次短路判断。
         if engine._complete_oauth_if_on_consent(self.stage_name):
             ctx.oauth_login_completed = True
             ctx.terminal_state = "consent"
         return FlowStepResult(success=True, stage_name=self.stage_name, terminal_state=ctx.terminal_state, payload={"otp": login_code})
 
     def verify(self, engine, ctx, result) -> None:
+        """验证 OTP 已经成功取得并带回结果。"""
         verify_success(result, step_id=self.step_id)
         require_non_empty(str(result.payload.get("otp") or ""), field_name="login_otp")
 
     def on_error(self, engine, ctx, error: Exception):
+        """登录 OTP 失败统一终止。"""
         return otp_abort(error)

@@ -21,15 +21,19 @@ class CompleteRegistrationConsentStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保 consent 完成步骤拥有可用 driver。"""
         require_driver(engine)
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """若终态是 consent，则点击继续并等待 OAuth 成功页。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
         if ctx.terminal_state != "consent":
+            # 如果注册没有落到 consent，这个步骤是幂等空操作，直接透传当前终态。
             return FlowStepResult(success=True, stage_name=self.stage_name, terminal_state=ctx.terminal_state)
         run_named_action(
             engine,
@@ -41,7 +45,9 @@ class CompleteRegistrationConsentStep(BaseFlowStep):
         return FlowStepResult(success=True, stage_name=self.stage_name, terminal_state="consent")
 
     def verify(self, engine, ctx, result) -> None:
+        """验证 consent 完成步骤成功。"""
         verify_success(result, step_id=self.step_id)
 
     def on_error(self, engine, ctx, error: Exception):
+        """consent 完成失败直接终止。"""
         return abort_flow(error)

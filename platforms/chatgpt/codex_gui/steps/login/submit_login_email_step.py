@@ -23,13 +23,16 @@ class SubmitLoginEmailStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保登录邮箱存在。"""
         require_driver(engine)
         require_non_empty(ctx.identity.email, field_name="identity.email")
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """输入登录邮箱并跳转到密码页。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
         matched_url = input_and_click_then_wait(
@@ -47,7 +50,9 @@ class SubmitLoginEmailStep(BaseFlowStep):
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url)
 
     def verify(self, engine, ctx, result) -> None:
+        """验证邮箱提交步骤成功。"""
         verify_success(result, step_id=self.step_id)
 
     def on_error(self, engine, ctx, error: Exception):
+        """登录邮箱输入失败时按整步重试。"""
         return retry_step_or_abort(error=error, attempt=ctx.step_attempts.get(self.step_id, 1), max_attempts=self.max_attempts)

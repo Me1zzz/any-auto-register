@@ -21,3 +21,5 @@ __all__ = [
     "PywinautoCodexGUITargetDetector",
     "PywinautoTextCandidate",
 ]
+
+# 该模块仅保留兼容导出职责，真正实现已经迁入 platforms.chatgpt.codex_gui.detectors.*。

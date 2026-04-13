@@ -8,6 +8,8 @@ from .models import CodexGUIIdentity
 
 @dataclass(slots=True)
 class CodexGUIFlowContext:
+    """承载 GUI 注册/登录流程在运行期共享的上下文数据。"""
+
     identity: CodexGUIIdentity
     auth_url: str
     auth_state: str

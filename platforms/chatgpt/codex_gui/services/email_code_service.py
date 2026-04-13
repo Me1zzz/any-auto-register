@@ -8,6 +8,7 @@ class EmailCodeServiceAdapter:
     """Shared email OTP adapter for GUI register/login workflows."""
 
     def __init__(self, email_service, email: str, log_fn: Callable[[str], None]):
+        """保存邮箱服务、目标邮箱和 OTP 去重所需的状态。"""
         self.email_service = email_service
         self.email = email
         self.log_fn = log_fn
@@ -22,9 +23,11 @@ class EmailCodeServiceAdapter:
 
     @property
     def last_code(self) -> str:
+        """返回最近一次成功验证码，若没有则返回最近收到的验证码。"""
         return self._last_success_code or self._last_code
 
     def _remember_code(self, code: str, *, successful: bool = False) -> None:
+        """记录验证码及对应消息 ID，供后续去重和复用。"""
         code = str(code or "").strip()
         if not code:
             return
@@ -43,14 +46,17 @@ class EmailCodeServiceAdapter:
 
     @property
     def uses_cloudmail_message_dedupe(self) -> bool:
+        """是否启用按消息 ID 去重，而不是按验证码文本去重。"""
         return bool(getattr(self.email_service, "_cloudmail_message_dedupe", False))
 
     def build_exclude_codes(self) -> set[str]:
+        """构建本次拉码时需要排除的验证码或消息 ID 集合。"""
         if self.uses_cloudmail_message_dedupe:
             return set(self._used_message_ids)
         return set(self._used_codes)
 
     def remember_successful_code(self, code: str) -> None:
+        """显式标记某个验证码已经被验证为成功。"""
         self._remember_code(code, successful=True)
 
     def get_recent_code(
@@ -59,6 +65,7 @@ class EmailCodeServiceAdapter:
         *,
         prefer_successful: bool = True,
     ) -> str:
+        """获取最近一段时间内可复用的验证码。"""
         now = time.time()
         if (
             prefer_successful
@@ -77,6 +84,7 @@ class EmailCodeServiceAdapter:
         otp_sent_at: float | None = None,
         exclude_codes=None,
     ):
+        """调用底层邮箱服务阻塞等待验证码。"""
         excluded = set(exclude_codes or set())
         self.log_fn(f"正在等待邮箱 {email} 的验证码 ({timeout}s)...")
         code = self.email_service.get_verification_code(

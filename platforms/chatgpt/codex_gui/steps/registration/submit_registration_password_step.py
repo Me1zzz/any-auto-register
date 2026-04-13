@@ -23,13 +23,16 @@ class SubmitRegistrationPasswordStep(BaseFlowStep):
     )
 
     def precheck(self, engine, ctx) -> None:
+        """确保密码字段存在。"""
         require_driver(engine)
         require_non_empty(ctx.identity.password, field_name="identity.password")
 
     def prepare(self, engine, ctx) -> None:
+        """写入当前阶段。"""
         set_current_stage(ctx, self.stage_name)
 
     def execute(self, engine, ctx):
+        """输入密码并进入验证码页。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
         matched_url = input_and_click_then_wait(
@@ -47,7 +50,9 @@ class SubmitRegistrationPasswordStep(BaseFlowStep):
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url)
 
     def verify(self, engine, ctx, result) -> None:
+        """验证密码提交流程成功。"""
         verify_success(result, step_id=self.step_id)
 
     def on_error(self, engine, ctx, error: Exception):
+        """密码提交失败时优先重放最后动作。"""
         return retry_last_action_or_abort(error=error, attempt=ctx.step_attempts.get(self.step_id, 1), max_attempts=self.max_attempts)
