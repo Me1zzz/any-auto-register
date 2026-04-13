@@ -19,7 +19,7 @@
     "default": {
       "enabled": true,
       "bbox": {
-        "x": 500,
+        "x": 200,
         "y": 500,
         "width": 400,
         "height": 300
@@ -33,11 +33,11 @@
   "waits": {
     "stage_probe_interval_seconds_min": 0.05,
     "stage_probe_interval_seconds_max": 0.1,
-    "post_action_pause_seconds_min": 0,
+    "post_action_pause_seconds_min": 0.02,
     "post_action_pause_seconds_max": 0.04,
-    "pre_click_delay_seconds_min": 0,
+    "pre_click_delay_seconds_min": 0.01,
     "pre_click_delay_seconds_max": 0.02,
-    "post_click_delay_seconds_min": 0,
+    "post_click_delay_seconds_min": 0.01,
     "post_click_delay_seconds_max": 0.02,
     "typing_paste_settle_seconds_min": 0.01,
     "typing_paste_settle_seconds_max": 0.03,

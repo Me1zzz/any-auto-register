@@ -12,6 +12,7 @@ CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN = "refresh_token"
 CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY = "access_token_only"
 CHATGPT_REGISTRATION_MODE_CODEX_GUI = "codex_gui"
 DEFAULT_CHATGPT_REGISTRATION_MODE = CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
+GUI_CONTROL_EXECUTOR = "gui_control"
 
 
 def normalize_chatgpt_registration_mode(value) -> str:
@@ -57,6 +58,8 @@ def resolve_chatgpt_registration_mode(extra: Optional[dict]) -> str:
             if bool(extra.get("chatgpt_has_refresh_token_solution"))
             else CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
         )
+    if str(extra.get("default_executor") or "").strip().lower() == GUI_CONTROL_EXECUTOR:
+        return CHATGPT_REGISTRATION_MODE_CODEX_GUI
     return DEFAULT_CHATGPT_REGISTRATION_MODE
 
 

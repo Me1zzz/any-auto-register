@@ -355,12 +355,18 @@ class CodexGUIRegistrationEngine:
                 wait_seconds = random.uniform(resend_wait_min, resend_wait_max)
                 self._log(f"[{stage}] 第 {attempt}/{resend_attempts} 次等待验证码，等待 {wait_seconds:.1f}s")
                 exclude_codes = adapter.build_exclude_codes()
-                code = adapter.wait_for_verification_code(
-                    adapter.email,
-                    timeout=max(1, int(round(wait_seconds))),
-                    otp_sent_at=time.time(),
-                    exclude_codes=exclude_codes,
-                )
+                try:
+                    code = adapter.wait_for_verification_code(
+                        adapter.email,
+                        timeout=max(1, int(round(wait_seconds))),
+                        otp_sent_at=time.time(),
+                        exclude_codes=exclude_codes,
+                    )
+                except TimeoutError as exc:
+                    self._log(
+                        f"[{stage}] 本次等待验证码超时: {exc}；按未收到验证码处理，准备进入重发分支"
+                    )
+                    code = None
                 if code:
                     return str(code or "").strip()
                 if attempt >= resend_attempts:

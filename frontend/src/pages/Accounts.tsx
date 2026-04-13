@@ -37,9 +37,11 @@ import { parseBooleanConfigValue } from '@/lib/configValueParsers'
 import { buildChatGPTRegistrationRequestAdapter } from '@/lib/chatgptRegistrationRequestAdapter'
 import { apiFetch } from '@/lib/utils'
 import {
+  GUI_CONTROL_EXECUTOR,
   normalizeExecutorForPlatform,
   resolveChatGPTExecutorType,
 } from '@/lib/platformExecutorOptions'
+import { CHATGPT_REGISTRATION_MODE_CODEX_GUI } from '@/lib/chatgptRegistrationMode'
 
 const { Text } = Typography
 
@@ -747,10 +749,15 @@ export default function Accounts() {
     setRegisterLoading(true)
     try {
       const cfg = await apiFetch('/config')
+      const normalizedExecutor = normalizeExecutorForPlatform(currentPlatform, cfg.default_executor)
+      const effectiveMode =
+        currentPlatform === 'chatgpt' && normalizedExecutor === GUI_CONTROL_EXECUTOR
+          ? CHATGPT_REGISTRATION_MODE_CODEX_GUI
+          : chatgptRegistrationMode
       const executorType = resolveChatGPTExecutorType(
         currentPlatform,
-        chatgptRegistrationMode,
-        normalizeExecutorForPlatform(currentPlatform, cfg.default_executor),
+        effectiveMode,
+        normalizedExecutor,
       )
       const registerExtra = {
         mail_provider: cfg.mail_provider || 'luckmail',
@@ -808,14 +815,14 @@ export default function Accounts() {
         luckmail_api_key: cfg.luckmail_api_key,
         luckmail_email_type: cfg.luckmail_email_type,
         luckmail_domain: cfg.luckmail_domain,
-        codex_gui_target_detector: values.codex_gui_target_detector || 'playwright',
-        codex_gui_edge_user_data_dir: values.codex_gui_edge_user_data_dir,
-        codex_gui_edge_profile_directory: values.codex_gui_edge_profile_directory,
+        codex_gui_target_detector: cfg.codex_gui_target_detector || 'playwright',
+        codex_gui_edge_user_data_dir: cfg.codex_gui_edge_user_data_dir,
+        codex_gui_edge_profile_directory: cfg.codex_gui_edge_profile_directory,
       }
       const chatgptRegistrationRequestAdapter =
         buildChatGPTRegistrationRequestAdapter(
           currentPlatform,
-          chatgptRegistrationMode,
+          effectiveMode,
         )
       const adaptedRegisterExtra = chatgptRegistrationRequestAdapter
         ? chatgptRegistrationRequestAdapter.extendExtra(registerExtra)
@@ -1404,7 +1411,6 @@ export default function Accounts() {
             form={registerForm}
             layout="vertical"
             onFinish={handleRegister}
-            initialValues={{ codex_gui_target_detector: 'playwright' }}
           >
             <Form.Item name="count" label="注册数量" initialValue={1} rules={[{ required: true }]}>
               <Input type="number" min={1} />
@@ -1422,41 +1428,6 @@ export default function Accounts() {
                     mode={chatgptRegistrationMode}
                     onChange={setChatgptRegistrationMode}
                   />
-                  {chatgptRegistrationMode === 'codex_gui' ? (
-                    <>
-                      <Alert
-                        type="info"
-                        showIcon
-                        message="GUI 模式会自动使用有头浏览器执行。"
-                      />
-                      <Form.Item
-                        name="codex_gui_target_detector"
-                        label="GUI 检测后端"
-                        extra="默认 Playwright；如窗口识别不稳定可切换 pywinauto。"
-                      >
-                        <Select
-                          options={[
-                            { value: 'playwright', label: 'Playwright（默认）' },
-                            { value: 'pywinauto', label: 'pywinauto' },
-                          ]}
-                        />
-                      </Form.Item>
-                      <Form.Item
-                        name="codex_gui_edge_user_data_dir"
-                        label="Edge 用户数据目录"
-                        extra="可选，常见值如 User Data；留空则使用默认目录。"
-                      >
-                        <Input placeholder="例如：C:\\Users\\用户名\\AppData\\Local\\Microsoft\\Edge\\User Data" />
-                      </Form.Item>
-                      <Form.Item
-                        name="codex_gui_edge_profile_directory"
-                        label="Edge Profile 目录"
-                        extra="可选，常见值如 Default、Profile 1；通常与上面的用户数据目录配合使用。"
-                      >
-                        <Input placeholder="例如：Default" />
-                      </Form.Item>
-                    </>
-                  ) : null}
                 </Space>
               </Form.Item>
             )}

@@ -355,6 +355,63 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
         self.assertEqual(len(resend_clicks), 7)
 
+    def test_collect_verification_code_pywinauto_retries_after_timeout(self):
+        email_service = _DummyEmailService([])
+        driver = _FakeDriver()
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_otp_resend_wait_seconds_min": 5,
+                "codex_gui_otp_resend_wait_seconds_max": 5,
+                "codex_gui_otp_max_resends_min": 2,
+                "codex_gui_otp_max_resends_max": 2,
+            },
+        )
+        engine._driver = driver
+        adapter = mock.Mock(spec=EmailServiceAdapter)
+        adapter.email = "user@example.com"
+        adapter.build_exclude_codes.return_value = set()
+        adapter.wait_for_verification_code.side_effect = [TimeoutError("mail wait timed out"), "123456"]
+
+        code = engine._collect_verification_code(adapter, stage="注册")
+
+        self.assertEqual(code, "123456")
+        self.assertEqual(adapter.wait_for_verification_code.call_count, 2)
+        resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
+        self.assertEqual(len(resend_clicks), 1)
+
+    def test_collect_verification_code_pywinauto_propagates_non_timeout_error(self):
+        email_service = _DummyEmailService([])
+        driver = _FakeDriver()
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_otp_resend_wait_seconds_min": 5,
+                "codex_gui_otp_resend_wait_seconds_max": 5,
+                "codex_gui_otp_max_resends_min": 2,
+                "codex_gui_otp_max_resends_max": 2,
+            },
+        )
+        engine._driver = driver
+        adapter = mock.Mock(spec=EmailServiceAdapter)
+        adapter.email = "user@example.com"
+        adapter.build_exclude_codes.return_value = set()
+        adapter.wait_for_verification_code.side_effect = RuntimeError("mailbox broken")
+
+        with self.assertRaisesRegex(RuntimeError, "mailbox broken"):
+            engine._collect_verification_code(adapter, stage="注册")
+
+        resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
+        self.assertEqual(len(resend_clicks), 0)
+
     def test_run_retries_last_action_when_error_page_detected(self):
         email_service = _DummyEmailService(["111111", "222222"])
         driver = _FakeDriverWithRetry()

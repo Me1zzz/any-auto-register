@@ -18,11 +18,13 @@ sys.modules.setdefault("smstome_tool", smstome_tool_stub)
 
 from platforms.chatgpt.oauth_client import OAuthClient
 from platforms.chatgpt.chatgpt_client import ChatGPTClient
+from platforms.chatgpt.plugin import ChatGPTPlatform
 from platforms.chatgpt.refresh_token_registration_engine import (
     EmailServiceAdapter,
     RefreshTokenRegistrationEngine,
 )
 from platforms.chatgpt.utils import FlowState
+from core.base_platform import RegisterConfig
 
 
 class DummyEmailService:
@@ -341,6 +343,51 @@ class RefreshTokenRegistrationEngineTests(unittest.TestCase):
         register_kwargs = register_client.register_complete_flow.call_args.kwargs
         self.assertEqual(register_kwargs["otp_wait_timeout"], 75)
         self.assertEqual(register_kwargs["max_otp_resend_attempts"], 5)
+
+
+class ChatGPTPlatformTests(unittest.TestCase):
+    def test_gui_default_executor_skips_mailbox_timeout_override_for_codex_mode(self):
+        mailbox = mock.Mock()
+        mailbox.get_email.return_value = type(
+            "MailboxAccount",
+            (),
+            {"account_id": "acct-1", "email": "user@example.com"},
+        )()
+        mailbox.get_current_ids.return_value = []
+        mailbox.wait_for_code.return_value = "123456"
+
+        class FakeAdapter:
+            def run(self, context):
+                context.email_service.create_email()
+                code = context.email_service.get_verification_code(timeout=30)
+                self.observed_code = code
+                return type("Result", (), {"success": True})()
+
+            def build_account(self, result, fallback_password):
+                return mock.sentinel.account
+
+        adapter = FakeAdapter()
+        platform = ChatGPTPlatform(
+            config=RegisterConfig(
+                executor_type="headed",
+                extra={
+                    "default_executor": "gui_control",
+                    "mailbox_otp_timeout_seconds": 999,
+                },
+            ),
+            mailbox=mailbox,
+        )
+
+        with mock.patch(
+            "platforms.chatgpt.plugin.build_chatgpt_registration_mode_adapter",
+            return_value=adapter,
+        ):
+            account = platform.register(email="user@example.com", password="pw-demo")
+
+        self.assertIs(account, mock.sentinel.account)
+        self.assertEqual(adapter.observed_code, "123456")
+        mailbox.wait_for_code.assert_called_once()
+        self.assertEqual(mailbox.wait_for_code.call_args.kwargs["timeout"], 30)
 
 
 class ChatGPTClientRegisterFlowOtpTests(unittest.TestCase):

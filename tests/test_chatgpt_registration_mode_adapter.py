@@ -32,6 +32,12 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
             CHATGPT_REGISTRATION_MODE_CODEX_GUI,
         )
 
+    def test_resolve_uses_gui_default_executor_as_codex_gui_fallback(self):
+        self.assertEqual(
+            resolve_chatgpt_registration_mode({"default_executor": "gui_control"}),
+            CHATGPT_REGISTRATION_MODE_CODEX_GUI,
+        )
+
     def test_build_account_marks_selected_mode(self):
         adapter = build_chatgpt_registration_mode_adapter(
             {"chatgpt_registration_mode": "access_token_only"}

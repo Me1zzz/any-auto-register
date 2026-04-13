@@ -5,8 +5,10 @@ from core.base_mailbox import BaseMailbox
 from core.base_platform import Account, BasePlatform, RegisterConfig
 from core.registry import register
 from platforms.chatgpt.chatgpt_registration_mode_adapter import (
+    CHATGPT_REGISTRATION_MODE_CODEX_GUI,
     ChatGPTRegistrationContext,
     build_chatgpt_registration_mode_adapter,
+    resolve_chatgpt_registration_mode,
 )
 from platforms.chatgpt.utils import generate_random_password
 
@@ -44,6 +46,7 @@ class ChatGPTPlatform(BasePlatform):
         proxy = self.config.proxy if self.config else None
         browser_mode = (self.config.executor_type if self.config else None) or "protocol"
         extra_config = (self.config.extra or {}) if self.config and getattr(self.config, "extra", None) else {}
+        resolved_registration_mode = resolve_chatgpt_registration_mode(extra_config)
         log_fn = getattr(self, "_log_fn", print)
         max_retries = 3
         try:
@@ -117,7 +120,7 @@ class ChatGPTPlatform(BasePlatform):
                     if not self._acct:
                         raise RuntimeError("邮箱账户尚未创建，无法获取验证码")
                     effective_timeout = timeout
-                    if str(extra_config.get("chatgpt_registration_mode") or "").strip().lower() != "codex_gui":
+                    if resolved_registration_mode != CHATGPT_REGISTRATION_MODE_CODEX_GUI:
                         effective_timeout = _resolve_mailbox_timeout(timeout)
                     code = _mailbox.wait_for_code(
                         self._acct,
@@ -170,7 +173,7 @@ class ChatGPTPlatform(BasePlatform):
                     exclude_codes=None,
                 ):
                     effective_timeout = timeout
-                    if str(extra_config.get("chatgpt_registration_mode") or "").strip().lower() != "codex_gui":
+                    if resolved_registration_mode != CHATGPT_REGISTRATION_MODE_CODEX_GUI:
                         effective_timeout = _resolve_mailbox_timeout(timeout)
                     return _tmail.wait_for_code(
                         self._acct,
