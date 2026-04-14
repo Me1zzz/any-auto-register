@@ -56,13 +56,49 @@ def generate_random_password(length=16):
 def generate_random_name():
     """随机生成自然的英文姓名，返回 (first_name, last_name)"""
     first = [
-        "James", "Robert", "John", "Michael", "David", "William", "Richard",
-        "Mary", "Jennifer", "Linda", "Elizabeth", "Susan", "Jessica", "Sarah",
-        "Emily", "Emma", "Olivia", "Sophia", "Liam", "Noah", "Oliver", "Ethan",
+        "James", "Robert", "John", "Michael", "David", "William", "Richard", "Joseph", "Thomas", "Charles",
+        "Mary", "Patricia", "Jennifer", "Linda", "Elizabeth", "Barbara", "Susan", "Jessica", "Sarah", "Karen",
+        "Emily", "Emma", "Olivia", "Sophia", "Liam", "Noah", "Oliver", "Ethan", "Ava", "Isabella",
+        "Mason", "Logan", "Lucas", "Elijah", "Aiden", "Amelia", "Mia", "Harper", "Evelyn", "Abigail",
+        "Alexander", "Benjamin", "Daniel", "Matthew", "Henry", "Samuel", "Jackson", "Sebastian", "Jack", "Owen",
+        "Victoria", "Madison", "Scarlett", "Grace", "Chloe", "Penelope", "Riley", "Zoey", "Lily", "Eleanor",
+        "Wyatt", "Jayden", "Carter", "Gabriel", "Julian", "Luke", "Anthony", "Isaac", "Dylan", "Leo",
+        "Hannah", "Natalie", "Addison", "Aubrey", "Stella", "Bella", "Nora", "Lucy", "Savannah", "Maya",
+        "Levi", "David", "Christopher", "Joshua", "Andrew", "Theodore", "Caleb", "Ryan", "Asher", "Nathan",
+        "Aria", "Ellie", "Aaliyah", "Aurora", "Paisley", "Nova", "Willow", "Hazel", "Audrey", "Claire",
+        "Kareem", "Ray", "Giannis", "Carmelo", "Nate", "Paul", "Charles", "Rick",
+        "Elgin", "Dave", "Larry", "Kobe", "Wilt", "Bob", "Dave", "Billy", "Stephen",
+        "Anthony", "Dave", "Clyde", "Tim", "Kevin", "Julius", "Patrick", "Walt",
+        "Kevin", "George", "Hal", "James", "John", "Elvin", "Allen", "LeBron",
+        "Magic", "Sam", "Michael", "Jason", "Kawhi", "Damian", "Jerry", "Karl",
+        "Moses", "Pete", "Bob", "Kevin", "George", "Reggie", "Earl", "Steve",
+        "Dirk", "Hakeem", "Shaquille", "Robert", "Chris", "Gary", "Bob", "Paul",
+        "Scottie", "Willis", "Oscar", "David", "Dennis", "Bill", "Dolph", "Bill",
+        "John", "Isiah", "Nate", "Wes", "Dwyane", "Bill", "Jerry", "Russell",
+        "Lenny", "Dominique", "James"
     ]
     last = [
-        "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
-        "Davis", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Martin",
+        "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
+        "Wilson", "Anderson", "Taylor", "Thomas", "Hernandez", "Moore", "Martin", "Jackson", "Thompson", "White",
+        "Lopez", "Lee", "Gonzalez", "Harris", "Clark", "Lewis", "Robinson", "Walker", "Perez", "Hall",
+        "Young", "Allen", "Sanchez", "Wright", "King", "Scott", "Green", "Baker", "Adams", "Nelson",
+        "Hill", "Ramirez", "Campbell", "Mitchell", "Roberts", "Carter", "Phillips", "Evans", "Turner", "Torres",
+        "Parker", "Collins", "Edwards", "Stewart", "Flores", "Morris", "Nguyen", "Murphy", "Rivera", "Cook",
+        "Rogers", "Morgan", "Peterson", "Cooper", "Reed", "Bailey", "Bell", "Gomez", "Kelly", "Howard",
+        "Ward", "Cox", "Diaz", "Richardson", "Wood", "Watson", "Brooks", "Bennett", "Gray", "James",
+        "Reyes", "Cruz", "Hughes", "Price", "Myers", "Long", "Foster", "Sanders", "Ross", "Morales",
+        "Powell", "Sullivan", "Russell", "Ortiz", "Jenkins", "Gutierrez", "Perry", "Butler", "Barnes", "Fisher",
+        "Abdul-Jabbar", "Allen", "Antetokounmpo", "Anthony", "Archibald", "Arizin",
+        "Barkley", "Barry", "Baylor", "Bing", "Bird", "Bryant", "Chamberlain", "Cousy",
+        "Cowens", "Cunningham", "Curry", "Davis", "DeBusschere", "Drexler", "Duncan",
+        "Durant", "Erving", "Ewing", "Frazier", "Garnett", "Gervin", "Greer", "Harden",
+        "Havlicek", "Hayes", "Iverson", "James", "Johnson", "Jones", "Jordan", "Kidd",
+        "Leonard", "Lillard", "Lucas", "Malone", "Malone", "Maravich", "McAdoo",
+        "McHale", "Mikan", "Miller", "Monroe", "Nash", "Nowitzki", "Olajuwon",
+        "O'Neal", "Parish", "Paul", "Payton", "Pettit", "Pierce", "Pippen", "Reed",
+        "Robertson", "Robinson", "Rodman", "Russell", "Schayes", "Sharman",
+        "Stockton", "Thomas", "Thurmond", "Unseld", "Wade", "Walton", "West",
+        "Westbrook", "Wilkens", "Wilkins", "Worthy"
     ]
     return random.choice(first), random.choice(last)
 

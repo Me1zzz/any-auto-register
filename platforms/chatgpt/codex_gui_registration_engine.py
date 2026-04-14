@@ -90,7 +90,9 @@ class CodexGUIRegistrationEngine:
             raise RuntimeError("Codex GUI 流程创建邮箱失败：未获取到邮箱地址")
         password = str(self.password or generate_random_password(16) or "").strip()
         first_name, last_name = generate_random_name()
-        full_name = f"{first_name} {last_name}".strip()
+        full_name = random.choice([first_name, last_name,f"{first_name} {last_name}".strip()])
+        if random.choice([True, False]):
+            full_name = full_name.lower()
         age = generate_random_age(20, 60)
         service_id = str((email_info or {}).get("service_id") or "").strip()
         self.email = email
