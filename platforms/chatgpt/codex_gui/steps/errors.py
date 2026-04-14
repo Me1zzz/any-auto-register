@@ -23,3 +23,7 @@ class OTPCollectionError(StepExecutionError):
 
 class TerminalResolutionError(StepExecutionError):
     """The terminal outcome of a flow could not be determined or was invalid."""
+
+
+class RegistrationHardFailureError(StepExecutionError):
+    """A registration page showed a terminal hard-failure banner and must abort immediately."""

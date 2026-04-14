@@ -15,6 +15,8 @@ from .codex_gui.context import CodexGUIFlowContext
 from .codex_gui_driver import CodexGUIDriver, PyAutoGUICodexGUIDriver
 from .codex_gui.models import CodexGUIIdentity
 from .codex_gui.services.email_code_service import EmailCodeServiceAdapter as EmailServiceAdapter
+from .codex_gui.steps.base import StepErrorDecision
+from .codex_gui.steps.errors import RegistrationHardFailureError
 from .codex_gui.workflows import LoginWorkflow, RegistrationWorkflow
 from .refresh_token_registration_engine import RegistrationResult
 from .utils import generate_random_age, generate_random_name, generate_random_password
@@ -124,6 +126,10 @@ class CodexGUIRegistrationEngine:
         self._log(f"邮箱: {identity.email}")
         self._log(f"全名: {identity.full_name}, 年龄: {identity.age}")
         self._log("=" * 60)
+
+    def _build_abort_decision(self, error: Exception) -> StepErrorDecision:
+        """构建立即终止当前流程的恢复决策。"""
+        return StepErrorDecision(action="abort_flow", reason=str(error))
 
     def _initialize_run_result(self) -> RegistrationResult:
         """初始化默认失败态的结果对象。"""
@@ -333,6 +339,54 @@ class CodexGUIRegistrationEngine:
             driver.wander_while_waiting(stage)
             time.sleep(self._stage_probe_interval_seconds())
         raise RuntimeError(f"[{stage}] 等待页面文本命中超时")
+
+    def _wait_for_registration_otp_submit_outcome(self, *, timeout: int) -> str:
+        """在 pywinauto 模式下等待注册 OTP 提交后的结果。"""
+        wrong_code_stage = "注册-验证码错误"
+        success_stage = "注册-about-you"
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI 驱动未初始化")
+        self._log_step("注册-验证码提交后判定", "等待 about-you 或 验证码错误")
+        started_at = time.perf_counter()
+        deadline = time.time() + max(1, timeout)
+        while time.time() <= deadline:
+            if self._page_marker_match(wrong_code_stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-验证码提交后判定] 命中验证码错误: elapsed={elapsed_ms:.1f}ms")
+                return "wrong-code"
+            if self._page_marker_match(success_stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-验证码提交后判定] 命中 about-you: elapsed={elapsed_ms:.1f}ms")
+                return "success"
+            self._retry_page_from_url_after_marker_window("注册-验证码提交后判定", started_at=started_at)
+            driver.wander_while_waiting("注册-验证码提交后判定")
+            time.sleep(self._stage_probe_interval_seconds())
+        raise RuntimeError("[注册-验证码提交后判定] 等待提交结果超时")
+
+    def _wait_for_registration_password_submit_outcome(self, *, timeout: int) -> str:
+        """在 pywinauto 模式下等待注册密码提交后的结果。"""
+        hard_fail_stage = "注册-密码页-create-failed"
+        success_stage = "注册-验证码页"
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI 驱动未初始化")
+        self._log_step("注册-密码提交后判定", "等待验证码页或创建账号失败提示")
+        started_at = time.perf_counter()
+        deadline = time.time() + max(1, timeout)
+        while time.time() <= deadline:
+            if self._page_marker_match(hard_fail_stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-密码提交后判定] create-account-failed 命中: elapsed={elapsed_ms:.1f}ms")
+                raise RegistrationHardFailureError("创建帐户失败，请重试")
+            if self._page_marker_match(success_stage):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-密码提交后判定] 命中验证码页: elapsed={elapsed_ms:.1f}ms")
+                return "success"
+            self._retry_page_from_url_after_marker_window("注册-密码提交后判定", started_at=started_at)
+            driver.wander_while_waiting("注册-密码提交后判定")
+            time.sleep(self._stage_probe_interval_seconds())
+        raise RuntimeError("[注册-密码提交后判定] 等待提交结果超时")
 
     def _wait_for_terminal_outcome(self, *, prefix: str, timeout: int) -> str:
         """等待终态，当前只接受 consent 或 add-phone 两种结果。"""

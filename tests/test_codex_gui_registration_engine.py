@@ -3,6 +3,8 @@ from unittest import mock
 import sys
 import types
 
+from platforms.chatgpt.codex_gui.steps.errors import RegistrationHardFailureError
+
 from platforms.chatgpt.browser_session import PlaywrightEdgeBrowserSession
 from platforms.chatgpt.geometry_helper import CodexGUIGeometryHelper
 from platforms.chatgpt.gui_controller import PyAutoGUICodexGUIController
@@ -31,6 +33,8 @@ from platforms.chatgpt.codex_gui_registration_engine import (
     EmailServiceAdapter,
     PyAutoGUICodexGUIDriver,
 )
+from platforms.chatgpt.codex_gui.models import CodexGUIIdentity
+from platforms.chatgpt.codex_gui.steps.registration.submit_registration_otp_step import SubmitRegistrationOtpStep
 
 
 class _DummyEmailService:
@@ -185,6 +189,57 @@ class _FakeDriverWithRegisterConsent(_FakeDriver):
         if name == "complete_account_button":
             self.events.append(("click", name))
             self.current_url = "https://auth.openai.com/sign-in-with-chatgpt/codex/consent"
+            return
+        super().click_named_target(name)
+
+
+class _FakeDriverWithWrongRegistrationOtp(_FakeDriver):
+    def __init__(self):
+        super().__init__()
+        self._wrong_code_once = False
+
+    def input_text(self, name: str, text: str) -> None:
+        self.events.append(("input", name, text))
+        if name == "verification_code_input":
+            return
+        super().input_text(name, text)
+
+    def click_named_target(self, name: str) -> None:
+        if name == "continue_button" and self.current_url.endswith("/email-verification") and not self._wrong_code_once:
+            self.events.append(("click", name))
+            self.current_url = "https://auth.openai.com/email-verification/invalid"
+            self._wrong_code_once = True
+            return
+        if name == "continue_button" and self.current_url.endswith("/email-verification"):
+            self.events.append(("click", name))
+            self.current_url = "https://auth.openai.com/about-you"
+            return
+        super().click_named_target(name)
+
+    def page_marker_matched(self, stage: str):
+        if stage == "注册-验证码错误" and self.current_url.endswith("/email-verification/invalid"):
+            return True, "代码不正确"
+        if stage == "注册-about-you" and self.current_url.endswith("/about-you"):
+            return True, "你的年龄是多少？"
+        return super().page_marker_matched(stage)
+
+
+class _FakeDriverWithCreateAccountFailure(_FakeDriver):
+    def page_marker_matched(self, stage: str):
+        if stage == "注册-打开登录页" and self.current_url.endswith("/log-in"):
+            return True, "欢迎回来"
+        if stage == "注册-创建账户页" and self.current_url.endswith("/create-account"):
+            return True, "创建帐户"
+        if stage == "注册-密码页" and self.current_url.endswith("/create-account/password"):
+            return True, "创建密码"
+        if stage == "注册-密码页-create-failed" and self.current_url.endswith("/create-account/password/failed"):
+            return True, "创建帐户失败，请重试"
+        return super().page_marker_matched(stage)
+
+    def click_named_target(self, name: str) -> None:
+        if name == "continue_button" and self.current_url.endswith("/create-account/password"):
+            self.events.append(("click", name))
+            self.current_url = "https://auth.openai.com/create-account/password/failed"
             return
         super().click_named_target(name)
 
@@ -411,6 +466,47 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
         self.assertEqual(len(resend_clicks), 0)
+
+    def test_submit_registration_otp_step_retries_after_wrong_code_in_pywinauto_mode(self):
+        email_service = _DummyEmailService(["111111", "222222", "333333"])
+        driver = _FakeDriverWithWrongRegistrationOtp()
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_retry_target": "retry_button",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_error_retry_url_contains": ["/error"],
+            },
+        )
+        engine._driver = driver
+        driver.current_url = "https://auth.openai.com/email-verification"
+        adapter = EmailServiceAdapter(email_service, "user@example.com", lambda _msg: None)
+        ctx = engine._build_flow_context(
+            identity=CodexGUIIdentity(
+                email="user@example.com",
+                password="demo-pass",
+                full_name="demo user",
+                age=30,
+                service_id="svc-1",
+            ),
+            auth_url="https://auth.openai.com/oauth/authorize?state=demo-state",
+            email_adapter=adapter,
+        )
+
+        result = SubmitRegistrationOtpStep().run(engine, ctx)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+        otp_inputs = [event for event in driver.events if event[:2] == ("input", "verification_code_input")]
+        self.assertEqual([event[2] for event in otp_inputs[:2]], ["111111", "222222"])
+        resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
+        self.assertEqual(len(resend_clicks), 1)
+        self.assertEqual(len(email_service.calls), 2)
+        self.assertEqual(email_service.calls[0]["exclude_codes"], set())
+        self.assertEqual(email_service.calls[1]["exclude_codes"], {"111111"})
 
     def test_run_retries_last_action_when_error_page_detected(self):
         email_service = _DummyEmailService(["111111", "222222"])
@@ -1095,13 +1191,14 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
     def test_verify_pywinauto_password_accepts_masked_focused_value(self):
         logs = []
+        password = "super-secret-password"
         driver = PyAutoGUICodexGUIDriver(
             extra_config={"codex_gui_target_detector": "pywinauto"},
             logger_fn=logs.append,
         )
         detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
         detector.focused_edit_candidate.return_value = mock.Mock(
-            text="••••••••",
+            text="•" * len(password),
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
@@ -1109,12 +1206,13 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 
-        driver._verify_pywinauto_input("password_input", "super-secret-password")
+        driver._verify_pywinauto_input("password_input", password)
 
         detector.text_candidates_in_region.assert_not_called()
 
     def test_verify_pywinauto_password_accepts_masked_region_text(self):
         logs = []
+        password = "super-secret-password"
         driver = PyAutoGUICodexGUIDriver(
             extra_config={"codex_gui_target_detector": "pywinauto"},
             logger_fn=logs.append,
@@ -1126,14 +1224,66 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         )
         detector.boxes_intersect.return_value = True
         detector.text_candidates_in_region.return_value = [
-            mock.Mock(text="••••••••", box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
+            mock.Mock(text="•" * len(password), box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
         ]
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 
-        driver._verify_pywinauto_input("password_input", "super-secret-password")
+        driver._verify_pywinauto_input("password_input", password)
 
         detector.text_candidates_in_region.assert_called_once()
+
+    def test_verify_pywinauto_password_rejects_shorter_masked_focused_value(self):
+        logs = []
+        password = "super-secret-password"
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_pywinauto_input_verify_timeout_seconds": 0.1,
+            },
+            logger_fn=logs.append,
+        )
+        detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
+        detector.focused_edit_candidate.return_value = mock.Mock(
+            text="•" * (len(password) - 1),
+            box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+        )
+        detector.boxes_intersect.return_value = True
+        detector.text_candidates_in_region.return_value = []
+        driver._target_detector = detector
+        driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
+
+        with self.assertRaisesRegex(RuntimeError, "输入确认失败"), mock.patch(
+            "platforms.chatgpt.codex_gui_driver.time.sleep"
+        ):
+            driver._verify_pywinauto_input("password_input", password)
+
+    def test_verify_pywinauto_password_rejects_longer_masked_region_text(self):
+        logs = []
+        password = "super-secret-password"
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_pywinauto_input_verify_timeout_seconds": 0.1,
+            },
+            logger_fn=logs.append,
+        )
+        detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
+        detector.focused_edit_candidate.return_value = mock.Mock(
+            text="",
+            box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+        )
+        detector.boxes_intersect.return_value = True
+        detector.text_candidates_in_region.return_value = [
+            mock.Mock(text="•" * (len(password) + 1), box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
+        ]
+        driver._target_detector = detector
+        driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
+
+        with self.assertRaisesRegex(RuntimeError, "输入确认失败"), mock.patch(
+            "platforms.chatgpt.codex_gui_driver.time.sleep"
+        ):
+            driver._verify_pywinauto_input("password_input", password)
 
     def test_verify_pywinauto_password_rejects_empty_text(self):
         logs = []
@@ -1634,6 +1784,50 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             terminal = engine._wait_for_terminal_outcome(prefix="注册", timeout=1)
 
         self.assertEqual(terminal, "add-phone")
+
+    def test_wait_for_registration_password_submit_outcome_raises_registration_hard_failure(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={"chatgpt_registration_mode": "codex_gui", "codex_gui_stage_probe_interval_seconds": 0.8},
+        )
+        driver = _FakeDriverWithStrictMarkers()
+        driver.stage_markers["注册-密码页-create-failed"] = (True, "创建帐户失败，请重试")
+        engine._driver = driver
+
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.sleep"):
+            with self.assertRaisesRegex(RegistrationHardFailureError, "创建帐户失败，请重试"):
+                engine._wait_for_registration_password_submit_outcome(timeout=1)
+
+    def test_run_fails_immediately_when_password_submit_failure_banner_is_visible(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriverWithCreateAccountFailure()
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_retry_target": "retry_button",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_error_retry_url_contains": ["/error"],
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+
+        result = engine.run()
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_message, "创建帐户失败，请重试")
+        complete_clicks = [event for event in driver.events if event == ("click", "complete_account_button")]
+        self.assertEqual(len(complete_clicks), 0)
+        continue_clicks = [event for event in driver.events if event == ("click", "continue_button")]
+        self.assertGreaterEqual(len(continue_clicks), 2)
 
     def test_wait_for_stage_marker_in_pywinauto_mode_retries_text_only_before_15s(self):
         logs = []

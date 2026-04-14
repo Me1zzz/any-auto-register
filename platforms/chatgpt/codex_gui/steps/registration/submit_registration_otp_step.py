@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
+
 from platforms.chatgpt.codex_gui.models import FlowStepResult
 from platforms.chatgpt.codex_gui.steps.base import BaseFlowStep
-from platforms.chatgpt.codex_gui.steps.common import collect_otp_code, input_and_click_then_wait, require_driver, require_non_empty, resolve_wait_timeout, set_current_stage, verify_success
+from platforms.chatgpt.codex_gui.steps.common import collect_otp_code, require_driver, require_non_empty, resolve_wait_timeout, run_named_action, set_current_stage, verify_success, wait_for_expected_url
 from platforms.chatgpt.codex_gui.steps.metadata import StepMetadata
 from platforms.chatgpt.codex_gui.steps.recovery import otp_abort
 
@@ -33,20 +35,21 @@ class SubmitRegistrationOtpStep(BaseFlowStep):
         """拉取注册 OTP 并提交到 about-you 页面。"""
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
-        # OTP 必须先从邮箱服务中取回，再进入“输入+提交+等待页面跳转”的统一模板。
-        register_code = collect_otp_code(engine, ctx.email_adapter, stage="注册")
-        matched_url = input_and_click_then_wait(
-            engine,
-            driver,
-            input_label="[注册] 输入邮箱验证码",
-            input_target="verification_code_input",
-            input_value=register_code,
-            click_label="[注册] 提交验证码",
-            click_target="continue_button",
-            fragment="/about-you",
-            timeout=wait_timeout,
-            stage=self.stage_name,
-        )
+        matched_url = ""
+        register_code = ""
+        otp_submit_attempts = 2 if getattr(engine, "_is_pywinauto_mode", lambda: False)() else 1
+        # pywinauto 模式下如果页面明确提示“代码不正确”，则重发邮件并重新取码后再提交一次。
+        for attempt in range(1, otp_submit_attempts + 1):
+            register_code = collect_otp_code(engine, ctx.email_adapter, stage="注册")
+            run_named_action(engine, "[注册] 输入邮箱验证码", lambda: driver.input_text("verification_code_input", register_code))
+            run_named_action(engine, "[注册] 提交验证码", lambda: driver.click_named_target("continue_button"))
+            if attempt < otp_submit_attempts and getattr(engine, "_is_pywinauto_mode", lambda: False)():
+                otp_outcome = engine._wait_for_registration_otp_submit_outcome(timeout=wait_timeout)
+                if otp_outcome == "wrong-code":
+                    run_named_action(engine, "[注册] 验证码错误后重新发送邮件", lambda: driver.click_named_target("resend_email_button"))
+                    continue
+            matched_url = wait_for_expected_url(engine, "/about-you", timeout=wait_timeout, stage=self.stage_name)
+            break
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url, payload={"otp": register_code})
 
     def verify(self, engine, ctx, result) -> None:

@@ -1085,7 +1085,7 @@ class ChatGPTClient:
                     return False, "注册密码阶段重复进入"
                 success, msg = self.register_user(email, password)
                 if not success:
-                    return False, f"注册失败: {msg}"
+                    return False, f"注册失败: {msg} {email}"
                 register_submitted = True
                 otp_send_attempts += 1
                 self._log(f"发送注册验证码: attempt={otp_send_attempts}")

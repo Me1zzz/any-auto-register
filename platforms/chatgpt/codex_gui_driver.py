@@ -277,10 +277,12 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return str(name or "").strip().lower() == "password_input"
 
     @staticmethod
-    def _contains_password_mask(text: str) -> bool:
-        """判断文本是否表现为密码掩码。"""
-        value = str(text or "")
-        return "••••" in value or "****" in value
+    def _contains_password_mask(text: str, expected_length: int) -> bool:
+        """判断文本是否表现为与目标密码长度一致的纯掩码。"""
+        value = str(text or "").strip()
+        if expected_length <= 0 or not value:
+            return False
+        return value == ("•" * expected_length) or value == ("*" * expected_length)
 
     @staticmethod
     def _expand_box(box: dict[str, float] | None, *, x_scale: float = 1.35, y_scale: float = 1.9) -> dict[str, float] | None:
@@ -366,7 +368,9 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
                 focused_matches = (
                     focused_text == normalized_target if self._is_password_target(name) else normalized_target in focused_text
                 )
-                if focused_matches or (self._is_password_target(name) and self._contains_password_mask(focused.text)):
+                if focused_matches or (
+                    self._is_password_target(name) and self._contains_password_mask(focused.text, len(target_text))
+                ):
                     self._log_debug(f"[UIA] 输入确认成功(焦点值): name={name}, text={target_text}, box={focused.box}")
                     return
             if expanded_box:
@@ -377,7 +381,9 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
                         if self._is_password_target(name)
                         else normalized_target in candidate_text
                     )
-                    if candidate_matches or (self._is_password_target(name) and self._contains_password_mask(candidate.text)):
+                    if candidate_matches or (
+                        self._is_password_target(name) and self._contains_password_mask(candidate.text, len(target_text))
+                    ):
                         self._log_debug(f"[UIA] 输入确认成功(区域交集): name={name}, text={target_text}, box={candidate.box}")
                         return
             time.sleep(0.25)
