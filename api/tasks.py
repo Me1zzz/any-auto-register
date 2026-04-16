@@ -202,6 +202,39 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 proxy=proxy,
             )
 
+        def _build_alias_pool(merged_extra: dict):
+            from core.alias_pool.config import normalize_cloudmail_alias_pool_config
+            from core.alias_pool.manager import AliasEmailPoolManager
+            from core.alias_pool.static_list import StaticAliasListProducer
+
+            pool_config = normalize_cloudmail_alias_pool_config(
+                merged_extra,
+                task_id=task_id,
+            )
+            if not pool_config.get("enabled"):
+                return None
+
+            manager = AliasEmailPoolManager(task_id=task_id)
+            for source in pool_config.get("sources", []):
+                if source.get("type") != "static_list":
+                    continue
+                producer = StaticAliasListProducer(
+                    source_id=str(source.get("id") or "legacy-static"),
+                    emails=list(source.get("emails") or []),
+                    mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
+                )
+                manager.register_source(producer)
+                producer.load_into(manager)
+            return manager
+
+        from core.config_store import config_store
+
+        task_merged_extra = config_store.get_all().copy()
+        task_merged_extra.update(
+            {k: v for k, v in req.extra.items() if v is not None and v != ""}
+        )
+        task_alias_pool = _build_alias_pool(task_merged_extra)
+
         def _do_one(i: int):
             nonlocal next_start_time, workspace_success
             proxy_pool = None
@@ -249,7 +282,9 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 )
                 _mailbox = _build_mailbox(_proxy)
                 if hasattr(_mailbox, "_task_alias_pool_key"):
-                    _mailbox._task_alias_pool_key = task_id
+                    setattr(_mailbox, "_task_alias_pool_key", task_id)
+                if hasattr(_mailbox, "_task_alias_pool"):
+                    setattr(_mailbox, "_task_alias_pool", task_alias_pool)
                 _platform = PlatformCls(config=_config, mailbox=_mailbox)
                 _platform._task_attempt_token = attempt_id
                 _platform._log_fn = lambda msg: _log(task_id, msg)
