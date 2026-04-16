@@ -335,6 +335,54 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             ["alias1@example.com", "alias2@example.com"],
         )
 
+    def test_run_register_builds_task_pool_via_simple_generator_source(self):
+        task_id = "task-simple-generator-producer-path"
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "simple-1",
+                        "type": "simple_generator",
+                        "prefix": "msiabc.",
+                        "suffix": "@manyme.com",
+                        "mailbox_email": "real@example.com",
+                        "count": 2,
+                        "middle_length_min": 3,
+                        "middle_length_max": 3,
+                    }
+                ],
+            },
+            count=2,
+            concurrency=1,
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+        saved_accounts = []
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch(
+                "core.db.save_account",
+                side_effect=lambda account: saved_accounts.append(account) or account,
+            ),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(mailbox_factory.instances), 2)
+        first_mailbox, second_mailbox = mailbox_factory.instances
+        self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
+        self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
+        self.assertEqual(len(saved_accounts), 2)
+        for account in saved_accounts:
+            self.assertTrue(account.email.startswith("msiabc."))
+            self.assertTrue(account.email.endswith("@manyme.com"))
+
     def test_create_register_task_keeps_alias_config_in_request(self):
         req = self._build_request(
             extra={

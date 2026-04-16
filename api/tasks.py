@@ -205,6 +205,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
         def _build_alias_pool(merged_extra: dict):
             from core.alias_pool.config import normalize_cloudmail_alias_pool_config
             from core.alias_pool.manager import AliasEmailPoolManager
+            from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
             from core.alias_pool.static_list import StaticAliasListProducer
 
             pool_config = normalize_cloudmail_alias_pool_config(
@@ -216,13 +217,25 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
 
             manager = AliasEmailPoolManager(task_id=task_id)
             for source in pool_config.get("sources", []):
-                if source.get("type") != "static_list":
+                source_type = source.get("type")
+                if source_type == "static_list":
+                    producer = StaticAliasListProducer(
+                        source_id=str(source.get("id") or "legacy-static"),
+                        emails=list(source.get("emails") or []),
+                        mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
+                    )
+                elif source_type == "simple_generator":
+                    producer = SimpleAliasGeneratorProducer(
+                        source_id=str(source.get("id") or "simple-generator"),
+                        prefix=str(source.get("prefix") or ""),
+                        suffix=str(source.get("suffix") or "").strip().lower(),
+                        mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
+                        count=int(source.get("count") or 0),
+                        middle_length_min=int(source.get("middle_length_min") or 3),
+                        middle_length_max=int(source.get("middle_length_max") or 6),
+                    )
+                else:
                     continue
-                producer = StaticAliasListProducer(
-                    source_id=str(source.get("id") or "legacy-static"),
-                    emails=list(source.get("emails") or []),
-                    mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
-                )
                 manager.register_source(producer)
                 producer.load_into(manager)
             return manager
