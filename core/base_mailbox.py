@@ -8,6 +8,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Any, Callable
+from .alias_pool.base import AliasEmailLease
 from .proxy_utils import build_requests_proxy_config
 
 
@@ -1093,6 +1094,8 @@ class CloudMailMailbox(BaseMailbox):
     _skip_logged_ids: dict[str, set[str]] = {}
     _alias_pool_lock = threading.Lock()
     _alias_pools: dict[str, dict[str, Any]] = {}
+    _task_alias_pool: Any | None
+    _last_alias_lease: Optional[AliasEmailLease]
 
     def __init__(
         self,
@@ -1119,6 +1122,8 @@ class CloudMailMailbox(BaseMailbox):
         self.proxy = build_requests_proxy_config(proxy)
         self._last_account: Optional[MailboxAccount] = None
         self._task_alias_pool_key = ""
+        self._task_alias_pool: Any = None
+        self._last_alias_lease: Optional[AliasEmailLease] = None
         self._last_matched_message_id = ""
 
     @staticmethod
@@ -1239,6 +1244,20 @@ class CloudMailMailbox(BaseMailbox):
             mailbox_email = str(self.alias_mailbox_email or "").strip()
             return mailbox_email
         return self._build_email()
+
+    def _consume_alias_lease(self) -> Optional[AliasEmailLease]:
+        pool = getattr(self, "_task_alias_pool", None)
+        if pool is None:
+            self._last_alias_lease = None
+            return None
+
+        lease = pool.acquire_alias()
+        if lease is None:
+            self._last_alias_lease = None
+            return None
+
+        self._last_alias_lease = lease
+        return lease
 
     def _resolve_lookup_context(self, account: MailboxAccount) -> tuple[str, str, str]:
         mailbox_email = str(account.account_id or "").strip()
@@ -1610,8 +1629,13 @@ class CloudMailMailbox(BaseMailbox):
 
     def get_email(self) -> MailboxAccount:
         self._ensure_config()
-        alias_email = self._pick_alias_email()
-        mailbox_email = self._resolve_mailbox_email(alias_email)
+        lease = self._consume_alias_lease()
+        if lease is not None:
+            alias_email = str(lease.alias_email or "").strip()
+            mailbox_email = str(lease.real_mailbox_email or "").strip()
+        else:
+            alias_email = self._pick_alias_email()
+            mailbox_email = self._resolve_mailbox_email(alias_email)
         primary_email = alias_email or mailbox_email
         account = MailboxAccount(
             email=primary_email,

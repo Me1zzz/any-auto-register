@@ -1,6 +1,8 @@
 import unittest
+from typing import cast
 from unittest import mock
 
+from core.alias_pool.base import AliasEmailLease
 from core.base_mailbox import CloudMailMailbox, MailboxAccount, create_mailbox
 
 
@@ -165,6 +167,51 @@ class CloudMailMailboxTests(unittest.TestCase):
         mailbox_a.get_email()
         with self.assertRaises(RuntimeError):
             mailbox_b.get_email()
+
+    def test_get_email_prefers_task_alias_pool_lease_over_legacy_alias_list(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+                "cloudmail_alias_enabled": "1",
+                "cloudmail_alias_emails": "legacy1@alias.example.com\nlegacy2@alias.example.com",
+                "cloudmail_alias_mailbox_email": "legacy@mail.example.com",
+            },
+        )
+        assert isinstance(mailbox, CloudMailMailbox)
+        mailbox = cast(CloudMailMailbox, mailbox)
+        lease = AliasEmailLease(
+            alias_email="lease@alias.example.com",
+            real_mailbox_email="lease-real@mail.example.com",
+            source_kind="static_list",
+            source_id="legacy-static",
+            source_session_id="session-1",
+        )
+        mailbox._task_alias_pool = mock.Mock(acquire_alias=mock.Mock(return_value=lease))
+
+        with mock.patch.object(
+            mailbox,
+            "_pick_alias_email",
+            side_effect=AssertionError("legacy alias fallback should not run when a lease is available"),
+        ):
+            account = mailbox.get_email()
+
+        self.assertEqual(account.email, "lease@alias.example.com")
+        self.assertEqual(account.account_id, "lease-real@mail.example.com")
+        self.assertEqual(mailbox._last_alias_lease, lease)
+        self.assertEqual(
+            account.extra,
+            {
+                "mailbox_alias": {
+                    "enabled": True,
+                    "alias_email": "lease@alias.example.com",
+                    "mailbox_email": "lease-real@mail.example.com",
+                }
+            },
+        )
+        mailbox._task_alias_pool.acquire_alias.assert_called_once_with()
 
     def test_release_alias_pool_resets_task_alias_allocation(self):
         mailbox = create_mailbox(
