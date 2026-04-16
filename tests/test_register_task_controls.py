@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import BackgroundTasks
 
@@ -10,6 +10,7 @@ from api.tasks import (
     _task_store,
     create_register_task,
 )
+from core.alias_pool.manager import AliasEmailPoolManager
 from core.base_mailbox import BaseMailbox, MailboxAccount
 from core.base_platform import Account, BasePlatform
 
@@ -72,6 +73,22 @@ class _FakeAliasMailbox(_FakeMailbox):
         return "123456"
 
 
+class _PoolAwareMailbox(_FakeMailbox):
+    def __init__(self):
+        self._task_alias_pool_key = ""
+        self._task_alias_pool = None
+
+
+class _MailboxFactory:
+    def __init__(self):
+        self.instances = []
+
+    def __call__(self, *args, **kwargs):
+        mailbox = _PoolAwareMailbox()
+        self.instances.append(mailbox)
+        return mailbox
+
+
 class _FakePlatform(BasePlatform):
     name = "fake"
     display_name = "Fake"
@@ -91,6 +108,18 @@ class _FakePlatform(BasePlatform):
 
     def check_valid(self, account: Account) -> bool:
         return True
+
+
+class _PoolAwarePlatform(_FakePlatform):
+    def register(self, email: str, password: str = None) -> Account:
+        pool = self.mailbox._task_alias_pool
+        assert pool is not None
+        lease = pool.acquire_alias()
+        return Account(
+            platform="fake",
+            email=lease.alias_email,
+            password=password or "pw",
+        )
 
 
 class _FakeChatGPTWorkspacePlatform(BasePlatform):
@@ -122,6 +151,9 @@ class _FakeChatGPTWorkspacePlatform(BasePlatform):
 
 
 class RegisterTaskControlFlowTests(unittest.TestCase):
+    def _proxy_pool_stub(self):
+        return Mock(get_next=Mock(return_value=None), report_success=Mock(), report_fail=Mock())
+
     def _build_request(self, **overrides):
         payload = {
             "platform": "fake",
@@ -144,6 +176,8 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         with (
             patch("core.registry.get", return_value=_FakePlatform),
             patch("core.base_mailbox.create_mailbox", return_value=_FakeMailbox()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
             patch("core.db.save_account", side_effect=lambda account: account),
             patch("api.tasks._save_task_log"),
         ):
@@ -176,6 +210,8 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         with (
             patch("core.registry.get", return_value=_FakeChatGPTWorkspacePlatform),
             patch("core.base_mailbox.create_mailbox", return_value=_FakeMailbox()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
             patch("core.db.save_account", side_effect=lambda account: account),
             patch("api.tasks._save_task_log"),
         ):
@@ -200,6 +236,8 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         with (
             patch("core.registry.get", return_value=_FakePlatform),
             patch("core.base_mailbox.create_mailbox", return_value=_FakeAliasMailbox()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
             patch("core.db.save_account", side_effect=_capture),
             patch("api.tasks._save_task_log"),
         ):
@@ -219,6 +257,82 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                 "alias_prefix": "",
                 "alias_suffix": "",
             },
+        )
+
+    def test_run_register_reuses_one_task_alias_pool_across_attempts(self):
+        task_id = "task-alias-pool-reuse"
+        req = self._build_request(
+            count=2,
+            concurrency=1,
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "cloudmail_alias_emails": "alias1@example.com\nalias2@example.com",
+                "cloudmail_alias_mailbox_email": "real@example.com",
+            }
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+        saved_accounts = []
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: saved_accounts.append(account) or account),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(mailbox_factory.instances), 2)
+        first_mailbox, second_mailbox = mailbox_factory.instances
+        self.assertEqual(first_mailbox._task_alias_pool_key, task_id)
+        self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
+        self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
+        self.assertEqual(
+            [account.email for account in saved_accounts],
+            ["alias1@example.com", "alias2@example.com"],
+        )
+
+    def test_run_register_builds_task_pool_via_registered_static_producer_path(self):
+        task_id = "task-static-producer-path"
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "legacy-static",
+                        "type": "static_list",
+                        "emails": ["alias1@example.com", "alias2@example.com"],
+                        "mailbox_email": "real@example.com",
+                    }
+                ],
+            },
+            count=2,
+            concurrency=1,
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+        saved_accounts = []
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch(
+                "core.db.save_account",
+                side_effect=lambda account: saved_accounts.append(account) or account,
+            ),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(
+            [account.email for account in saved_accounts],
+            ["alias1@example.com", "alias2@example.com"],
         )
 
     def test_create_register_task_keeps_alias_config_in_request(self):
