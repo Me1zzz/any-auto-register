@@ -25,6 +25,13 @@ def _parse_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _normalize_sources(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -33,19 +40,41 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             continue
+
         source_type = str(item.get("type") or "").strip()
-        if source_type != "static_list":
+        source_id = str(item.get("id") or f"source-{index + 1}").strip() or f"source-{index + 1}"
+
+        if source_type == "static_list":
+            normalized.append(
+                {
+                    "id": source_id,
+                    "type": "static_list",
+                    "emails": _parse_alias_emails(item.get("emails")),
+                    "mailbox_email": str(item.get("mailbox_email") or "").strip().lower(),
+                }
+            )
             continue
 
-        normalized.append(
-            {
-                "id": str(item.get("id") or f"static-{index + 1}").strip()
-                or f"static-{index + 1}",
-                "type": "static_list",
-                "emails": _parse_alias_emails(item.get("emails")),
-                "mailbox_email": str(item.get("mailbox_email") or "").strip().lower(),
-            }
-        )
+        if source_type == "simple_generator":
+            min_length = _parse_int(item.get("middle_length_min"), 3)
+            max_length = _parse_int(item.get("middle_length_max"), 6)
+            if min_length <= 0:
+                min_length = 3
+            if max_length < min_length:
+                max_length = min_length
+
+            normalized.append(
+                {
+                    "id": source_id,
+                    "type": "simple_generator",
+                    "prefix": str(item.get("prefix") or "").strip(),
+                    "suffix": str(item.get("suffix") or "").strip().lower(),
+                    "mailbox_email": str(item.get("mailbox_email") or "").strip().lower(),
+                    "count": max(_parse_int(item.get("count"), 0), 0),
+                    "middle_length_min": min_length,
+                    "middle_length_max": max_length,
+                }
+            )
     return normalized
 
 

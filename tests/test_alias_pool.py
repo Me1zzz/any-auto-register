@@ -10,6 +10,7 @@ from core.alias_pool.base import (
 from core.alias_pool.config import normalize_cloudmail_alias_pool_config
 from core.alias_pool.manager import AliasEmailPoolManager
 from core.alias_pool.service_base import AliasServiceProducerBase
+from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
 from core.alias_pool.static_list import StaticAliasListProducer
 
 
@@ -96,6 +97,42 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "type": "static_list",
                     "emails": ["alias1@example.com"],
                     "mailbox_email": "real@example.com",
+                }
+            ],
+        )
+
+    def test_normalize_accepts_simple_generator_source(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "simple-1",
+                        "type": "simple_generator",
+                        "prefix": "msiabc.",
+                        "suffix": "@manyme.com",
+                        "mailbox_email": "real@example.com",
+                        "count": 5,
+                        "middle_length_min": 3,
+                        "middle_length_max": 6,
+                    }
+                ],
+            },
+            task_id="task-simple-generator",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "simple-1",
+                    "type": "simple_generator",
+                    "prefix": "msiabc.",
+                    "suffix": "@manyme.com",
+                    "mailbox_email": "real@example.com",
+                    "count": 5,
+                    "middle_length_min": 3,
+                    "middle_length_max": 6,
                 }
             ],
         )
@@ -241,6 +278,72 @@ class AliasServiceProducerBaseTests(unittest.TestCase):
 
         with self.assertRaises(NotImplementedError):
             producer.load_into(manager)
+
+
+class SimpleAliasGeneratorProducerTests(unittest.TestCase):
+    def test_simple_generator_loads_generated_aliases_into_pool(self):
+        manager = AliasEmailPoolManager(task_id="task-simple-generator-load")
+        producer = SimpleAliasGeneratorProducer(
+            source_id="simple-1",
+            prefix="msiabc.",
+            suffix="@manyme.com",
+            mailbox_email="real@example.com",
+            count=3,
+            middle_length_min=3,
+            middle_length_max=3,
+        )
+
+        self.assertEqual(producer.source_kind, "simple_generator")
+        self.assertEqual(producer.state(), AliasSourceState.IDLE)
+
+        producer.load_into(manager)
+
+        self.assertEqual(producer.state(), AliasSourceState.EXHAUSTED)
+
+        leases = [manager.acquire_alias(), manager.acquire_alias(), manager.acquire_alias()]
+        self.assertEqual(len(leases), 3)
+        self.assertEqual([lease.source_kind for lease in leases], ["simple_generator"] * 3)
+        self.assertEqual([lease.source_id for lease in leases], ["simple-1"] * 3)
+        self.assertEqual([lease.real_mailbox_email for lease in leases], ["real@example.com"] * 3)
+
+        for lease in leases:
+            self.assertTrue(lease.alias_email.startswith("msiabc."))
+            self.assertTrue(lease.alias_email.endswith("@manyme.com"))
+            middle = lease.alias_email[len("msiabc.") : -len("@manyme.com")]
+            self.assertEqual(len(middle), 3)
+            self.assertRegex(middle, r"^[a-z0-9]+$")
+
+    def test_simple_generator_deduplicates_aliases_within_one_load(self):
+        manager = AliasEmailPoolManager(task_id="task-simple-generator-dedup")
+        producer = SimpleAliasGeneratorProducer(
+            source_id="simple-1",
+            prefix="prefix.",
+            suffix="@manyme.com",
+            mailbox_email="real@example.com",
+            count=5,
+            middle_length_min=1,
+            middle_length_max=1,
+        )
+
+        generated = iter(["a", "a", "b", "b", "c", "d", "e"])
+        with mock.patch.object(
+            producer,
+            "_generate_alias_email",
+            side_effect=lambda: f"prefix.{next(generated)}@manyme.com",
+        ):
+            producer.load_into(manager)
+
+        leases = [manager.acquire_alias() for _ in range(5)]
+        self.assertEqual(
+            [lease.alias_email for lease in leases],
+            [
+                "prefix.a@manyme.com",
+                "prefix.b@manyme.com",
+                "prefix.c@manyme.com",
+                "prefix.d@manyme.com",
+                "prefix.e@manyme.com",
+            ],
+        )
 
 
 if __name__ == "__main__":
