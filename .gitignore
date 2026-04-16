@@ -60,6 +60,7 @@ data/
 *.swp
 .claude/
 .docs/superpowers/
+.worktrees/
 CLAUDE.md
 .ace-tool/
 
