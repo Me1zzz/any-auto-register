@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from typing import Optional
+import inspect
 from copy import deepcopy
 from core.db import TaskLog, engine
 from core.task_runtime import (
@@ -207,6 +208,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             from core.alias_pool.manager import AliasEmailPoolManager
             from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
             from core.alias_pool.static_list import StaticAliasListProducer
+            from core.alias_pool.vend_email_service import (
+                VendEmailAliasServiceProducer,
+                build_default_vend_email_runtime,
+                build_vend_email_task_state_store,
+            )
 
             pool_config = normalize_cloudmail_alias_pool_config(
                 merged_extra,
@@ -233,6 +239,42 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                         count=int(source.get("count") or 0),
                         middle_length_min=int(source.get("middle_length_min") or 3),
                         middle_length_max=int(source.get("middle_length_max") or 6),
+                    )
+                elif source_type == "vend_email":
+                    state_store_factory = merged_extra.get("vend_email_state_store_factory")
+                    if not callable(state_store_factory):
+                        state_store_factory = lambda current_task_id, current_source_id: build_vend_email_task_state_store(
+                            task_id=current_task_id,
+                            source_id=current_source_id,
+                        )
+
+                    runtime_builder = merged_extra.get("vend_email_runtime_builder")
+                    if not callable(runtime_builder):
+                        runtime_builder = build_default_vend_email_runtime
+
+                    source_id = str(source.get("id") or "vend-email")
+                    state_store_factory_signature = inspect.signature(state_store_factory)
+                    supports_source_id = False
+                    positional_parameter_count = 0
+                    for parameter in state_store_factory_signature.parameters.values():
+                        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                            supports_source_id = True
+                            break
+                        if parameter.kind in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        ):
+                            positional_parameter_count += 1
+
+                    if supports_source_id or positional_parameter_count >= 2:
+                        state_store = state_store_factory(task_id, source_id)
+                    else:
+                        state_store = state_store_factory(task_id)
+
+                    producer = VendEmailAliasServiceProducer(
+                        source=source,
+                        state_store=state_store,
+                        runtime=runtime_builder(source),
                     )
                 else:
                     continue
