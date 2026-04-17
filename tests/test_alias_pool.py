@@ -137,6 +137,161 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
             ],
         )
 
+    def test_normalize_accepts_vend_email_source(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-1",
+                        "type": "vend_email",
+                        "mailbox_email": "Real@Example.COM ",
+                        "alias_domain": " CxWsss.Online ",
+                        "alias_count": "-5",
+                    }
+                ],
+            },
+            task_id="task-vend-email",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "mailbox_email": "real@example.com",
+                    "alias_domain": "cxwsss.online",
+                    "alias_count": 0,
+                    "state_key": "vend-1",
+                }
+            ],
+        )
+
+    def test_normalize_accepts_vend_email_source(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-1",
+                        "type": "vend_email",
+                        "mailbox_email": "Real@Example.COM ",
+                        "alias_domain": " CxWsss.Online ",
+                        "alias_count": "-5",
+                    }
+                ],
+            },
+            task_id="task-vend-email",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "mailbox_email": "real@example.com",
+                    "alias_domain": "cxwsss.online",
+                    "alias_count": 0,
+                    "state_key": "vend-1",
+                }
+            ],
+        )
+
+    def test_normalize_accepts_vend_email_source(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-1",
+                        "type": "vend_email",
+                        "mailbox_email": "Real@Example.COM ",
+                        "alias_domain": " CxWsss.Online ",
+                        "alias_count": "-5",
+                    }
+                ],
+            },
+            task_id="task-vend-email",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "mailbox_email": "real@example.com",
+                    "alias_domain": "cxwsss.online",
+                    "alias_count": 0,
+                    "state_key": "vend-1",
+                }
+            ],
+        )
+
+    def test_normalize_accepts_vend_email_source(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-1",
+                        "type": "vend_email",
+                        "mailbox_email": "Real@Example.COM ",
+                        "alias_domain": " CxWsss.Online ",
+                        "alias_count": "-5",
+                    }
+                ],
+            },
+            task_id="task-vend-email",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "mailbox_email": "real@example.com",
+                    "alias_domain": "cxwsss.online",
+                    "alias_count": 0,
+                    "state_key": "vend-1",
+                }
+            ],
+        )
+
+    def test_normalize_accepts_vend_email_source(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-1",
+                        "type": "vend_email",
+                        "mailbox_email": "Real@Example.COM ",
+                        "alias_domain": " CxWsss.Online ",
+                        "alias_count": "-5",
+                    }
+                ],
+            },
+            task_id="task-vend-email",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "mailbox_email": "real@example.com",
+                    "alias_domain": "cxwsss.online",
+                    "alias_count": 0,
+                    "state_key": "vend-1",
+                }
+            ],
+        )
+
 
 class AliasEmailLeaseTests(unittest.TestCase):
     def test_alias_email_lease_defaults_to_available_status(self):
