@@ -1,4 +1,5 @@
 import unittest
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from fastapi import BackgroundTasks
@@ -13,6 +14,7 @@ from api.tasks import (
 from core.alias_pool.manager import AliasEmailPoolManager
 from core.base_mailbox import BaseMailbox, MailboxAccount
 from core.base_platform import Account, BasePlatform
+from core.alias_pool.vend_email_state import VendEmailServiceState
 
 
 class _FakeMailbox(BaseMailbox):
@@ -27,8 +29,8 @@ class _FakeMailbox(BaseMailbox):
         account: MailboxAccount,
         keyword: str = "",
         timeout: int = 120,
-        before_ids: set = None,
-        code_pattern: str = None,
+        before_ids: set[Any] | None = None,
+        code_pattern: str | None = None,
         **kwargs,
     ) -> str:
         def poll_once():
@@ -66,8 +68,8 @@ class _FakeAliasMailbox(_FakeMailbox):
         account: MailboxAccount,
         keyword: str = "",
         timeout: int = 120,
-        before_ids: set = None,
-        code_pattern: str = None,
+        before_ids: set[Any] | None = None,
+        code_pattern: str | None = None,
         **kwargs,
     ) -> str:
         return "123456"
@@ -89,15 +91,127 @@ class _MailboxFactory:
         return mailbox
 
 
+class _FakeVendEmailStateStore:
+    def __init__(self):
+        self.loaded_keys = []
+        self.saved_states = []
+
+    def load(self, state_key: str) -> VendEmailServiceState:
+        self.loaded_keys.append(state_key)
+        return VendEmailServiceState(
+            state_key=state_key,
+            service_email="vendcap202604170108@cxwsss.online",
+            mailbox_email="real@example.com",
+            service_password="vend-service-pass",
+        )
+
+    def save(self, state: VendEmailServiceState) -> None:
+        self.saved_states.append(state)
+
+
+class _FakeVendEmailRuntime:
+    def __init__(self):
+        self.calls = []
+
+    def restore_session(self, state):
+        self.calls.append(("restore_session", state.state_key))
+        return True
+
+    def login(self, state, source: dict):
+        self.calls.append(("login", source.get("id")))
+        return False
+
+    def register(self, state, source: dict):
+        self.calls.append(("register", source.get("id")))
+        return False
+
+    def list_aliases(self, state, source: dict):
+        self.calls.append(("list_aliases", source.get("id"), state.state_key))
+        return [
+            "vendcapdemo20260417@serf.me",
+            "vendcapdemo20260418@serf.me",
+        ]
+
+    def create_aliases(self, state, source: dict, missing_count: int):
+        self.calls.append(("create_aliases", missing_count))
+        return []
+
+    def capture_summary(self):
+        self.calls.append(("capture_summary",))
+        return [
+            {
+                "name": "register",
+                "url": "https://www.vend.email/auth",
+                "method": "POST",
+                "request_headers_whitelist": {"content-type": "application/x-www-form-urlencoded"},
+                "request_body_excerpt": (
+                    "user[name]=vendcap202604170108&"
+                    "user[email]=vendcap202604170108%40cxwsss.online&"
+                    "user[password]=vend-service-pass"
+                ),
+                "response_status": 200,
+                "response_body_excerpt": '{"ok":true}',
+                "captured_at": "2026-04-17T01:08:00+08:00",
+            },
+            {
+                "name": "confirmation",
+                "url": "https://www.vend.email/auth/confirmation",
+                "method": "POST",
+                "request_headers_whitelist": {"content-type": "application/x-www-form-urlencoded"},
+                "request_body_excerpt": "user[email]=vendcap202604170108%40cxwsss.online",
+                "response_status": 200,
+                "response_body_excerpt": '{"ok":true}',
+                "captured_at": "2026-04-17T01:09:00+08:00",
+            },
+            {
+                "name": "login",
+                "url": "https://www.vend.email/auth/login",
+                "method": "POST",
+                "request_headers_whitelist": {"content-type": "application/x-www-form-urlencoded"},
+                "request_body_excerpt": "user[email]=vendcap202604170108%40cxwsss.online",
+                "response_status": 200,
+                "response_body_excerpt": '{"ok":true}',
+                "captured_at": "2026-04-17T01:10:00+08:00",
+            },
+            {
+                "name": "create_forwarder",
+                "url": "https://www.vend.email/forwarders",
+                "method": "POST",
+                "request_headers_whitelist": {"content-type": "application/x-www-form-urlencoded"},
+                "request_body_excerpt": (
+                    "forwarder[local_part]=vendcapdemo20260417&"
+                    "forwarder[domain_id]=42&"
+                    "forwarder[recipient]=admin%40cxwsss.online"
+                ),
+                "response_status": 200,
+                "response_body_excerpt": '{"email":"vendcapdemo20260417@serf.me"}',
+                "captured_at": "2026-04-17T01:11:00+08:00",
+            },
+        ]
+
+
+class _VendEmailRuntimeBuilder:
+    def __init__(self):
+        self.instances = []
+        self.sources = []
+
+    def __call__(self, source: dict):
+        self.sources.append(dict(source))
+        runtime = _FakeVendEmailRuntime()
+        self.instances.append(runtime)
+        return runtime
+
+
 class _FakePlatform(BasePlatform):
     name = "fake"
     display_name = "Fake"
 
     def __init__(self, config=None, mailbox=None):
-        super().__init__(config)
+        super().__init__(cast(Any, config))
         self.mailbox = mailbox
 
-    def register(self, email: str, password: str = None) -> Account:
+    def register(self, email: str, password: str | None = None) -> Account:
+        assert self.mailbox is not None
         account = self.mailbox.get_email()
         self.mailbox.wait_for_code(account, timeout=1)
         return Account(
@@ -111,7 +225,8 @@ class _FakePlatform(BasePlatform):
 
 
 class _PoolAwarePlatform(_FakePlatform):
-    def register(self, email: str, password: str = None) -> Account:
+    def register(self, email: str, password: str | None = None) -> Account:
+        assert self.mailbox is not None
         pool = self.mailbox._task_alias_pool
         assert pool is not None
         lease = pool.acquire_alias()
@@ -129,14 +244,14 @@ class _FakeChatGPTWorkspacePlatform(BasePlatform):
     _counter = 0
 
     def __init__(self, config=None, mailbox=None):
-        super().__init__(config)
+        super().__init__(cast(Any, config))
         self.mailbox = mailbox
 
     @classmethod
     def reset_counter(cls):
         cls._counter = 0
 
-    def register(self, email: str, password: str = None) -> Account:
+    def register(self, email: str, password: str | None = None) -> Account:
         type(self)._counter += 1
         index = type(self)._counter
         return Account(
@@ -382,6 +497,154 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         for account in saved_accounts:
             self.assertTrue(account.email.startswith("msiabc."))
             self.assertTrue(account.email.endswith("@manyme.com"))
+
+    def test_run_register_builds_task_pool_via_vend_email_source(self):
+        task_id = "task-vend-email-producer-path"
+        created_state_stores = []
+
+        def _build_state_store(current_task_id: str):
+            self.assertEqual(current_task_id, task_id)
+            store = _FakeVendEmailStateStore()
+            created_state_stores.append(store)
+            return store
+
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-email-primary",
+                        "type": "vend_email",
+                        "register_url": "https://vend.example/register",
+                        "mailbox_base_url": "https://mailbox.example/base",
+                        "mailbox_email": "real@example.com",
+                        "mailbox_password": "secret-pass",
+                        "alias_domain": "vend.example.com",
+                        "alias_count": 2,
+                        "state_key": "vend-email-state-key",
+                    }
+                ],
+                "vend_email_runtime_builder": _VendEmailRuntimeBuilder(),
+                "vend_email_state_store_factory": _build_state_store,
+            },
+            count=2,
+            concurrency=1,
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+        saved_accounts = []
+        runtime_builder = req.extra["vend_email_runtime_builder"]
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch(
+                "core.db.save_account",
+                side_effect=lambda account: saved_accounts.append(account) or account,
+            ),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(mailbox_factory.instances), 2)
+        first_mailbox, second_mailbox = mailbox_factory.instances
+        self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
+        self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
+        self.assertEqual(
+            [account.email for account in saved_accounts],
+            ["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
+        )
+        self.assertEqual(len(runtime_builder.instances), 1)
+        self.assertEqual(len(created_state_stores), 1)
+        self.assertEqual(created_state_stores[0].loaded_keys, ["vend-email-state-key"])
+        self.assertEqual(len(created_state_stores[0].saved_states), 1)
+        self.assertEqual(
+            created_state_stores[0].saved_states[0].service_email,
+            "vendcap202604170108@cxwsss.online",
+        )
+        self.assertEqual(
+            created_state_stores[0].saved_states[0].mailbox_email,
+            "real@example.com",
+        )
+        self.assertEqual(
+            created_state_stores[0].saved_states[0].service_password,
+            "vend-service-pass",
+        )
+        self.assertNotEqual(
+            created_state_stores[0].saved_states[0].service_password,
+            req.extra["sources"][0]["mailbox_password"],
+        )
+        self.assertEqual(
+            [record.name for record in created_state_stores[0].saved_states[0].last_capture_summary],
+            ["register", "confirmation", "login", "create_forwarder"],
+        )
+        self.assertEqual(
+            runtime_builder.sources,
+            [
+                {
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://vend.example/register",
+                    "mailbox_base_url": "https://mailbox.example/base",
+                    "mailbox_email": "real@example.com",
+                    "mailbox_password": "secret-pass",
+                    "alias_domain": "vend.example.com",
+                    "alias_count": 2,
+                    "state_key": "vend-email-state-key",
+                }
+            ],
+        )
+
+    def test_run_register_propagates_internal_type_error_from_vend_email_state_store_factory(self):
+        task_id = "task-vend-email-factory-type-error"
+
+        def _broken_state_store_factory(current_task_id: str, current_source_id: str):
+            self.assertEqual(current_task_id, task_id)
+            self.assertEqual(current_source_id, "vend-email-primary")
+            raise TypeError("state store exploded internally")
+
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-email-primary",
+                        "type": "vend_email",
+                        "register_url": "https://vend.example/register",
+                        "mailbox_base_url": "https://mailbox.example/base",
+                        "mailbox_email": "real@example.com",
+                        "mailbox_password": "secret-pass",
+                        "alias_domain": "vend.example.com",
+                        "alias_count": 2,
+                        "state_key": "vend-email-state-key",
+                    }
+                ],
+                "vend_email_runtime_builder": _VendEmailRuntimeBuilder(),
+                "vend_email_state_store_factory": _broken_state_store_factory,
+            },
+            count=1,
+            concurrency=1,
+        )
+        _create_task_record(task_id, req, "manual", None)
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=_MailboxFactory()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        snapshot = _task_store.snapshot(task_id)
+        self.assertEqual(snapshot["status"], "failed")
+        self.assertEqual(snapshot["error"], "state store exploded internally")
+        self.assertEqual(snapshot["errors"], [])
 
     def test_create_register_task_keeps_alias_config_in_request(self):
         req = self._build_request(

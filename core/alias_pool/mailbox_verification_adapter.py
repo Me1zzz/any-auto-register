@@ -1,13 +1,4 @@
-from __future__ import annotations
-
 from typing import Any
-
-"""Helpers for vend mailbox verification request fragments.
-
-The helpers stay configuration-driven so callers can supply different mailbox
-base URLs and anchors, but this module intentionally targets one mailbox web
-API request shape rather than a provider-agnostic mailbox abstraction.
-"""
 
 
 _LINK_BOUNDARY_CHARACTERS = ' \t\r\n\"\'<> '
@@ -43,22 +34,13 @@ def extract_token_from_storage(session_storage: dict[str, Any]) -> str:
     return ""
 
 
-def build_mailbox_login_payload(*, mailbox_email: str, mailbox_password: str) -> dict[str, str]:
-    return {"email": mailbox_email, "password": mailbox_password}
-
-
-def build_mailbox_email_list_request(
-    *,
-    mailbox_base_url: str,
-    token: str,
-    account_id: int = 1,
-) -> dict[str, Any]:
+def build_mailbox_email_list_request(*, mailbox_base_url: str, token: str) -> dict[str, Any]:
     base_url = str(mailbox_base_url or "").rstrip("/")
     return {
         "method": "GET",
         "url": f"{base_url}/api/email/list",
         "params": {
-            "accountId": int(account_id),
+            "accountId": 1,
             "allReceive": 1,
             "emailId": 0,
             "timeSort": 0,
@@ -68,23 +50,6 @@ def build_mailbox_email_list_request(
         "headers": {
             "authorization": str(token),
         },
-    }
-
-
-def build_mailbox_web_list_request(*, mailbox_base_url: str, account_id: int, token: str) -> dict[str, object]:
-    request = build_mailbox_email_list_request(
-        mailbox_base_url=mailbox_base_url,
-        token=token,
-        account_id=account_id,
-    )
-    params = request["params"]
-    query_string = (
-        f"accountId={params['accountId']}&allReceive={params['allReceive']}&emailId={params['emailId']}"
-        f"&timeSort={params['timeSort']}&size={params['size']}&type={params['type']}"
-    )
-    return {
-        "url": f"{request['url']}?{query_string}",
-        "headers": dict(request["headers"]),
     }
 
 
@@ -113,7 +78,3 @@ def extract_anchored_link_from_message_content(
 
     end_index = _find_link_end_index(content, start_index)
     return content[start_index:end_index]
-
-
-def extract_confirmation_link(*, content: str, anchor_prefix: str) -> str:
-    return extract_anchored_link_from_message_content(content, link_anchor=anchor_prefix)
