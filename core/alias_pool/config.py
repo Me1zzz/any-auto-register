@@ -75,6 +75,45 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
                     "middle_length_max": max_length,
                 }
             )
+            continue
+
+        if source_type == "vend_email":
+            confirmation_anchor = str(
+                item.get("confirmation_anchor")
+                or item.get("confirmation_anchor_prefix")
+                or ""
+            ).strip()
+            if confirmation_anchor.endswith("?"):
+                confirmation_anchor = confirmation_anchor[:-1]
+
+            normalized.append(
+                {
+                    "id": source_id,
+                    "type": "vend_email",
+                    "register_url": str(item.get("register_url") or "").strip(),
+                    "mailbox_base_url": str(item.get("mailbox_base_url") or "").strip(),
+                    "mailbox_email": str(item.get("mailbox_email") or "").strip().lower(),
+                    "mailbox_password": str(item.get("mailbox_password") or "").strip(),
+                    "service_email": str(
+                        item.get("service_email") or item.get("mailbox_service_email") or ""
+                    )
+                    .strip()
+                    .lower(),
+                    "service_password": str(
+                        item.get("service_password")
+                        or item.get("mailbox_service_password")
+                        or item.get("mailbox_password")
+                        or ""
+                    ).strip(),
+                    "mailbox_account_id": _parse_int(item.get("mailbox_account_id"), 0),
+                    "mailbox_token": str(item.get("mailbox_token") or "").strip(),
+                    "confirmation_anchor": confirmation_anchor,
+                    "alias_domain": str(item.get("alias_domain") or "").strip().lower(),
+                    "alias_domain_id": str(item.get("alias_domain_id") or "").strip(),
+                    "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
+                    "state_key": str(item.get("state_key") or source_id).strip() or source_id,
+                }
+            )
     return normalized
 
 
