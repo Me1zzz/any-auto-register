@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from core.alias_pool.config import normalize_cloudmail_alias_pool_config
+from core.alias_pool.probe import AliasSourceProbeService
 from core.config_store import config_store
 from services.mail_imports import MailImportExecuteRequest, MailImportSnapshotRequest, mail_import_registry
 
@@ -36,6 +38,7 @@ CONFIG_KEYS = [
     "cloudmail_alias_enabled",
     "cloudmail_alias_emails",
     "cloudmail_alias_mailbox_email",
+    "sources",
     "cloudmail_timeout",
     "mail_provider",
     "outlook_backend",
@@ -119,6 +122,12 @@ class AppleMailImportRequest(BaseModel):
     bind_to_config: bool = True
 
 
+class AliasGenerationTestRequest(BaseModel):
+    sourceId: str
+    useDraftConfig: bool = False
+    config: dict = Field(default_factory=dict)
+
+
 @router.get("")
 def get_config():
     all_cfg = config_store.get_all()
@@ -154,6 +163,31 @@ def update_config(body: ConfigUpdate):
         safe["mail_provider"] = "microsoft"
     config_store.set_many(safe)
     return {"ok": True, "updated": list(safe.keys())}
+
+
+@router.post("/alias-test")
+def alias_generation_test(body: AliasGenerationTestRequest):
+    merged = config_store.get_all().copy()
+    if body.useDraftConfig:
+        merged.update(body.config or {})
+
+    result = AliasSourceProbeService().probe(
+        pool_config=normalize_cloudmail_alias_pool_config(merged, task_id="alias-test"),
+        source_id=body.sourceId,
+        task_id="alias-test",
+    )
+    return {
+        "ok": result.ok,
+        "sourceId": result.source_id,
+        "sourceType": result.source_type,
+        "aliasEmail": result.alias_email,
+        "realMailboxEmail": result.real_mailbox_email,
+        "serviceEmail": result.service_email,
+        "captureSummary": result.capture_summary,
+        "steps": result.steps,
+        "logs": result.logs,
+        "error": result.error,
+    }
 
 
 @router.post("/applemail/import")
