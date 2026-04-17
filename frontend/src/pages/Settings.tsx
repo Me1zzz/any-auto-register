@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { App, Card, Form, Input, Select, Button, message, Tabs, Space, Tag, Typography, Modal, QRCode, Switch, Alert } from 'antd'
 import {
   SaveOutlined,
@@ -14,6 +14,12 @@ import {
   LockOutlined,
 } from '@ant-design/icons'
 import { parseBooleanConfigValue } from '@/lib/configValueParsers'
+import AliasGenerationTestCard from '@/components/settings/AliasGenerationTestCard'
+import {
+  createAliasGenerationTestDraftConfig,
+  deriveAliasGenerationSourceOptions,
+  type AliasGenerationTestDraftConfig,
+} from '@/lib/aliasGenerationTest'
 import MailImportPanel from '@/components/settings/MailImportPanel'
 import { apiFetch } from '@/lib/utils'
 
@@ -1613,12 +1619,26 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [activeTab, setActiveTab] = useState('register')
+  const allFormValues = (Form.useWatch([], form) as Record<string, unknown> | undefined) || {}
+  const [savedAliasGenerationConfig, setSavedAliasGenerationConfig] = useState<AliasGenerationTestDraftConfig>({})
+  const aliasGenerationDraftConfig = useMemo(
+    () => createAliasGenerationTestDraftConfig(allFormValues),
+    [allFormValues],
+  )
   const currentMailProviderRaw = String(Form.useWatch('mail_provider', form) || '')
   const currentMailImportSource = String(Form.useWatch('mail_import_source', form) || 'microsoft')
   const currentMailProvider = resolveEffectiveMailProvider(currentMailProviderRaw, currentMailImportSource)
   const showFloatingSaveButton = activeTab === 'mailbox' || activeTab === 'chatgpt'
   const contentPaneRef = useRef<HTMLDivElement | null>(null)
   const [floatingSaveBounds, setFloatingSaveBounds] = useState<{ left: number; width: number } | null>(null)
+  const draftAliasSourceOptions = useMemo(
+    () => deriveAliasGenerationSourceOptions(aliasGenerationDraftConfig),
+    [aliasGenerationDraftConfig],
+  )
+  const savedAliasSourceOptions = useMemo(
+    () => deriveAliasGenerationSourceOptions(savedAliasGenerationConfig),
+    [savedAliasGenerationConfig],
+  )
 
   useEffect(() => {
     apiFetch('/config').then((data) => {
@@ -1660,6 +1680,7 @@ export default function Settings() {
       if (!data.cloudmail_timeout) {
         data.cloudmail_timeout = 30
       }
+      setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig(data))
       data.cpa_enabled = resolveFeatureEnabledConfig(
         data.cpa_enabled,
         Boolean(String(data.cpa_api_url ?? '').trim()),
@@ -1751,6 +1772,7 @@ export default function Settings() {
         cfworker_random_name_subdomain: values.cfworker_random_name_subdomain,
         contribution_enabled: values.contribution_enabled,
       })
+      setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig(values))
       message.success('保存成功')
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -1850,6 +1872,11 @@ export default function Settings() {
                         <ConfigSection key={section.title} section={section} />
                       ))}
                       {currentMailProviderRaw !== 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
+                      <AliasGenerationTestCard
+                        draftConfig={aliasGenerationDraftConfig}
+                        draftSourceOptions={draftAliasSourceOptions}
+                        savedSourceOptions={savedAliasSourceOptions}
+                      />
                     </>
                   ) : activeTab === 'register' ? (
                     <RegisterSettingsSection form={form} />
