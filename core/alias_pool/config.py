@@ -1,6 +1,8 @@
 import json
 from typing import Any
 
+from .provider_contracts import AliasProviderSourceSpec
+
 
 VEND_EMAIL_DEFAULT_CONFIG = {
     "source_id": "vend-email-primary",
@@ -60,6 +62,107 @@ def _parse_string(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _build_vend_confirmation_inbox_config(
+    item: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(payload or {})
+    raw_confirmation_inbox = item.get("confirmation_inbox")
+    confirmation_inbox = raw_confirmation_inbox if isinstance(raw_confirmation_inbox, dict) else {}
+
+    api_base = _parse_string(confirmation_inbox.get("api_base") or confirmation_inbox.get("base_url")) or _parse_string(
+        item.get("cloudmail_api_base")
+    ) or _parse_string(payload.get("cloudmail_api_base"))
+    admin_email = _parse_string(confirmation_inbox.get("admin_email")) or _parse_string(
+        item.get("cloudmail_admin_email")
+    ) or _parse_string(payload.get("cloudmail_admin_email"))
+    admin_password = _parse_string(confirmation_inbox.get("admin_password")) or _parse_string(
+        item.get("cloudmail_admin_password")
+    ) or _parse_string(payload.get("cloudmail_admin_password"))
+    domain = confirmation_inbox.get("domain") or item.get("cloudmail_domain") or payload.get("cloudmail_domain") or ""
+    subdomain = _parse_string(confirmation_inbox.get("subdomain")) or _parse_string(
+        item.get("cloudmail_subdomain")
+    ) or _parse_string(payload.get("cloudmail_subdomain"))
+    timeout = _parse_int(
+        confirmation_inbox.get("timeout")
+        if confirmation_inbox.get("timeout") not in (None, "")
+        else item.get("cloudmail_timeout")
+        if item.get("cloudmail_timeout") not in (None, "")
+        else payload.get("cloudmail_timeout"),
+        30,
+    )
+    account_email = _parse_string(confirmation_inbox.get("account_email") or confirmation_inbox.get("email")) or _parse_string(
+        item.get("mailbox_email")
+    ) or _parse_string(payload.get("mailbox_email")) or _parse_string(payload.get("cloudmail_alias_mailbox_email"))
+    account_password = _parse_string(confirmation_inbox.get("account_password") or confirmation_inbox.get("password")) or _parse_string(
+        item.get("mailbox_password")
+    ) or _parse_string(payload.get("mailbox_password"))
+    base_url = _parse_string(confirmation_inbox.get("base_url")) or _parse_string(item.get("mailbox_base_url")) or _parse_string(
+        payload.get("mailbox_base_url")
+    )
+    match_email = _parse_string(confirmation_inbox.get("match_email")) or account_email
+    provider = _parse_string(confirmation_inbox.get("provider"))
+    if not provider and any(
+        [api_base, admin_email, admin_password, str(domain or "").strip(), subdomain, account_email, account_password, base_url]
+    ):
+        provider = "cloudmail"
+
+    normalized: dict[str, Any] = {}
+    if provider:
+        normalized["provider"] = provider
+    if api_base:
+        normalized["api_base"] = api_base
+    if base_url:
+        normalized["base_url"] = base_url
+    if admin_email:
+        normalized["admin_email"] = admin_email
+    if admin_password:
+        normalized["admin_password"] = admin_password
+    if domain:
+        normalized["domain"] = domain
+    if subdomain:
+        normalized["subdomain"] = subdomain
+    if normalized:
+        normalized["timeout"] = timeout
+    if account_email:
+        normalized["account_email"] = account_email
+    if account_password:
+        normalized["account_password"] = account_password
+    if match_email:
+        normalized["match_email"] = match_email
+    return normalized
+
+
+def _decode_vend_source(item: dict[str, Any], source_id: str) -> dict[str, Any]:
+    vend_item: dict[str, Any] = {
+        "id": source_id,
+        "type": "vend_email",
+    }
+
+    ordered_optional_fields = [
+        "register_url",
+        "cloudmail_api_base",
+        "cloudmail_admin_email",
+        "cloudmail_admin_password",
+        "cloudmail_domain",
+        "cloudmail_subdomain",
+        "cloudmail_timeout",
+        "alias_domain",
+        "alias_domain_id",
+        "alias_count",
+    ]
+    for field_name in ordered_optional_fields:
+        if field_name in item:
+            vend_item[field_name] = item.get(field_name)
+
+    confirmation_inbox = _build_vend_confirmation_inbox_config(item)
+    if confirmation_inbox:
+        vend_item["confirmation_inbox"] = confirmation_inbox
+
+    vend_item["state_key"] = item.get("state_key") or source_id
+    return vend_item
+
+
 def _hydrate_explicit_vend_sources(
     explicit_sources: list[dict[str, Any]],
     payload: dict[str, Any],
@@ -80,30 +183,32 @@ def _hydrate_explicit_vend_sources(
 
         alias_domain = _parse_string(source.get("alias_domain")) or default_alias_domain
         alias_domain_id = _parse_string(source.get("alias_domain_id")) or default_alias_domain_id
+        confirmation_inbox = _build_vend_confirmation_inbox_config(source, payload)
 
-        hydrated.append(
-            {
-                **source,
-                "register_url": register_url,
-                "cloudmail_api_base": _parse_string(source.get("cloudmail_api_base"))
-                or _parse_string(payload.get("cloudmail_api_base")),
-                "cloudmail_admin_email": _parse_string(source.get("cloudmail_admin_email"))
-                or _parse_string(payload.get("cloudmail_admin_email")),
-                "cloudmail_admin_password": _parse_string(source.get("cloudmail_admin_password"))
-                or _parse_string(payload.get("cloudmail_admin_password")),
-                "cloudmail_domain": source.get("cloudmail_domain")
-                or payload.get("cloudmail_domain")
-                or "",
-                "cloudmail_subdomain": _parse_string(source.get("cloudmail_subdomain"))
-                or _parse_string(payload.get("cloudmail_subdomain")),
-                "cloudmail_timeout": _parse_int(
-                    source.get("cloudmail_timeout") if source.get("cloudmail_timeout") not in (None, "") else payload.get("cloudmail_timeout"),
-                    30,
-                ),
-                "alias_domain": alias_domain,
-                "alias_domain_id": alias_domain_id,
-            }
-        )
+        hydrated_source = {
+            **source,
+            "register_url": register_url,
+            "cloudmail_api_base": _parse_string(source.get("cloudmail_api_base"))
+            or _parse_string(payload.get("cloudmail_api_base")),
+            "cloudmail_admin_email": _parse_string(source.get("cloudmail_admin_email"))
+            or _parse_string(payload.get("cloudmail_admin_email")),
+            "cloudmail_admin_password": _parse_string(source.get("cloudmail_admin_password"))
+            or _parse_string(payload.get("cloudmail_admin_password")),
+            "cloudmail_domain": source.get("cloudmail_domain")
+            or payload.get("cloudmail_domain")
+            or "",
+            "cloudmail_subdomain": _parse_string(source.get("cloudmail_subdomain"))
+            or _parse_string(payload.get("cloudmail_subdomain")),
+            "cloudmail_timeout": _parse_int(
+                source.get("cloudmail_timeout") if source.get("cloudmail_timeout") not in (None, "") else payload.get("cloudmail_timeout"),
+                30,
+            ),
+            "alias_domain": alias_domain,
+            "alias_domain_id": alias_domain_id,
+        }
+        if confirmation_inbox:
+            hydrated_source["confirmation_inbox"] = confirmation_inbox
+        hydrated.append(hydrated_source)
 
     return hydrated
 
@@ -141,19 +246,6 @@ def _merge_sources(
         if source_type == "vend_email":
             merged_source = dict(source)
             merged_source.update(existing)
-            for field_key, value in source.items():
-                if field_key in {
-                    "register_url",
-                    "cloudmail_api_base",
-                    "cloudmail_admin_email",
-                    "cloudmail_admin_password",
-                    "cloudmail_domain",
-                    "cloudmail_subdomain",
-                    "cloudmail_timeout",
-                    "alias_domain",
-                    "alias_domain_id",
-                }:
-                    merged_source[field_key] = value
             by_key[source_key] = merged_source
 
     ordered_keys = ["static_list", "simple_generator"]
@@ -224,6 +316,17 @@ def _build_cloudmail_alias_sources(payload: dict[str, Any]) -> list[dict[str, An
                     "cloudmail_domain": payload.get("cloudmail_domain") or "",
                     "cloudmail_subdomain": _parse_string(payload.get("cloudmail_subdomain")),
                     "cloudmail_timeout": _parse_int(payload.get("cloudmail_timeout"), 30),
+                    "confirmation_inbox": _build_vend_confirmation_inbox_config(
+                        {
+                            "cloudmail_api_base": _parse_string(payload.get("cloudmail_api_base")),
+                            "cloudmail_admin_email": _parse_string(payload.get("cloudmail_admin_email")),
+                            "cloudmail_admin_password": _parse_string(payload.get("cloudmail_admin_password")),
+                            "cloudmail_domain": payload.get("cloudmail_domain") or "",
+                            "cloudmail_subdomain": _parse_string(payload.get("cloudmail_subdomain")),
+                            "cloudmail_timeout": _parse_int(payload.get("cloudmail_timeout"), 30),
+                            "mailbox_email": _parse_string(payload.get("cloudmail_alias_mailbox_email")),
+                        }
+                    ),
                     "alias_domain": str(VEND_EMAIL_DEFAULT_CONFIG["alias_domain"]),
                     "alias_domain_id": str(VEND_EMAIL_DEFAULT_CONFIG["alias_domain_id"]),
                     "alias_count": max(
@@ -292,24 +395,97 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
             continue
 
         if source_type == "vend_email":
-            normalized.append(
+            confirmation_inbox = _build_vend_confirmation_inbox_config(item)
+            vend_source = {
+                "id": source_id,
+                "type": "vend_email",
+                "register_url": str(item.get("register_url") or "").strip(),
+                "cloudmail_api_base": str(item.get("cloudmail_api_base") or "").strip(),
+                "cloudmail_admin_email": str(item.get("cloudmail_admin_email") or "").strip(),
+                "cloudmail_admin_password": str(item.get("cloudmail_admin_password") or "").strip(),
+                "cloudmail_domain": item.get("cloudmail_domain") or "",
+                "cloudmail_subdomain": str(item.get("cloudmail_subdomain") or "").strip(),
+                "cloudmail_timeout": _parse_int(item.get("cloudmail_timeout"), 30),
+                "alias_domain": str(item.get("alias_domain") or "").strip().lower(),
+                "alias_domain_id": str(item.get("alias_domain_id") or "").strip(),
+                "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
+                "state_key": str(item.get("state_key") or source_id).strip() or source_id,
+            }
+            if confirmation_inbox:
+                vend_source["confirmation_inbox"] = confirmation_inbox
+            normalized.append(vend_source)
+    return normalized
+
+
+def decode_alias_provider_sources(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        parsed = value
+    else:
+        raw = str(value or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    sanitized: list[dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+
+        source_type = _parse_string(item.get("type"))
+        source_id = _parse_string(item.get("id"))
+        if source_type == "static_list":
+            sanitized.append(
                 {
                     "id": source_id,
-                    "type": "vend_email",
-                    "register_url": str(item.get("register_url") or "").strip(),
-                    "cloudmail_api_base": str(item.get("cloudmail_api_base") or "").strip(),
-                    "cloudmail_admin_email": str(item.get("cloudmail_admin_email") or "").strip(),
-                    "cloudmail_admin_password": str(item.get("cloudmail_admin_password") or "").strip(),
-                    "cloudmail_domain": item.get("cloudmail_domain") or "",
-                    "cloudmail_subdomain": str(item.get("cloudmail_subdomain") or "").strip(),
-                    "cloudmail_timeout": _parse_int(item.get("cloudmail_timeout"), 30),
-                    "alias_domain": str(item.get("alias_domain") or "").strip().lower(),
-                    "alias_domain_id": str(item.get("alias_domain_id") or "").strip(),
-                    "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
-                    "state_key": str(item.get("state_key") or source_id).strip() or source_id,
+                    "type": "static_list",
+                    "emails": _parse_alias_emails(item.get("emails")),
                 }
             )
-    return normalized
+            continue
+
+        if source_type == "simple_generator":
+            sanitized.append(
+                {
+                    "id": source_id,
+                    "type": "simple_generator",
+                    "prefix": item.get("prefix") or "",
+                    "suffix": item.get("suffix") or "",
+                    "count": item.get("count"),
+                    "middle_length_min": item.get("middle_length_min"),
+                    "middle_length_max": item.get("middle_length_max"),
+                }
+            )
+            continue
+
+        if source_type == "vend_email":
+            sanitized.append(_decode_vend_source(item, source_id))
+
+    return sanitized
+
+
+def encode_alias_provider_sources(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+
+    sanitized = decode_alias_provider_sources(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+        if not isinstance(parsed, list):
+            return ""
+
+    return json.dumps(sanitized, ensure_ascii=False)
 
 
 def normalize_cloudmail_alias_pool_config(
@@ -344,3 +520,67 @@ def normalize_cloudmail_alias_pool_config(
             }
         ],
     }
+
+
+def build_alias_provider_source_specs(pool_config: dict[str, Any]) -> list[AliasProviderSourceSpec]:
+    specs: list[AliasProviderSourceSpec] = []
+
+    for source in list(pool_config.get("sources") or []):
+        provider_type = _parse_string(source.get("type"))
+        source_id = _parse_string(source.get("id"))
+        if not provider_type or not source_id:
+            continue
+
+        confirmation_inbox_config: dict[str, Any] = {}
+        if provider_type == "vend_email":
+            confirmation_inbox_config = {
+                "api_base": _parse_string(source.get("cloudmail_api_base")),
+                "admin_email": _parse_string(source.get("cloudmail_admin_email")),
+                "admin_password": _parse_string(source.get("cloudmail_admin_password")),
+                "domain": source.get("cloudmail_domain") or "",
+                "subdomain": _parse_string(source.get("cloudmail_subdomain")),
+                "timeout": _parse_int(source.get("cloudmail_timeout"), 30),
+            }
+            explicit_confirmation_inbox = source.get("confirmation_inbox")
+            if isinstance(explicit_confirmation_inbox, dict):
+                for key in (
+                    "provider",
+                    "base_url",
+                    "api_base",
+                    "admin_email",
+                    "admin_password",
+                    "domain",
+                    "subdomain",
+                    "timeout",
+                    "account_email",
+                    "account_password",
+                    "match_email",
+                ):
+                    value = explicit_confirmation_inbox.get(key)
+                    if value in (None, ""):
+                        continue
+                    confirmation_inbox_config[key] = value
+
+        specs.append(
+            AliasProviderSourceSpec(
+                source_id=source_id,
+                provider_type=provider_type,
+                raw_source=dict(source),
+                desired_alias_count=max(
+                    _parse_int(
+                        source.get("alias_count")
+                        if source.get("alias_count") not in (None, "")
+                        else source.get("count"),
+                        0,
+                    ),
+                    0,
+                ),
+                state_key=_parse_string(source.get("state_key")) or source_id,
+                register_url=_parse_string(source.get("register_url")),
+                alias_domain=_parse_string(source.get("alias_domain")).lower(),
+                alias_domain_id=_parse_string(source.get("alias_domain_id")),
+                confirmation_inbox_config=confirmation_inbox_config,
+            )
+        )
+
+    return specs
