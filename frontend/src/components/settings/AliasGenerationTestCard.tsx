@@ -3,6 +3,7 @@ import { Alert, Button, Card, Checkbox, Descriptions, Empty, Select, Space, Tabl
 
 import {
   buildAliasGenerationTestDisplay,
+  getAliasGenerationSourceTypeLabel,
   resolveAliasGenerationModeSourceOptions,
   runAliasGenerationTest,
   type AliasGenerationSourceOption,
@@ -155,7 +156,7 @@ export default function AliasGenerationTestCard({
   const selectOptions = useMemo(
     () =>
       modeDetails.sourceOptions.map((source) => ({
-        label: `${source.id} (${source.type})`,
+        label: `${source.id} (${getAliasGenerationSourceTypeLabel(source.type)})`,
         value: source.id,
       })),
     [modeDetails.sourceOptions],
@@ -332,7 +333,7 @@ export default function AliasGenerationTestCard({
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
                     <Space wrap size={[8, 6]}>
                       <Tag color="blue">{displayResult.sourceId || '未返回 Source ID'}</Tag>
-                      <Tag>{displayResult.sourceType || 'unknown'}</Tag>
+                      <Tag>{getAliasGenerationSourceTypeLabel(displayResult.sourceType)}</Tag>
                       {displayResult.currentStage.label ? (
                         <Tag color={hasFailure ? 'error' : 'processing'}>{displayResult.currentStage.label}</Tag>
                       ) : null}

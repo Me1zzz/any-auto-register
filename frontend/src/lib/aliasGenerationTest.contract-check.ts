@@ -1,7 +1,66 @@
 import {
   buildAliasGenerationTestDisplay,
+  type AliasGenerationSourceType,
+  type AliasGenerationTestDraftSource,
   type AliasGenerationTestResponse,
 } from '@/lib/aliasGenerationTest'
+
+const providerTypes: AliasGenerationSourceType[] = [
+  'static_list',
+  'simple_generator',
+  'vend_email',
+  'myalias_pro',
+  'secureinseconds',
+  'emailshield',
+  'simplelogin',
+  'alias_email',
+]
+
+const simpleLoginSource: AliasGenerationTestDraftSource = {
+  id: 'simplelogin-primary',
+  type: 'simplelogin',
+  alias_count: 3,
+  state_key: 'simplelogin-primary',
+  provider_config: {
+    site_url: 'https://simplelogin.io/',
+    accounts: [
+      { email: 'fust@fst.cxwsss.online', label: 'fust' },
+      { email: 'logon@fst.cxwsss.online', label: 'logon', password: 'logon@fst.cxwsss.online' },
+    ],
+  },
+}
+
+const interactiveResponse: AliasGenerationTestResponse = {
+  ok: true,
+  sourceId: 'simplelogin-primary',
+  sourceType: 'simplelogin',
+  aliasEmail: 'sisyrun0419a.relearn763@aleeas.com',
+  realMailboxEmail: 'fust@fst.cxwsss.online',
+  serviceEmail: 'fust@fst.cxwsss.online',
+  accountIdentity: {
+    serviceAccountEmail: 'fust@fst.cxwsss.online',
+    realMailboxEmail: 'fust@fst.cxwsss.online',
+    servicePassword: 'fust@fst.cxwsss.online',
+    username: 'fust',
+  },
+  aliases: [
+    { email: 'sisyrun0419a.relearn763@aleeas.com' },
+    { email: 'sisyrun0419b.onion376@simplelogin.com' },
+    { email: 'sisyrun0419c.skies135@slmails.com' },
+  ],
+  currentStage: { code: 'discover_alias_domains', label: '发现可用域名' },
+  stages: [
+    { code: 'select_service_account', label: '选择服务账号', status: 'completed' },
+    { code: 'login_submit', label: '登录服务账号', status: 'completed' },
+    { code: 'discover_alias_domains', label: '发现可用域名', status: 'completed' },
+    { code: 'create_aliases', label: '创建别名', status: 'completed' },
+  ],
+  failure: { stageCode: '', stageLabel: '', reason: '' },
+  captureSummary: [],
+  steps: [],
+  logs: [],
+  error: '',
+}
 
 const modernResponse: AliasGenerationTestResponse = {
   ok: true,
@@ -65,8 +124,11 @@ const legacyResponse: AliasGenerationTestResponse = {
 
 const modernDisplay = buildAliasGenerationTestDisplay(modernResponse)
 const legacyDisplay = buildAliasGenerationTestDisplay(legacyResponse)
+const interactiveDisplay = buildAliasGenerationTestDisplay(interactiveResponse)
 
 void [
+  providerTypes,
+  simpleLoginSource,
   modernDisplay.summaryAliasEmail,
   modernDisplay.account.realMailboxEmail,
   modernDisplay.account.serviceEmail,
@@ -81,6 +143,9 @@ void [
   legacyDisplay.aliases[0]?.email,
   legacyDisplay.stages[0]?.label,
   legacyDisplay.failure.reason,
+  interactiveDisplay.currentStage.label,
+  interactiveDisplay.stages[2]?.label,
+  interactiveDisplay.aliases[2]?.email,
 ]
 
 export {}

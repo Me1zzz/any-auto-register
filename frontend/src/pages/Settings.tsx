@@ -14,6 +14,7 @@ import {
   LockOutlined,
 } from '@ant-design/icons'
 import { parseBooleanConfigValue } from '@/lib/configValueParsers'
+import AliasGenerationSourceEditor from '@/components/settings/AliasGenerationSourceEditor'
 import AliasGenerationTestCard from '@/components/settings/AliasGenerationTestCard'
 import {
   createAliasGenerationTestDraftConfig,
@@ -729,6 +730,8 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
                 </Typography.Text>
               </Space>
             </Card>
+
+            <AliasGenerationSourceEditor form={form} />
           </>
         ) : null}
       </Space>

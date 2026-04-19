@@ -5,6 +5,152 @@ export type AliasGenerationSourceType =
   | 'static_list'
   | 'simple_generator'
   | 'vend_email'
+  | 'myalias_pro'
+  | 'secureinseconds'
+  | 'emailshield'
+  | 'simplelogin'
+  | 'alias_email'
+
+export const ADDABLE_ALIAS_GENERATION_SOURCE_TYPES: AliasGenerationSourceType[] = [
+  'simple_generator',
+  'myalias_pro',
+  'secureinseconds',
+  'emailshield',
+  'simplelogin',
+  'alias_email',
+]
+
+const LEGACY_MANAGED_ALIAS_GENERATION_SOURCE_TYPES = new Set<AliasGenerationSourceType>([
+  'static_list',
+  'vend_email',
+])
+
+const ALIAS_GENERATION_SOURCE_TYPE_LABELS: Record<string, string> = {
+  static_list: '静态列表',
+  simple_generator: '简单生成器',
+  vend_email: 'Vend Email',
+  myalias_pro: 'MyAlias Pro',
+  secureinseconds: 'SecureInSeconds',
+  emailshield: 'EmailShield',
+  simplelogin: 'SimpleLogin',
+  alias_email: 'Alias Email',
+}
+
+export function getAliasGenerationSourceTypeLabel(type: string): string {
+  return ALIAS_GENERATION_SOURCE_TYPE_LABELS[type] || type || 'unknown'
+}
+
+export function getDefaultAliasGenerationSourceId(
+  type: AliasGenerationSourceType,
+): string {
+  switch (type) {
+    case 'alias_email':
+      return 'alias-email-primary'
+    case 'vend_email':
+      return 'vend-email-primary'
+    default:
+      return `${type.replace(/_/g, '-')}-primary`
+  }
+}
+
+export function createAliasGenerationDraftSourceTemplate(
+  type: AliasGenerationSourceType,
+  sourceId = '',
+): AliasGenerationTestDraftSource {
+  const resolvedSourceId = sourceId.trim() || getDefaultAliasGenerationSourceId(type)
+
+  switch (type) {
+    case 'static_list':
+      return {
+        id: resolvedSourceId,
+        type,
+        emails: '',
+      }
+    case 'simple_generator':
+      return {
+        id: resolvedSourceId,
+        type,
+        prefix: '',
+        suffix: '',
+        count: 3,
+        middle_length_min: 3,
+        middle_length_max: 6,
+      }
+    case 'vend_email':
+      return {
+        id: resolvedSourceId,
+        type,
+        alias_count: 3,
+        state_key: resolvedSourceId,
+      }
+    case 'myalias_pro':
+      return {
+        id: resolvedSourceId,
+        type,
+        alias_count: 3,
+        state_key: resolvedSourceId,
+        confirmation_inbox: {
+          provider: 'cloudmail',
+        },
+        provider_config: {
+          signup_url: 'https://myalias.pro/signup/',
+          login_url: 'https://myalias.pro/login/',
+        },
+      }
+    case 'secureinseconds':
+      return {
+        id: resolvedSourceId,
+        type,
+        alias_count: 3,
+        state_key: resolvedSourceId,
+        confirmation_inbox: {
+          provider: 'cloudmail',
+        },
+        provider_config: {
+          register_url: 'https://alias.secureinseconds.com/auth/register',
+          login_url: 'https://alias.secureinseconds.com/auth/signin',
+        },
+      }
+    case 'emailshield':
+      return {
+        id: resolvedSourceId,
+        type,
+        alias_count: 3,
+        state_key: resolvedSourceId,
+        confirmation_inbox: {
+          provider: 'cloudmail',
+        },
+        provider_config: {
+          register_url: 'https://emailshield.app/accounts/register/',
+          login_url: 'https://emailshield.app/accounts/login/',
+        },
+      }
+    case 'simplelogin':
+      return {
+        id: resolvedSourceId,
+        type,
+        alias_count: 3,
+        state_key: resolvedSourceId,
+        provider_config: {
+          site_url: 'https://simplelogin.io/',
+          accounts: [{ email: '', label: '', password: '' }],
+        },
+      }
+    case 'alias_email':
+      return {
+        id: resolvedSourceId,
+        type,
+        alias_count: 3,
+        state_key: resolvedSourceId,
+        confirmation_inbox: {
+          provider: 'cloudmail',
+        },
+        provider_config: {
+          login_url: 'https://alias.email/users/login/',
+        },
+      }
+  }
+}
 
 export interface AliasGenerationTestDraftSource extends Record<string, unknown> {
   id?: unknown
@@ -26,6 +172,8 @@ export interface AliasGenerationTestDraftSource extends Record<string, unknown> 
   alias_domain_id?: unknown
   alias_count?: unknown
   state_key?: unknown
+  confirmation_inbox?: unknown
+  provider_config?: unknown
 }
 
 export interface AliasGenerationTestDraftConfig {
@@ -192,6 +340,13 @@ const ALIAS_TEST_STAGE_LABELS: Record<string, string> = {
   save_state: '保存预览状态',
   load_source: '加载来源',
   acquire_alias: '生成别名',
+  select_service_account: '选择服务账号',
+  login_submit: '登录服务账号',
+  verify_account_email: '验证账号邮箱',
+  verify_forwarding_email: '验证转发邮箱',
+  request_magic_link: '请求魔法链接',
+  consume_magic_link: '消费魔法链接',
+  discover_alias_domains: '发现可用域名',
 }
 
 function normalizeAliasGenerationStageLabel(code: string, label: string): string {
@@ -480,6 +635,11 @@ function normalizeAliasGenerationDraftSource(
     sourceType !== 'static_list'
     && sourceType !== 'simple_generator'
     && sourceType !== 'vend_email'
+    && sourceType !== 'myalias_pro'
+    && sourceType !== 'secureinseconds'
+    && sourceType !== 'emailshield'
+    && sourceType !== 'simplelogin'
+    && sourceType !== 'alias_email'
   ) {
     return null
   }
@@ -503,6 +663,23 @@ function normalizeAliasGenerationDraftSource(
       count: normalizeNumericFieldValue(source.count),
       middle_length_min: normalizeNumericFieldValue(source.middle_length_min),
       middle_length_max: normalizeNumericFieldValue(source.middle_length_max),
+    }
+  }
+
+  if (
+    sourceType === 'myalias_pro'
+    || sourceType === 'secureinseconds'
+    || sourceType === 'emailshield'
+    || sourceType === 'simplelogin'
+    || sourceType === 'alias_email'
+  ) {
+    return {
+      id: sourceId,
+      type: sourceType,
+      alias_count: normalizeNumericFieldValue(source.alias_count),
+      state_key: stringifyFieldValue(source.state_key),
+      confirmation_inbox: asRecord(source.confirmation_inbox) ?? undefined,
+      provider_config: asRecord(source.provider_config) ?? undefined,
     }
   }
 
@@ -533,6 +710,15 @@ export function normalizeAliasGenerationDraftSources(
   return value
     .map((item, index) => normalizeAliasGenerationDraftSource(item, index))
     .filter((item): item is AliasGenerationTestDraftSource => item !== null)
+}
+
+export function filterEditableAliasGenerationDraftSources(
+  value: unknown,
+): AliasGenerationTestDraftSource[] {
+  return normalizeAliasGenerationDraftSources(value).filter((source) => {
+    const sourceType = String(source.type || '').trim() as AliasGenerationSourceType
+    return !LEGACY_MANAGED_ALIAS_GENERATION_SOURCE_TYPES.has(sourceType)
+  })
 }
 
 export function parseStoredAliasGenerationSources(
