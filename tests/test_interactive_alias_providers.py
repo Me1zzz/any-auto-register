@@ -40,15 +40,18 @@ class _FakeInteractiveProvider(InteractiveAliasProviderBase):
     def __init__(self, *, spec, context):
         super().__init__(spec=spec, context=context)
         self.capture_calls = 0
+        self.seen_contexts = []
 
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
-        return AuthenticatedProviderContext(
+        context = AuthenticatedProviderContext(
             service_account_email="service@example.com",
             confirmation_inbox_email="real@example.com",
             real_mailbox_email="real@example.com",
             service_password="secret-pass",
             username="service",
         )
+        self.seen_contexts.append(context)
+        return context
 
     def resolve_verification_requirements(self, context: AuthenticatedProviderContext):
         return [
@@ -184,6 +187,40 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
         self.assertEqual(store.saved_keys, ["interactive-state-key"])
         self.assertEqual(store.saved[0].known_aliases, ["first@example.com", "created-2@example.com", "created-3@example.com"])
 
+    def test_saved_state_matches_completed_save_state_timeline(self):
+        store = _MemoryStore()
+        provider = _FakeInteractiveProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="interactive-state-key",
+                desired_alias_count=3,
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=True,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(store.saved[0].current_stage, {"code": "save_state", "label": "保存预览状态"})
+        self.assertEqual(store.saved[0].stage_history[-1]["code"], "save_state")
+        self.assertEqual(store.saved[0].stage_history[-1]["status"], "completed")
+        self.assertEqual(
+            [item["code"] for item in store.saved[0].stage_history],
+            [item.code for item in result.stage_timeline],
+        )
+
     def test_shared_loop_returns_structured_failure_when_domain_discovery_fails(self):
         class _FailingProvider(_FakeInteractiveProvider):
             def discover_alias_domains(self, context):
@@ -286,6 +323,56 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
             [lease.alias_email for lease in pool_manager.leases],
             ["first@example.com", "created-3@example.com"],
         )
+
+    def test_loaded_state_seeds_authenticated_context_when_not_fresh(self):
+        loaded_state = InteractiveProviderState(
+            state_key="interactive-state-key",
+            service_account_email="loaded-service@example.com",
+            confirmation_inbox_email="loaded-confirm@example.com",
+            real_mailbox_email="loaded-real@example.com",
+            service_password="loaded-pass",
+            username="loaded-user",
+            session_state={"cookie": "loaded-cookie"},
+            domain_options=[
+                {
+                    "key": "loaded.example.com",
+                    "domain": "loaded.example.com",
+                    "label": "@loaded.example.com",
+                    "raw": {"source": "loaded"},
+                }
+            ],
+        )
+        store = _MemoryStore(state=loaded_state)
+        provider = _FakeInteractiveProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="interactive-state-key",
+                desired_alias_count=3,
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=False,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        seeded_context = provider.seen_contexts[0]
+        self.assertEqual(seeded_context.service_account_email, "service@example.com")
+        self.assertEqual(result.account_identity.service_account_email, "loaded-service@example.com")
+        self.assertEqual(result.account_identity.confirmation_inbox_email, "loaded-confirm@example.com")
+        self.assertEqual(result.account_identity.real_mailbox_email, "loaded-real@example.com")
+        self.assertEqual(result.account_identity.service_password, "loaded-pass")
+        self.assertEqual(result.account_identity.username, "loaded-user")
 
     def test_existing_account_helper_uses_first_configured_account(self):
         provider = _ExistingAccountProvider(

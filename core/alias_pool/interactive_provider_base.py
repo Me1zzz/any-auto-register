@@ -96,6 +96,8 @@ class InteractiveAliasProviderBase:
                 state = self._state_repository.load()
 
             context = self.ensure_authenticated_context("alias_test")
+            if not policy.fresh_service_account:
+                context = self._seed_context_from_state(context, state)
             record("session_ready", "会话已就绪", "completed")
 
             for requirement in self.resolve_verification_requirements(context):
@@ -139,26 +141,29 @@ class InteractiveAliasProviderBase:
             update_last("completed", detail=f"预览共 {len(aliases)} 个别名")
             record("aliases_ready", "别名预览已生成", "completed", detail=f"预览共 {len(aliases)} 个别名")
 
-            self._update_state_from_context(state, context)
-            state.domain_options = [self._domain_to_state_item(item) for item in domains]
-            state.known_aliases = [
-                str(item.get("email") or "").strip().lower()
-                for item in aliases
-                if str(item.get("email") or "").strip()
-            ]
-            state.current_stage = {"code": "aliases_ready", "label": "别名预览已生成"}
-            state.stage_history = [self._stage_to_state_item(item) for item in timeline]
-            state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
-            state.last_error = ""
-            if policy.capture_enabled:
-                state.last_capture_summary = [self._capture_to_state_item(item) for item in self.build_capture_summary()]
-            else:
-                state.last_capture_summary = []
+            capture_summary = self._capture_summary_for_policy(policy)
 
             if policy.persist_state:
                 record("save_state", "保存预览状态", "pending")
-                self._state_repository.save(state)
                 update_last("completed")
+                self._update_state_snapshot(
+                    state,
+                    context=context,
+                    domains=domains,
+                    aliases=aliases,
+                    timeline=timeline,
+                    capture_summary=capture_summary,
+                )
+                self._state_repository.save(state)
+            else:
+                self._update_state_snapshot(
+                    state,
+                    context=context,
+                    domains=domains,
+                    aliases=aliases,
+                    timeline=timeline,
+                    capture_summary=capture_summary,
+                )
 
             return AliasAutomationTestResult(
                 provider_type=self.provider_type,
@@ -174,7 +179,7 @@ class InteractiveAliasProviderBase:
                 current_stage=timeline[-1],
                 stage_timeline=timeline,
                 failure=AliasProviderFailure(),
-                capture_summary=self._capture_summary_for_policy(policy),
+                capture_summary=capture_summary,
                 logs=[],
                 ok=True,
                 error="",
@@ -221,6 +226,26 @@ class InteractiveAliasProviderBase:
             return []
         return self.build_capture_summary()
 
+    def _seed_context_from_state(
+        self,
+        context: AuthenticatedProviderContext,
+        state: InteractiveProviderState,
+    ) -> AuthenticatedProviderContext:
+        domain_options = list(context.domain_options)
+        if not domain_options:
+            domain_options = self._domain_options_from_state(state)
+
+        return replace(
+            context,
+            service_account_email=str(state.service_account_email or context.service_account_email or ""),
+            confirmation_inbox_email=str(state.confirmation_inbox_email or context.confirmation_inbox_email or ""),
+            real_mailbox_email=str(state.real_mailbox_email or context.real_mailbox_email or ""),
+            service_password=str(state.service_password or context.service_password or ""),
+            username=str(state.username or context.username or ""),
+            session_state=dict(state.session_state or context.session_state or {}),
+            domain_options=domain_options,
+        )
+
     def _dedupe_alias_items(self, aliases: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
         unique_aliases: list[dict[str, object]] = []
         seen: set[str] = set()
@@ -241,6 +266,48 @@ class InteractiveAliasProviderBase:
         state.service_password = context.service_password
         state.username = context.username
         state.session_state = dict(context.session_state)
+
+    def _domain_options_from_state(self, state: InteractiveProviderState) -> list[AliasDomainOption]:
+        domains: list[AliasDomainOption] = []
+        for item in list(state.domain_options or []):
+            if not isinstance(item, Mapping):
+                continue
+            domains.append(
+                AliasDomainOption(
+                    key=str(item.get("key") or ""),
+                    domain=str(item.get("domain") or ""),
+                    label=str(item.get("label") or ""),
+                    raw=dict(item.get("raw") or {}) if isinstance(item.get("raw"), Mapping) else {},
+                )
+            )
+        return domains
+
+    def _update_state_snapshot(
+        self,
+        state: InteractiveProviderState,
+        *,
+        context: AuthenticatedProviderContext,
+        domains: Sequence[AliasDomainOption],
+        aliases: Sequence[Mapping[str, object]],
+        timeline: Sequence[AliasProviderStage],
+        capture_summary: Sequence[AliasProviderCapture],
+    ) -> None:
+        self._update_state_from_context(state, context)
+        state.domain_options = [self._domain_to_state_item(item) for item in domains]
+        state.known_aliases = [
+            str(item.get("email") or "").strip().lower()
+            for item in aliases
+            if str(item.get("email") or "").strip()
+        ]
+        if timeline:
+            last_stage = timeline[-1]
+            state.current_stage = {"code": last_stage.code, "label": last_stage.label}
+        else:
+            state.current_stage = {"code": "", "label": ""}
+        state.stage_history = [self._stage_to_state_item(item) for item in timeline]
+        state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
+        state.last_error = ""
+        state.last_capture_summary = [self._capture_to_state_item(item) for item in capture_summary]
 
     def _domain_to_state_item(self, domain: AliasDomainOption) -> dict[str, object]:
         return {
