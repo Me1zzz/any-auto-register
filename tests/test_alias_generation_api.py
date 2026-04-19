@@ -184,6 +184,46 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["cloudmail_alias_service_vend_alias_count"], "5")
         self.assertEqual(body["cloudmail_alias_service_vend_state_key"], "vend-state")
 
+    def test_get_config_returns_default_guerrillamail_api_url(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all", return_value={}
+        ):
+            resp = client.get("/api/config")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(
+            body["guerrillamail_api_url"],
+            "https://api.guerrillamail.com/ajax.php",
+        )
+
+    def test_update_config_accepts_guerrillamail_provider_and_api_url(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.set_many"
+        ) as set_many:
+            resp = client.put(
+                "/api/config",
+                json={
+                    "data": {
+                        "mail_provider": "guerrillamail",
+                        "guerrillamail_api_url": "https://api.guerrillamail.com/ajax.php",
+                    }
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            set_many.call_args.args[0],
+            {
+                "mail_provider": "guerrillamail",
+                "guerrillamail_api_url": "https://api.guerrillamail.com/ajax.php",
+            },
+        )
+
     def test_update_config_encodes_sources_as_json_string_for_store(self):
         client = TestClient(app)
         payload_sources = [
