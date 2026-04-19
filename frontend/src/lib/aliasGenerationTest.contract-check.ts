@@ -10,6 +10,13 @@ const modernResponse: AliasGenerationTestResponse = {
   aliasEmail: 'alias-001@vend.example',
   realMailboxEmail: 'real@example.com',
   serviceEmail: 'service-account@vend.example',
+  accountIdentity: {
+    serviceAccountEmail: 'service-account@vend.example',
+    confirmationInboxEmail: 'service-account@vend.example',
+    realMailboxEmail: 'real@example.com',
+    servicePassword: 'vend-secret',
+    username: 'vend-demo',
+  },
   account: {
     realMailboxEmail: 'real@example.com',
     serviceEmail: 'service-account@vend.example',

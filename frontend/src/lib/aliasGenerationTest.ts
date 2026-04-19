@@ -16,6 +16,12 @@ export interface AliasGenerationTestDraftSource extends Record<string, unknown> 
   middle_length_min?: unknown
   middle_length_max?: unknown
   register_url?: unknown
+  cloudmail_api_base?: unknown
+  cloudmail_admin_email?: unknown
+  cloudmail_admin_password?: unknown
+  cloudmail_domain?: unknown
+  cloudmail_subdomain?: unknown
+  cloudmail_timeout?: unknown
   alias_domain?: unknown
   alias_domain_id?: unknown
   alias_count?: unknown
@@ -80,6 +86,18 @@ export interface AliasGenerationTestAccount extends Record<string, unknown> {
   userName?: unknown
 }
 
+export interface AliasGenerationTestAccountIdentity extends Record<string, unknown> {
+  serviceAccountEmail?: unknown
+  service_account_email?: unknown
+  confirmationInboxEmail?: unknown
+  confirmation_inbox_email?: unknown
+  realMailboxEmail?: unknown
+  real_mailbox_email?: unknown
+  servicePassword?: unknown
+  service_password?: unknown
+  username?: unknown
+}
+
 export interface AliasGenerationTestAlias extends Record<string, unknown> {
   email?: unknown
   aliasEmail?: unknown
@@ -111,6 +129,7 @@ export interface AliasGenerationTestResponse {
   aliasEmail: string
   realMailboxEmail: string
   serviceEmail: string
+  accountIdentity?: AliasGenerationTestAccountIdentity
   account?: AliasGenerationTestAccount
   aliases?: AliasGenerationTestAlias[]
   currentStage?: AliasGenerationTestCurrentStage
@@ -230,22 +249,37 @@ function normalizeAliasGenerationAliases(
 function normalizeAliasGenerationAccount(
   response: AliasGenerationTestResponse,
 ): AliasGenerationTestDisplay['account'] {
+  const accountIdentity = asRecord(response.accountIdentity)
   const account = asRecord(response.account)
 
   return {
     realMailboxEmail:
-      stringifyFieldValue(account?.realMailboxEmail ?? account?.real_mailbox_email)
+      stringifyFieldValue(
+        accountIdentity?.realMailboxEmail
+        ?? accountIdentity?.real_mailbox_email
+        ?? account?.realMailboxEmail
+        ?? account?.real_mailbox_email,
+      )
       || stringifyFieldValue(response.realMailboxEmail),
     serviceEmail:
-      stringifyFieldValue(account?.serviceEmail ?? account?.service_email)
+      stringifyFieldValue(
+        accountIdentity?.serviceAccountEmail
+        ?? accountIdentity?.service_account_email
+        ?? account?.serviceEmail
+        ?? account?.service_email,
+      )
       || stringifyFieldValue(response.serviceEmail),
     password:
       stringifyFieldValue(
-        account?.password
+        accountIdentity?.servicePassword
+        ?? accountIdentity?.service_password
+        ?? account?.password
         ?? account?.servicePassword
         ?? account?.service_password,
       ),
-    username: stringifyFieldValue(account?.username ?? account?.userName),
+    username: stringifyFieldValue(
+      accountIdentity?.username ?? account?.username ?? account?.userName,
+    ),
   }
 }
 
@@ -476,6 +510,12 @@ function normalizeAliasGenerationDraftSource(
     id: sourceId,
     type: 'vend_email',
     register_url: stringifyFieldValue(source.register_url),
+    cloudmail_api_base: stringifyFieldValue(source.cloudmail_api_base),
+    cloudmail_admin_email: stringifyFieldValue(source.cloudmail_admin_email),
+    cloudmail_admin_password: stringifyFieldValue(source.cloudmail_admin_password),
+    cloudmail_domain: stringifyFieldValue(source.cloudmail_domain),
+    cloudmail_subdomain: stringifyFieldValue(source.cloudmail_subdomain),
+    cloudmail_timeout: normalizeNumericFieldValue(source.cloudmail_timeout),
     alias_domain: stringifyFieldValue(source.alias_domain),
     alias_domain_id: stringifyFieldValue(source.alias_domain_id),
     alias_count: normalizeNumericFieldValue(source.alias_count),
@@ -560,6 +600,12 @@ function buildVendDraftSource(
     id: sourceId,
     type: 'vend_email',
     register_url: stringifyFieldValue(preservedSource?.register_url),
+    cloudmail_api_base: stringifyFieldValue(preservedSource?.cloudmail_api_base),
+    cloudmail_admin_email: stringifyFieldValue(preservedSource?.cloudmail_admin_email),
+    cloudmail_admin_password: stringifyFieldValue(preservedSource?.cloudmail_admin_password),
+    cloudmail_domain: stringifyFieldValue(preservedSource?.cloudmail_domain),
+    cloudmail_subdomain: stringifyFieldValue(preservedSource?.cloudmail_subdomain),
+    cloudmail_timeout: normalizeNumericFieldValue(preservedSource?.cloudmail_timeout),
     alias_domain: stringifyFieldValue(preservedSource?.alias_domain),
     alias_domain_id: stringifyFieldValue(preservedSource?.alias_domain_id),
     alias_count:
