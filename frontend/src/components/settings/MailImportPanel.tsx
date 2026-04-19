@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Alert, Button, Card, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 
@@ -246,7 +246,7 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
     [snapshot],
   )
 
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async () => {
     setLoadingProviders(true)
     try {
       const data = await apiFetch('/mail-imports/providers') as { items?: MailImportProviderDescriptor[] }
@@ -265,9 +265,9 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
     } finally {
       setLoadingProviders(false)
     }
-  }
+  }, [message, preferredImportType])
 
-  const loadSnapshot = async (providerType: MailImportSelectionType) => {
+  const loadSnapshot = useCallback(async (providerType: MailImportSelectionType) => {
     setLoadingSnapshot(true)
     try {
       const apiType = toImportApiType(providerType)
@@ -287,11 +287,11 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
     } finally {
       setLoadingSnapshot(false)
     }
-  }
+  }, [watchedPoolDir, watchedPoolFile])
 
   useEffect(() => {
     void loadProviders()
-  }, [])
+  }, [loadProviders])
 
   useEffect(() => {
     if (providerMap.has(preferredImportType)) {
@@ -302,7 +302,7 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
   useEffect(() => {
     if (!selectedProvider) return
     void loadSnapshot(selectedType)
-  }, [selectedProvider, selectedType, watchedPoolDir, watchedPoolFile])
+  }, [loadSnapshot, selectedProvider, selectedType])
 
   useEffect(() => {
     setSelectedRowKeys([])
@@ -371,7 +371,7 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
     })
   }
 
-  const handleDelete = async (item: MailImportSnapshotItem) => {
+  const handleDelete = useCallback(async (item: MailImportSnapshotItem) => {
     const apiType = toImportApiType(selectedType)
     const email = String(item.email || '').trim()
     if (!email) return
@@ -404,7 +404,7 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
     } finally {
       setDeletingEmail('')
     }
-  }
+  }, [form, message, selectedType])
 
   const handleBatchDelete = async () => {
     if (!selectedRowKeys.length) {
@@ -572,7 +572,7 @@ export default function MailImportPanel({ form }: MailImportPanelProps) {
     } as never)
 
     return baseColumns
-  }, [deletingEmail, selectedType, tableData])
+  }, [deletingEmail, handleDelete, selectedType])
 
   return (
     <Card

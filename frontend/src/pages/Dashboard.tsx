@@ -22,14 +22,20 @@ const STATUS_COLORS: Record<string, string> = {
   invalid: 'error',
 }
 
+interface DashboardStats {
+  total?: number
+  by_status?: Record<string, number>
+  by_platform?: Record<string, number>
+}
+
 export default function Dashboard() {
-  const [stats, setStats] = useState<any>(null)
+  const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      const data = await apiFetch('/accounts/stats')
+      const data = await apiFetch('/accounts/stats') as DashboardStats
       setStats(data)
     } finally {
       setLoading(false)
@@ -100,7 +106,7 @@ export default function Dashboard() {
                 <Spin />
               </div>
             ) : stats ? (
-              Object.entries(stats.by_platform || {}).map(([platform, count]: any) => (
+              Object.entries(stats.by_platform || {}).map(([platform, count]) => (
                 <div key={platform} style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Tag color={PLATFORM_COLORS[platform] || 'default'}>{platform}</Tag>
@@ -126,7 +132,7 @@ export default function Dashboard() {
                 <Spin />
               </div>
             ) : stats ? (
-              Object.entries(stats.by_status || {}).map(([status, count]: any) => (
+              Object.entries(stats.by_status || {}).map(([status, count]) => (
                 <div
                   key={status}
                   style={{

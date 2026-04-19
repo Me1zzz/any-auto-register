@@ -2,8 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
-from typing import Optional
-import inspect
+from typing import Any, Optional, cast
 from copy import deepcopy
 from core.db import TaskLog, engine
 from core.task_runtime import (
@@ -129,7 +128,7 @@ def _log(task_id: str, msg: str):
 
 
 def _save_task_log(
-    platform: str, email: str, status: str, error: str = "", detail: dict = None
+    platform: str, email: str, status: str, error: str = "", detail: dict | None = None
 ):
     """Write a TaskLog record to the database."""
     with Session(engine) as s:
@@ -200,7 +199,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             return create_mailbox(
                 provider=merged_extra.get("mail_provider", "luckmail"),
                 extra=merged_extra,
-                proxy=proxy,
+                proxy=proxy or "",
             )
 
         def _build_alias_pool(merged_extra: dict):
@@ -209,9 +208,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
             from core.alias_pool.static_list import StaticAliasListProducer
             from core.alias_pool.vend_email_service import (
-                VendEmailAliasServiceProducer,
-                build_default_vend_email_runtime,
-                build_vend_email_task_state_store,
+                build_vend_email_alias_service_producer,
             )
 
             pool_config = normalize_cloudmail_alias_pool_config(
@@ -241,40 +238,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                         middle_length_max=int(source.get("middle_length_max") or 6),
                     )
                 elif source_type == "vend_email":
-                    state_store_factory = merged_extra.get("vend_email_state_store_factory")
-                    if not callable(state_store_factory):
-                        state_store_factory = lambda current_task_id, current_source_id: build_vend_email_task_state_store(
-                            task_id=current_task_id,
-                            source_id=current_source_id,
-                        )
-
-                    runtime_builder = merged_extra.get("vend_email_runtime_builder")
-                    if not callable(runtime_builder):
-                        runtime_builder = build_default_vend_email_runtime
-
-                    source_id = str(source.get("id") or "vend-email")
-                    state_store_factory_signature = inspect.signature(state_store_factory)
-                    supports_source_id = False
-                    positional_parameter_count = 0
-                    for parameter in state_store_factory_signature.parameters.values():
-                        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
-                            supports_source_id = True
-                            break
-                        if parameter.kind in (
-                            inspect.Parameter.POSITIONAL_ONLY,
-                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                        ):
-                            positional_parameter_count += 1
-
-                    if supports_source_id or positional_parameter_count >= 2:
-                        state_store = state_store_factory(task_id, source_id)
-                    else:
-                        state_store = state_store_factory(task_id)
-
-                    producer = VendEmailAliasServiceProducer(
+                    producer = build_vend_email_alias_service_producer(
                         source=source,
-                        state_store=state_store,
-                        runtime=runtime_builder(source),
+                        task_id=task_id,
+                        state_store_factory=merged_extra.get("vend_email_state_store_factory"),
+                        runtime_builder=merged_extra.get("vend_email_runtime_builder"),
                     )
                 else:
                     continue
@@ -340,7 +308,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                     setattr(_mailbox, "_task_alias_pool_key", task_id)
                 if hasattr(_mailbox, "_task_alias_pool"):
                     setattr(_mailbox, "_task_alias_pool", task_alias_pool)
-                _platform = PlatformCls(config=_config, mailbox=_mailbox)
+                platform_ctor = cast(Any, PlatformCls)
+                _platform = cast(Any, platform_ctor(config=_config, mailbox=_mailbox))
                 _platform._task_attempt_token = attempt_id
                 _platform._log_fn = lambda msg: _log(task_id, msg)
                 _platform.bind_task_control(control)
@@ -352,8 +321,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 if _proxy:
                     _log(task_id, f"使用代理: {_proxy}")
                 account = _platform.register(
-                    email=req.email or None,
-                    password=req.password,
+                    email=req.email or "",
+                    password=req.password or "",
                 )
                 current_email = account.email or current_email
                 if isinstance(account.extra, dict):
@@ -526,12 +495,12 @@ def stop_task(task_id: str):
 
 
 @router.get("/logs")
-def get_logs(platform: str = None, page: int = 1, page_size: int = 50):
+def get_logs(platform: str | None = None, page: int = 1, page_size: int = 50):
     with Session(engine) as s:
         q = select(TaskLog)
         if platform:
             q = q.where(TaskLog.platform == platform)
-        q = q.order_by(TaskLog.id.desc())
+        q = q.order_by(cast(Any, TaskLog.id).desc())
         total = len(s.exec(q).all())
         items = s.exec(q.offset((page - 1) * page_size).limit(page_size)).all()
     return {"total": total, "items": items}
@@ -548,7 +517,7 @@ def batch_delete_logs(body: TaskLogBatchDeleteRequest):
 
     with Session(engine) as s:
         try:
-            logs = s.exec(select(TaskLog).where(TaskLog.id.in_(unique_ids))).all()
+            logs = s.exec(select(TaskLog).where(cast(Any, TaskLog.id).in_(unique_ids))).all()
             found_ids = {log.id for log in logs if log.id is not None}
 
             for log in logs:

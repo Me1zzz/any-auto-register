@@ -40,9 +40,21 @@ function resolveEffectiveMailProvider(mailProvider: string, mailImportSource: st
   return mailImportSource === 'applemail' ? 'applemail' : 'microsoft'
 }
 
+interface RegisterTaskResponse {
+  id: string
+  task_id: string
+  status: 'pending' | 'running' | 'done' | 'failed' | 'stopped' | string
+  progress?: string
+  skipped?: number
+  success?: number | null
+  errors?: string[]
+  error?: string
+  cashier_urls?: string[]
+}
+
 export default function RegisterTaskPage() {
   const [form] = Form.useForm()
-  const [task, setTask] = useState<any>(null)
+  const [task, setTask] = useState<RegisterTaskResponse | null>(null)
   const [polling, setPolling] = useState(false)
   const { mode: chatgptRegistrationMode, setMode: setChatgptRegistrationMode } =
     usePersistentChatGPTRegistrationMode()
@@ -224,15 +236,15 @@ export default function RegisterTaskPage() {
         captcha_solver: values.captcha_solver,
         extra: adaptedRegisterExtra,
       }),
-    })
+    }) as RegisterTaskResponse
     setTask(res)
     setPolling(true)
-    pollTask(res.task_id)
+    void pollTask(res.task_id)
   }
 
   const pollTask = async (id: string) => {
     const interval = setInterval(async () => {
-      const t = await apiFetch(`/tasks/${id}`)
+      const t = await apiFetch(`/tasks/${id}`) as RegisterTaskResponse
       setTask(t)
       if (t.status === 'done' || t.status === 'failed' || t.status === 'stopped') {
         clearInterval(interval)
@@ -694,9 +706,9 @@ export default function RegisterTaskPage() {
               <CheckCircleOutlined /> 成功 {task.success} 个
             </div>
           )}
-          {task.errors?.length > 0 && (
+          {(task.errors?.length ?? 0) > 0 && (
             <div style={{ marginTop: 8 }}>
-              {task.errors.map((e: string, i: number) => (
+              {(task.errors || []).map((e: string, i: number) => (
                 <div key={i} style={{ color: '#ef4444', marginBottom: 4 }}>
                   <CloseCircleOutlined /> {e}
                 </div>

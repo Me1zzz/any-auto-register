@@ -24,14 +24,23 @@ import { apiFetch, clearToken, getToken } from '@/lib/utils'
 
 const { Sider, Content } = Layout
 
+interface AuthStatusResponse {
+  has_password?: boolean
+}
+
+interface PlatformItem {
+  name: string
+  display_name: string
+}
+
 function ProtectedLayout() {
   const navigate = useNavigate()
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
     fetch('/api/auth/status')
-      .then(r => r.json())
-      .then(s => {
+      .then((r) => r.json() as Promise<AuthStatusResponse>)
+      .then((s) => {
         const token = getToken()
         if (s.has_password && !token) {
           navigate('/login', { replace: true })
@@ -40,7 +49,7 @@ function ProtectedLayout() {
         }
       })
       .catch(() => setReady(true))
-  }, [])
+  }, [navigate])
 
   if (!ready) {
     return (
@@ -73,14 +82,20 @@ function AppContent() {
   }, [themeMode])
 
   useEffect(() => {
-    fetch('/api/auth/status').then(r => r.json()).then(s => setHasPassword(s.has_password)).catch(() => {})
+    fetch('/api/auth/status')
+      .then((r) => r.json() as Promise<AuthStatusResponse>)
+      .then((s) => setHasPassword(Boolean(s.has_password)))
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
     apiFetch('/platforms')
-      .then(d => setPlatforms((d || [])
-        .filter((p: any) => !['tavily', 'cursor'].includes(p.name))
-        .map((p: any) => ({ key: p.name, label: p.display_name }))))
+      .then((d) => {
+        const items = Array.isArray(d) ? d as PlatformItem[] : []
+        setPlatforms(items
+          .filter((p) => !['tavily', 'cursor'].includes(p.name))
+          .map((p) => ({ key: p.name, label: p.display_name })))
+      })
       .catch(() => {})
   }, [])
 

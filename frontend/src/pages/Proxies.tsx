@@ -11,8 +11,17 @@ import {
 } from '@ant-design/icons'
 import { apiFetch } from '@/lib/utils'
 
+interface ProxyItem {
+  id: number
+  url: string
+  region?: string
+  success_count: number
+  fail_count: number
+  is_active: boolean
+}
+
 export default function Proxies() {
-  const [proxies, setProxies] = useState<any[]>([])
+  const [proxies, setProxies] = useState<ProxyItem[]>([])
   const [newProxy, setNewProxy] = useState('')
   const [region, setRegion] = useState('')
   const [checking, setChecking] = useState(false)
@@ -22,7 +31,7 @@ export default function Proxies() {
     setLoading(true)
     try {
       const data = await apiFetch('/proxies')
-      setProxies(data)
+      setProxies(Array.isArray(data) ? data as ProxyItem[] : [])
     } finally {
       setLoading(false)
     }
@@ -50,33 +59,34 @@ export default function Proxies() {
       message.success('添加成功')
       setNewProxy('')
       setRegion('')
-      load()
-    } catch (e: any) {
-      message.error(`添加失败: ${e.message}`)
+      void load()
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : '未知错误'
+      message.error(`添加失败: ${detail}`)
     }
   }
 
   const del = async (id: number) => {
     await apiFetch(`/proxies/${id}`, { method: 'DELETE' })
     message.success('删除成功')
-    load()
+    void load()
   }
 
   const toggle = async (id: number) => {
     await apiFetch(`/proxies/${id}/toggle`, { method: 'PATCH' })
-    load()
+    void load()
   }
 
   const check = async () => {
     setChecking(true)
     await apiFetch('/proxies/check', { method: 'POST' })
     setTimeout(() => {
-      load()
+      void load()
       setChecking(false)
     }, 3000)
   }
 
-  const columns: any[] = [
+  const columns = [
     {
       title: '代理地址',
       dataIndex: 'url',
@@ -92,7 +102,7 @@ export default function Proxies() {
     {
       title: '成功/失败',
       key: 'stats',
-      render: (_: any, record: any) => (
+      render: (_value: unknown, record: ProxyItem) => (
         <Space>
           <Tag color="success">{record.success_count}</Tag>
           <span>/</span>
@@ -113,7 +123,7 @@ export default function Proxies() {
     {
       title: '操作',
       key: 'action',
-      render: (_: any, record: any) => (
+      render: (_value: unknown, record: ProxyItem) => (
         <Space>
           <Button
             type="text"

@@ -6,6 +6,13 @@ import { darkTheme } from '@/theme'
 
 type Step = 'password' | '2fa'
 
+interface LoginResponse {
+  detail?: string
+  requires_2fa?: boolean
+  temp_token?: string
+  access_token?: string
+}
+
 function LoginContent() {
   const { message } = App.useApp()
   const [step, setStep] = useState<Step>('password')
@@ -20,17 +27,17 @@ function LoginContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: values.password }),
       })
-      const data = await res.json()
+      const data = await res.json() as LoginResponse
       if (!res.ok) throw new Error(data.detail || '登录失败')
       if (data.requires_2fa) {
-        setTempToken(data.temp_token)
+        setTempToken(data.temp_token || '')
         setStep('2fa')
       } else {
-        setToken(data.access_token)
+        setToken(data.access_token || '')
         window.location.href = '/'
       }
-    } catch (e: any) {
-      message.error(e.message)
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '登录失败')
     } finally {
       setLoading(false)
     }
@@ -44,12 +51,12 @@ function LoginContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ temp_token: tempToken, code: values.code }),
       })
-      const data = await res.json()
+      const data = await res.json() as LoginResponse
       if (!res.ok) throw new Error(data.detail || '验证失败')
-      setToken(data.access_token)
+      setToken(data.access_token || '')
       window.location.href = '/'
-    } catch (e: any) {
-      message.error(e.message)
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '验证失败')
     } finally {
       setLoading(false)
     }
