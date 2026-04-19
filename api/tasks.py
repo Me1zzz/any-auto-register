@@ -165,6 +165,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
         normalize_cloudmail_alias_pool_config,
     )
     from core.alias_pool.emailshield_provider import build_emailshield_alias_provider
+    from core.alias_pool.interactive_provider_registry import register_interactive_alias_providers
     from core.alias_pool.lease_consumer import AliasLeaseConsumerContext
     from core.alias_pool.manager import AliasEmailPoolManager
     from core.alias_pool.myalias_pro_provider import build_myalias_pro_alias_provider
@@ -252,11 +253,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             registry.register("static_list", build_static_list_alias_provider)
             registry.register("simple_generator", build_simple_generator_alias_provider)
             registry.register("vend_email", _build_vend_email_provider)
-            registry.register("myalias_pro", build_myalias_pro_alias_provider)
-            registry.register("secureinseconds", build_secureinseconds_alias_provider)
-            registry.register("emailshield", build_emailshield_alias_provider)
-            registry.register("simplelogin", build_simplelogin_alias_provider)
-            registry.register("alias_email", build_alias_email_alias_provider)
+            register_interactive_alias_providers(registry)
             bootstrap = AliasProviderBootstrap(registry=registry)
             bootstrap_context = AliasProviderBootstrapContext(
                 task_id=task_id,

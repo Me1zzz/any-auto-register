@@ -5,6 +5,7 @@ from typing import Any, cast
 from .alias_email_provider import build_alias_email_alias_provider
 from .config import build_alias_provider_source_specs
 from .emailshield_provider import build_emailshield_alias_provider
+from .interactive_provider_registry import register_interactive_alias_providers
 from .myalias_pro_provider import build_myalias_pro_alias_provider
 from .provider_adapters import build_simple_generator_alias_provider, build_static_list_alias_provider
 from .provider_bootstrap import AliasProviderBootstrap
@@ -73,11 +74,7 @@ class AliasAutomationTestService:
         registry.register("static_list", build_static_list_alias_provider)
         registry.register("simple_generator", build_simple_generator_alias_provider)
         registry.register("vend_email", self._build_vend_email_alias_provider)
-        registry.register("myalias_pro", build_myalias_pro_alias_provider)
-        registry.register("secureinseconds", build_secureinseconds_alias_provider)
-        registry.register("emailshield", build_emailshield_alias_provider)
-        registry.register("simplelogin", build_simplelogin_alias_provider)
-        registry.register("alias_email", build_alias_email_alias_provider)
+        register_interactive_alias_providers(registry)
         return AliasProviderBootstrap(registry=registry)
 
     def _build_vend_email_alias_provider(
