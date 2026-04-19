@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { App, Card, Form, Input, Select, Button, message, Tabs, Space, Tag, Typography, Modal, QRCode, Switch, Alert } from 'antd'
+import { App, Card, Form, Input, InputNumber, Select, Button, message, Tabs, Space, Tag, Typography, Modal, QRCode, Switch, Alert } from 'antd'
 import {
   SaveOutlined,
   EyeOutlined,
@@ -17,11 +17,38 @@ import { parseBooleanConfigValue } from '@/lib/configValueParsers'
 import AliasGenerationTestCard from '@/components/settings/AliasGenerationTestCard'
 import {
   createAliasGenerationTestDraftConfig,
+  deriveCloudmailAliasServiceFormValues,
   deriveAliasGenerationSourceOptions,
+  parseStoredAliasGenerationSources,
+  serializeAliasGenerationDraftSources,
   type AliasGenerationTestDraftConfig,
 } from '@/lib/aliasGenerationTest'
 import MailImportPanel from '@/components/settings/MailImportPanel'
 import { apiFetch } from '@/lib/utils'
+
+type SettingsFormInstance = ReturnType<typeof Form.useForm>[0]
+
+interface SolverStatusResponse {
+  running?: boolean
+}
+
+interface IntegrationServiceItem extends Record<string, unknown> {
+  name: string
+  label: string
+  running?: boolean
+  repo_exists?: boolean
+  pid?: number
+  repo_path?: string
+  url?: string
+  management_url?: string
+  management_key?: string
+  log_path?: string
+  last_error?: string
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
 
 function resolveEffectiveMailProvider(mailProvider: string, mailImportSource: string) {
   if (mailProvider !== 'mail_import') return mailProvider
@@ -162,9 +189,6 @@ const TAB_ITEMS = [
           { key: 'cloudmail_admin_password', label: '管理员密码', secret: true },
           { key: 'cloudmail_domain', label: '邮箱域名（可选）', placeholder: 'mail.example.com,mail2.example.com' },
           { key: 'cloudmail_subdomain', label: '子域名（可选）', placeholder: 'pool-a' },
-          { key: 'cloudmail_alias_enabled', label: '启用别名邮箱', type: 'boolean' },
-          { key: 'cloudmail_alias_emails', label: '别名邮箱列表', type: 'textarea', placeholder: 'alias1@example.com\nalias2@example.com' },
-          { key: 'cloudmail_alias_mailbox_email', label: '别名对应真实邮箱', placeholder: 'real@mail.example.com' },
           { key: 'cloudmail_timeout', label: '请求超时秒数', placeholder: '30' },
         ],
       },
@@ -513,7 +537,9 @@ function parseStoredDomainList(value: unknown): string[] {
     if (Array.isArray(parsed)) {
       return normalizeDomainList(parsed)
     }
-  } catch {}
+  } catch {
+    // fall back to newline/comma parsing below
+  }
 
   return normalizeDomainList(
     text
@@ -629,7 +655,88 @@ function ConfigSection({ section }: { section: SectionConfig }) {
   )
 }
 
-function RegisterSettingsSection({ form }: { form: any }) {
+function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>[0] }) {
+  const aliasEnabled = parseBooleanConfigValue(Form.useWatch('cloudmail_alias_enabled', form))
+  const vendEnabled = parseBooleanConfigValue(Form.useWatch('cloudmail_alias_vend_enabled', form))
+
+  return (
+    <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f0f0f0' }}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          别名邮箱配置
+        </Typography.Title>
+        <Typography.Text type="secondary">
+          CloudMail alias 池会由当前表单自动推导；别名邮箱列表本身就是 alias 池来源之一，启用的别名服务会作为额外来源加入池中。
+        </Typography.Text>
+
+        <ConfigField
+          field={{
+            key: 'cloudmail_alias_enabled',
+            label: '启用别名邮箱',
+            type: 'boolean',
+            description: '关闭后不会生成任何 CloudMail alias source。',
+          }}
+        />
+
+        {aliasEnabled ? (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              message="别名邮箱列表是 alias 池来源之一"
+              description="系统会继续把这里的别名邮箱列表作为 legacy/static alias 池来源；启用 vend 等服务后，会把这些服务生成的 alias 作为额外来源加入同一个池。"
+            />
+            <Form.Item
+              label="别名邮箱列表"
+              name="cloudmail_alias_emails"
+              extra="每行一个 alias 邮箱。即使启用了 vend 等自动注册服务，这些邮箱仍然会作为 alias 池来源之一保留。"
+              rules={[{ required: true, whitespace: true, message: '请输入至少一个 alias 邮箱' }]}
+              style={{ marginBottom: 0 }}
+            >
+              <Input.TextArea rows={5} placeholder={'alias1@example.com\nalias2@example.com'} />
+            </Form.Item>
+
+            <Card
+              size="small"
+              title="别名邮箱服务"
+              extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>按需开启；当前先保留 vend 自动注册，并为后续服务预留结构</span>}
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <ConfigField
+                  field={{
+                    key: 'cloudmail_alias_vend_enabled',
+                    label: '启用 vend 别名邮箱服务自动注册',
+                    type: 'boolean',
+                    description: '开启后 vend 会作为额外 alias 池来源。注册所需的站点地址与服务端参数由后端管理。',
+                  }}
+                />
+
+                {vendEnabled ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                    <Form.Item
+                      label="单 CloudMail 最多可注册多少个 vend 账号"
+                      name="cloudmail_alias_vend_alias_count"
+                      extra="控制 vend 自动注册服务在当前 CloudMail alias 池下最多补充多少个 vend alias。"
+                      style={{ marginBottom: 0 }}
+                    >
+                      <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
+                    </Form.Item>
+                  </div>
+                ) : null}
+
+                <Typography.Text type="secondary">
+                  后续如接入新的 CloudMail alias 服务，可继续在这里增加开关和最小必要的运营字段，而不再暴露原始 source 行编辑器。
+                </Typography.Text>
+              </Space>
+            </Card>
+          </>
+        ) : null}
+      </Space>
+    </div>
+  )
+}
+
+function RegisterSettingsSection({ form }: { form: SettingsFormInstance }) {
   const defaultExecutor = String(Form.useWatch('default_executor', form) || 'protocol')
   const guiTargetDetector = String(Form.useWatch('codex_gui_target_detector', form) || 'pywinauto')
   const showGuiSettings = defaultExecutor === 'gui_control'
@@ -684,7 +791,7 @@ function RegisterSettingsSection({ form }: { form: any }) {
   )
 }
 
-function CFWorkerDomainPoolSection({ form }: { form: any }) {
+function CFWorkerDomainPoolSection({ form }: { form: SettingsFormInstance }) {
   const watchedDomains = Form.useWatch('cfworker_domains', form) || []
   const watchedEnabledDomains = Form.useWatch('cfworker_enabled_domains', form) || []
   const normalizedDomains = normalizeDomainList(watchedDomains)
@@ -818,8 +925,8 @@ function SolverStatus() {
 
   const checkSolver = async () => {
     try {
-      const d = await apiFetch('/solver/status')
-      setRunning(d.running)
+      const d = await apiFetch('/solver/status') as SolverStatusResponse
+      setRunning(Boolean(d.running))
     } catch {
       setRunning(false)
     }
@@ -832,9 +939,14 @@ function SolverStatus() {
   }
 
   useEffect(() => {
-    checkSolver()
+    const initialTimer = window.setTimeout(() => {
+      void checkSolver()
+    }, 0)
     const timer = window.setInterval(checkSolver, 5000)
-    return () => window.clearInterval(timer)
+    return () => {
+      window.clearTimeout(initialTimer)
+      window.clearInterval(timer)
+    }
   }, [])
 
   return (
@@ -869,10 +981,9 @@ function SolverStatus() {
 }
 
 function IntegrationsPanel() {
-  const [items, setItems] = useState<any[]>([])
+  const [items, setItems] = useState<IntegrationServiceItem[]>([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
-  const saved = false
   const [resultModal, setResultModal] = useState({
     open: false,
     title: '',
@@ -892,7 +1003,7 @@ function IntegrationsPanel() {
   const load = async () => {
     setLoading(true)
     try {
-      const d = await apiFetch('/integrations/services')
+      const d = await apiFetch('/integrations/services') as { items?: IntegrationServiceItem[] }
       setItems(d.items || [])
     } finally {
       setLoading(false)
@@ -905,16 +1016,17 @@ function IntegrationsPanel() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const doAction = async (key: string, request: Promise<any>) => {
+  const doAction = async (key: string, request: Promise<unknown>) => {
     setBusy(key)
     try {
       const result = await request
       await load()
       message.success('操作完成')
       showResultModal('操作结果', result, true)
-    } catch (e: any) {
-      message.error(e?.message || '操作失败')
-      showResultModal('操作结果', e?.message || e || '操作失败', false)
+    } catch (error: unknown) {
+      const detail = getErrorMessage(error, '操作失败')
+      message.error(detail)
+      showResultModal('操作结果', detail, false)
       await load()
     } finally {
       setBusy('')
@@ -930,9 +1042,10 @@ function IntegrationsPanel() {
       })
       message.success(`${label} 回填完成：成功 ${d.success} / ${d.total}`)
       showResultModal(`${label} 回填结果`, d, true)
-    } catch (e: any) {
-      message.error(e?.message || `${label} 回填失败`)
-      showResultModal(`${label} 回填结果`, e?.message || e || `${label} 回填失败`, false)
+    } catch (error: unknown) {
+      const detail = getErrorMessage(error, `${label} 回填失败`)
+      message.error(detail)
+      showResultModal(`${label} 回填结果`, detail, false)
     } finally {
       setBusy('')
     }
@@ -940,36 +1053,6 @@ function IntegrationsPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {false ? (
-        <div
-          style={{
-            position: 'fixed',
-            left: '50%',
-            bottom: 24,
-            transform: 'translateX(-50%)',
-            zIndex: 1000,
-            width: 'min(720px, calc(100vw - 32px))',
-            pointerEvents: 'none',
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              padding: 0,
-              borderRadius: 0,
-              border: 'none',
-              background: 'transparent',
-              boxShadow: 'none',
-              backdropFilter: 'none',
-              pointerEvents: 'auto',
-            }}
-          >
-            <Button type="primary" icon={<SaveOutlined />} onClick={() => {}} loading={false} block size="large">
-              {saved ? '已保存 ✓' : '保存配置'}
-            </Button>
-          </div>
-        </div>
-      ) : null}
       <Modal
         open={resultModal.open}
         title={resultModal.title}
@@ -1089,7 +1172,7 @@ function ContributionPanel({
   saving,
   saved,
 }: {
-  form: any
+  form: SettingsFormInstance
   onSave: () => Promise<void>
   saving: boolean
   saved: boolean
@@ -1160,8 +1243,8 @@ function ContributionPanel({
       if (!silent) {
         message.success('额度信息已刷新')
       }
-    } catch (e: any) {
-      const detail = String(e?.message || '获取额度信息失败')
+    } catch (error: unknown) {
+      const detail = getErrorMessage(error, '获取额度信息失败')
       setStatsError(detail)
       if (!silent) {
         message.error(detail)
@@ -1209,8 +1292,8 @@ function ContributionPanel({
         message.success('提现成功')
       }
       await fetchStats(true)
-    } catch (e: any) {
-      const detail = String(e?.message || '提现失败')
+    } catch (error: unknown) {
+      const detail = getErrorMessage(error, '提现失败')
       setRedeemResponse({ ok: false, error: detail })
       message.error(detail)
     } finally {
@@ -1241,8 +1324,8 @@ function ContributionPanel({
       if (contributionEnabled) {
         await fetchStats(true, generated)
       }
-    } catch (e: any) {
-      message.error(String(e?.message || '请求新建 key 失败'))
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '请求新建 key 失败'))
     } finally {
       setCreatingKey(false)
     }
@@ -1387,12 +1470,16 @@ function SecurityPanel() {
 
   const loadStatus = async () => {
     try {
-      const s = await apiFetch('/auth/status')
+      const s = await apiFetch('/auth/status') as { has_password: boolean; has_totp: boolean }
       setStatus(s)
-    } catch {}
+    } catch {
+      setStatus(null)
+    }
   }
 
-  useEffect(() => { loadStatus() }, [])
+  useEffect(() => {
+    void loadStatus()
+  }, [])
 
   const handleEnable = async (values: { password: string; confirm: string }) => {
     if (values.password !== values.confirm) {
@@ -1409,8 +1496,8 @@ function SecurityPanel() {
       msg.success('密码保护已启用')
       enableForm.resetFields()
       await loadStatus()
-    } catch (e: any) {
-      msg.error(e.message)
+    } catch (error: unknown) {
+      msg.error(getErrorMessage(error, '启用密码保护失败'))
     } finally {
       setLoading(false)
     }
@@ -1423,8 +1510,8 @@ function SecurityPanel() {
       localStorage.removeItem('auth_token')
       msg.success('密码保护已关闭')
       await loadStatus()
-    } catch (e: any) {
-      msg.error(e.message)
+    } catch (error: unknown) {
+      msg.error(getErrorMessage(error, '关闭密码保护失败'))
     } finally {
       setLoading(false)
     }
@@ -1443,8 +1530,8 @@ function SecurityPanel() {
       })
       msg.success('密码已更新')
       pwForm.resetFields()
-    } catch (e: any) {
-      msg.error(e.message)
+    } catch (error: unknown) {
+      msg.error(getErrorMessage(error, '修改密码失败'))
     } finally {
       setLoading(false)
     }
@@ -1457,8 +1544,8 @@ function SecurityPanel() {
       setTotpSecret(d.secret)
       setTotpUri(d.uri)
       setTotpSetupState('setup')
-    } catch (e: any) {
-      msg.error(e.message)
+    } catch (error: unknown) {
+      msg.error(getErrorMessage(error, '获取 2FA 配置失败'))
     } finally {
       setLoading(false)
     }
@@ -1475,8 +1562,8 @@ function SecurityPanel() {
       setTotpSetupState('idle')
       codeForm.resetFields()
       await loadStatus()
-    } catch (e: any) {
-      msg.error(e.message)
+    } catch (error: unknown) {
+      msg.error(getErrorMessage(error, '启用双因素认证失败'))
     } finally {
       setLoading(false)
     }
@@ -1488,8 +1575,8 @@ function SecurityPanel() {
       await apiFetch('/auth/2fa/disable', { method: 'POST' })
       msg.success('双因素认证已关闭')
       await loadStatus()
-    } catch (e: any) {
-      msg.error(e.message)
+    } catch (error: unknown) {
+      msg.error(getErrorMessage(error, '关闭双因素认证失败'))
     } finally {
       setLoading(false)
     }
@@ -1619,12 +1706,13 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [activeTab, setActiveTab] = useState('register')
-  const allFormValues = (Form.useWatch([], form) as Record<string, unknown> | undefined) || {}
+  const watchedFormValues = Form.useWatch([], form) as Record<string, unknown> | undefined
   const [savedAliasGenerationConfig, setSavedAliasGenerationConfig] = useState<AliasGenerationTestDraftConfig>({})
   const aliasGenerationDraftConfig = useMemo(
-    () => createAliasGenerationTestDraftConfig(allFormValues),
-    [allFormValues],
+    () => createAliasGenerationTestDraftConfig(watchedFormValues || {}),
+    [watchedFormValues],
   )
+  const cloudmailAliasEnabled = parseBooleanConfigValue(Form.useWatch('cloudmail_alias_enabled', form))
   const currentMailProviderRaw = String(Form.useWatch('mail_provider', form) || '')
   const currentMailImportSource = String(Form.useWatch('mail_import_source', form) || 'microsoft')
   const currentMailProvider = resolveEffectiveMailProvider(currentMailProviderRaw, currentMailImportSource)
@@ -1680,7 +1768,10 @@ export default function Settings() {
       if (!data.cloudmail_timeout) {
         data.cloudmail_timeout = 30
       }
-      setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig(data))
+      data.sources = parseStoredAliasGenerationSources(data.sources)
+      Object.assign(data, deriveCloudmailAliasServiceFormValues(data))
+      const normalizedSavedAliasConfig = createAliasGenerationTestDraftConfig(data)
+      setSavedAliasGenerationConfig(normalizedSavedAliasConfig)
       data.cpa_enabled = resolveFeatureEnabledConfig(
         data.cpa_enabled,
         Boolean(String(data.cpa_api_url ?? '').trim()),
@@ -1741,6 +1832,8 @@ export default function Settings() {
       delete values.mail_import_source
       const domains = normalizeDomainList(values.cfworker_domains)
       const enabledDomains = normalizeDomainList(values.cfworker_enabled_domains).filter((domain) => domains.includes(domain))
+      const aliasGenerationDraftConfig = createAliasGenerationTestDraftConfig(values)
+      const serializedAliasSources = serializeAliasGenerationDraftSources(aliasGenerationDraftConfig.sources)
 
       if (domains.length > 0 && enabledDomains.length === 0) {
         setActiveTab('mailbox')
@@ -1750,6 +1843,11 @@ export default function Settings() {
 
       values.cfworker_domains = JSON.stringify(domains)
       values.cfworker_enabled_domains = JSON.stringify(enabledDomains)
+      values.sources = serializedAliasSources
+      values.cloudmail_alias_service_static_enabled = parseBooleanConfigValue(values.cloudmail_alias_enabled)
+      values.cloudmail_alias_service_vend_enabled = parseBooleanConfigValue(values.cloudmail_alias_vend_enabled)
+      values.cloudmail_alias_service_vend_alias_count =
+        values.cloudmail_alias_vend_alias_count ?? ''
       if (domains.length > 0) {
         values.cfworker_domain = ''
       }
@@ -1771,8 +1869,15 @@ export default function Settings() {
         cfworker_random_subdomain: values.cfworker_random_subdomain,
         cfworker_random_name_subdomain: values.cfworker_random_name_subdomain,
         contribution_enabled: values.contribution_enabled,
+        cloudmail_alias_service_static_enabled: values.cloudmail_alias_service_static_enabled,
+        cloudmail_alias_service_vend_enabled: values.cloudmail_alias_service_vend_enabled,
+        cloudmail_alias_service_vend_alias_count: values.cloudmail_alias_service_vend_alias_count,
+        sources: aliasGenerationDraftConfig.sources,
       })
-      setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig(values))
+      setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig({
+        ...values,
+        sources: aliasGenerationDraftConfig.sources,
+      }))
       message.success('保存成功')
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -1863,20 +1968,34 @@ export default function Settings() {
                       {mailboxSections.defaultSection ? (
                         <ConfigSection key={mailboxSections.defaultSection.title} section={mailboxSections.defaultSection} />
                       ) : null}
-                      {mailboxSections.selectedSection ? (
+                      {mailboxSections.selectedSection && currentMailProvider !== 'cloudmail' ? (
                         <ConfigSection key={`${mailboxSections.selectedSection.title}-selected`} section={mailboxSections.selectedSection} />
                       ) : null}
                       <MailImportPanel form={form} />
                       {currentMailProviderRaw === 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
-                      {mailboxSections.remainingSections.map((section) => (
-                        <ConfigSection key={section.title} section={section} />
-                      ))}
-                      {currentMailProviderRaw !== 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
-                      <AliasGenerationTestCard
-                        draftConfig={aliasGenerationDraftConfig}
-                        draftSourceOptions={draftAliasSourceOptions}
-                        savedSourceOptions={savedAliasSourceOptions}
-                      />
+                       {mailboxSections.remainingSections.map((section) => (
+                         <ConfigSection key={section.title} section={section} />
+                       ))}
+                       {currentMailProviderRaw !== 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
+                        {currentMailProvider === 'cloudmail' && mailboxSections.selectedSection ? (
+                          <Card
+                            title={mailboxSections.selectedSection.title}
+                            extra={mailboxSections.selectedSection.desc ? <span style={{ fontSize: 12, color: '#7a8ba3' }}>{mailboxSections.selectedSection.desc}</span> : null}
+                            style={{ marginBottom: 16 }}
+                          >
+                            {mailboxSections.selectedSection.fields.map((field) => (
+                              <ConfigField key={field.key} field={field} />
+                            ))}
+                            <CloudMailAliasSection form={form} />
+                          </Card>
+                        ) : null}
+                        {currentMailProvider === 'cloudmail' && cloudmailAliasEnabled ? (
+                          <AliasGenerationTestCard
+                            draftConfig={aliasGenerationDraftConfig}
+                            draftSourceOptions={draftAliasSourceOptions}
+                            savedSourceOptions={savedAliasSourceOptions}
+                          />
+                        ) : null}
                     </>
                   ) : activeTab === 'register' ? (
                     <RegisterSettingsSection form={form} />
