@@ -67,6 +67,7 @@ const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
     { label: 'MoeMail (sall.cc)', value: 'moemail' },
     { label: 'YYDS Mail / MaliAPI', value: 'maliapi' },
     { label: 'GPTMail', value: 'gptmail' },
+    { label: 'Guerrilla Mail', value: 'guerrillamail' },
     { label: 'OpenTrashMail', value: 'opentrashmail' },
     { label: 'Freemail（自建 CF Worker）', value: 'freemail' },
     { label: 'CF Worker（自建域名）', value: 'cfworker' },
@@ -226,6 +227,13 @@ const TAB_ITEMS = [
           { key: 'gptmail_base_url', label: 'API URL', placeholder: 'https://mail.chatgpt.org.uk' },
           { key: 'gptmail_api_key', label: 'API Key', secret: true, placeholder: 'gpt-test' },
           { key: 'gptmail_domain', label: '邮箱域名（可选）', placeholder: 'example.com' },
+        ],
+      },
+      {
+        title: 'Guerrilla Mail',
+        desc: '公开临时邮箱服务；运行时从已验证可用域名中随机选择一个域名',
+        fields: [
+          { key: 'guerrillamail_api_url', label: 'API URL', placeholder: 'https://api.guerrillamail.com/ajax.php' },
         ],
       },
       {
@@ -466,6 +474,7 @@ const MAILBOX_SECTION_FIELD_KEY_BY_PROVIDER: Record<string, string> = {
   microsoft: 'outlook_backend',
   applemail: 'applemail_base_url',
   gptmail: 'gptmail_base_url',
+  guerrillamail: 'guerrillamail_api_url',
   opentrashmail: 'opentrashmail_api_url',
   duckmail: 'duckmail_api_url',
   cfworker: 'cfworker_api_url',

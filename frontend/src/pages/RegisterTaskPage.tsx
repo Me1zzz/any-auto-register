@@ -95,6 +95,7 @@ export default function RegisterTaskPage() {
         gptmail_base_url: cfg.gptmail_base_url || 'https://mail.chatgpt.org.uk',
         gptmail_api_key: cfg.gptmail_api_key || '',
         gptmail_domain: cfg.gptmail_domain || '',
+        guerrillamail_api_url: cfg.guerrillamail_api_url || 'https://api.guerrillamail.com/ajax.php',
         opentrashmail_api_url: cfg.opentrashmail_api_url || '',
         opentrashmail_domain: cfg.opentrashmail_domain || '',
         opentrashmail_password: cfg.opentrashmail_password || '',
@@ -150,6 +151,7 @@ export default function RegisterTaskPage() {
       gptmail_base_url: values.gptmail_base_url,
       gptmail_api_key: values.gptmail_api_key,
       gptmail_domain: values.gptmail_domain,
+      guerrillamail_api_url: values.guerrillamail_api_url,
       opentrashmail_api_url: values.opentrashmail_api_url,
       opentrashmail_domain: values.opentrashmail_domain,
       opentrashmail_password: values.opentrashmail_password,
@@ -289,6 +291,7 @@ export default function RegisterTaskPage() {
         applemail_mailboxes: 'INBOX,Junk',
         outlook_backend: 'graph',
         gptmail_base_url: 'https://mail.chatgpt.org.uk',
+        guerrillamail_api_url: 'https://api.guerrillamail.com/ajax.php',
         cloudmail_alias_enabled: false,
         cloudmail_alias_emails: '',
         cloudmail_alias_mailbox_email: '',
@@ -378,6 +381,7 @@ export default function RegisterTaskPage() {
                 { value: 'cloudmail', label: 'CloudMail (genToken)' },
                 { value: 'maliapi', label: 'YYDS Mail / MaliAPI' },
                 { value: 'gptmail', label: 'GPTMail' },
+                { value: 'guerrillamail', label: 'Guerrilla Mail' },
                 { value: 'opentrashmail', label: 'OpenTrashMail' },
                 { value: 'duckmail', label: 'DuckMail' },
                 { value: 'freemail', label: 'Freemail' },
@@ -527,6 +531,17 @@ export default function RegisterTaskPage() {
                 extra="已知当前可用域名时可直接本地拼装随机地址，省掉一次 generate-email 请求"
               >
                 <Input placeholder="example.com" />
+              </Form.Item>
+            </>
+          )}
+          {mailProvider === 'guerrillamail' && (
+            <>
+              <Form.Item
+                name="guerrillamail_api_url"
+                label="API URL"
+                extra="后端会从内置已验证的 Guerrilla Mail 域名列表中随机选一个域名，无需手动填写域名。"
+              >
+                <Input placeholder="https://api.guerrillamail.com/ajax.php" />
               </Form.Item>
             </>
           )}
