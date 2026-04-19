@@ -286,7 +286,6 @@ class AliasGenerationApiTests(unittest.TestCase):
                     "alias_domain": "serf.me",
                     "alias_domain_id": "42",
                     "alias_count": 2,
-                    "state_key": "vend-state",
                     "confirmation_inbox": {
                         "provider": "cloudmail",
                         "api_base": "https://cloudmail.example/api",
@@ -296,6 +295,29 @@ class AliasGenerationApiTests(unittest.TestCase):
                         "subdomain": "pool-a",
                         "timeout": 45,
                     },
+                    "provider_config": {
+                        "register_url": "https://accounts.example.test/register",
+                        "cloudmail_api_base": "https://cloudmail.example/api",
+                        "cloudmail_admin_email": "admin@example.com",
+                        "cloudmail_admin_password": "secret-pass",
+                        "cloudmail_domain": "mail.example.com",
+                        "cloudmail_subdomain": "pool-a",
+                        "cloudmail_timeout": 45,
+                        "alias_domain": "serf.me",
+                        "alias_domain_id": "42",
+                        "alias_count": 2,
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "api_base": "https://cloudmail.example/api",
+                            "admin_email": "admin@example.com",
+                            "admin_password": "secret-pass",
+                            "domain": "mail.example.com",
+                            "subdomain": "pool-a",
+                            "timeout": 45,
+                        },
+                        "state_key": "vend-state",
+                    },
+                    "state_key": "vend-state",
                 }
             ],
         )
@@ -366,7 +388,7 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(stored_payload["mail_provider"], "cloudmail")
         self.assertEqual(
             stored_payload["sources"],
-            '[{"id": "vend-1", "type": "vend_email", "register_url": "https://accounts.example.test/register", "cloudmail_api_base": "https://cloudmail.example/api", "cloudmail_admin_email": "admin@example.com", "cloudmail_admin_password": "secret-pass", "cloudmail_domain": "mail.example.com", "cloudmail_subdomain": "pool-a", "cloudmail_timeout": 45, "alias_domain": "serf.me", "alias_domain_id": "42", "alias_count": 2, "confirmation_inbox": {"provider": "cloudmail", "api_base": "https://cloudmail.example/api", "admin_email": "admin@example.com", "admin_password": "secret-pass", "domain": "mail.example.com", "subdomain": "pool-a", "timeout": 45}, "state_key": "vend-1-state"}]',
+            '[{"id": "vend-1", "type": "vend_email", "register_url": "https://accounts.example.test/register", "cloudmail_api_base": "https://cloudmail.example/api", "cloudmail_admin_email": "admin@example.com", "cloudmail_admin_password": "secret-pass", "cloudmail_domain": "mail.example.com", "cloudmail_subdomain": "pool-a", "cloudmail_timeout": 45, "alias_domain": "serf.me", "alias_domain_id": "42", "alias_count": 2, "confirmation_inbox": {"provider": "cloudmail", "api_base": "https://cloudmail.example/api", "admin_email": "admin@example.com", "admin_password": "secret-pass", "domain": "mail.example.com", "subdomain": "pool-a", "timeout": 45}, "provider_config": {"register_url": "https://accounts.example.test/register", "cloudmail_api_base": "https://cloudmail.example/api", "cloudmail_admin_email": "admin@example.com", "cloudmail_admin_password": "secret-pass", "cloudmail_domain": "mail.example.com", "cloudmail_subdomain": "pool-a", "cloudmail_timeout": 45, "alias_domain": "serf.me", "alias_domain_id": "42", "alias_count": 2, "state_key": "vend-1-state", "confirmation_inbox": {"provider": "cloudmail", "api_base": "https://cloudmail.example/api", "admin_email": "admin@example.com", "admin_password": "secret-pass", "domain": "mail.example.com", "subdomain": "pool-a", "timeout": 45}}, "state_key": "vend-1-state"}]',
         )
 
     def test_alias_generation_test_api_preserves_full_vend_source_from_draft_config(self):
