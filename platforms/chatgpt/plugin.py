@@ -1,7 +1,6 @@
 """ChatGPT / Codex CLI 平台插件"""
 
-from core.base_mailbox import CloudMailMailbox
-from core.base_mailbox import BaseMailbox
+from core.base_mailbox import BaseMailbox, CloudMailMailbox, GuerrillaMailMailbox
 from core.base_platform import Account, BasePlatform, RegisterConfig
 from core.registry import register
 from platforms.chatgpt.chatgpt_registration_mode_adapter import (
@@ -90,7 +89,9 @@ class ChatGPTPlatform(BasePlatform):
                     self._email = _fixed_email
                     self._before_ids = set()
                     self._last_message_id = ""
-                    self._cloudmail_message_dedupe = isinstance(_mailbox, CloudMailMailbox)
+                    self._cloudmail_message_dedupe = isinstance(
+                        _mailbox, (CloudMailMailbox, GuerrillaMailMailbox)
+                    )
 
                 def create_email(self, config=None):
                     if self._email and self._acct:

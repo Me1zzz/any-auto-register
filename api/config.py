@@ -71,6 +71,7 @@ CONFIG_KEYS = [
     "gptmail_base_url",
     "gptmail_api_key",
     "gptmail_domain",
+    "guerrillamail_api_url",
     "opentrashmail_api_url",
     "opentrashmail_domain",
     "opentrashmail_password",
@@ -268,6 +269,8 @@ def get_config():
         all_cfg["outlook_backend"] = "graph"
     if not all_cfg.get("gptmail_base_url"):
         all_cfg["gptmail_base_url"] = "https://mail.chatgpt.org.uk"
+    if not all_cfg.get("guerrillamail_api_url"):
+        all_cfg["guerrillamail_api_url"] = "https://api.guerrillamail.com/ajax.php"
     if not all_cfg.get("luckmail_base_url"):
         all_cfg["luckmail_base_url"] = "https://mails.luckyous.com/"
     if not str(all_cfg.get("contribution_enabled", "") or "").strip():

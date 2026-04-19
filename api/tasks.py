@@ -356,7 +356,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                         for extra_key, extra_value in mailbox_extra.items():
                             account.extra.setdefault(extra_key, extra_value)
                     mailbox_account_id = str(getattr(mailbox_account, "account_id", "") or "").strip()
-                    if mailbox_account_id and mailbox_account_id != account.email:
+                    if (
+                        mailbox_account_id
+                        and mailbox_account_id != account.email
+                        and "@" in mailbox_account_id
+                    ):
                         account.extra.setdefault("mailbox_email", mailbox_account_id)
                     mail_provider = merged_extra.get("mail_provider", "")
                     if mail_provider:

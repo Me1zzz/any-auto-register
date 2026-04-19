@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from core.base_mailbox import CloudMailMailbox, MailboxAccount
+from core.base_mailbox import CloudMailMailbox, GuerrillaMailMailbox, MailboxAccount
 from core.base_platform import RegisterConfig
 from platforms.chatgpt.plugin import ChatGPTPlatform
 
@@ -60,6 +60,29 @@ class _TrackingCloudMailMailbox(CloudMailMailbox):
     def get_current_ids(self, account):
         self.current_ids_calls.append(account)
         return {"mid-1"}
+
+    def wait_for_code(self, *args, **kwargs):
+        self.wait_call = (args, kwargs)
+        self._last_matched_message_id = "m-2"
+        return "123456"
+
+
+class _TrackingGuerrillaMailMailbox(GuerrillaMailMailbox):
+    def __init__(self):
+        super().__init__(api_url="https://api.guerrillamail.com/ajax.php")
+        self.account = MailboxAccount(
+            email="demo@guerrillamail.net", account_id="sid-1"
+        )
+        self.wait_call = None
+        self.current_ids_calls = []
+        self._last_matched_message_id = ""
+
+    def get_email(self):
+        return self.account
+
+    def get_current_ids(self, account):
+        self.current_ids_calls.append(account)
+        return {"m-1"}
 
     def wait_for_code(self, *args, **kwargs):
         self.wait_call = (args, kwargs)
@@ -285,6 +308,43 @@ class ChatGPTPluginTests(unittest.TestCase):
         with mock.patch(
             "platforms.chatgpt.plugin.build_chatgpt_registration_mode_adapter",
             return_value=_CloudMailAdapter(),
+        ):
+            result = platform.register()
+
+        self.assertEqual(captured["code"], "123456")
+        self.assertEqual(captured["message_id"], "m-2")
+        self.assertTrue(captured["uses_cloudmail"])
+        self.assertEqual(result["success"], True)
+
+    def test_guerrillamail_custom_provider_tracks_last_message_id(self):
+        mailbox = _TrackingGuerrillaMailMailbox()
+        platform = ChatGPTPlatform(
+            config=RegisterConfig(extra={"chatgpt_registration_mode": "refresh_token"}),
+            mailbox=mailbox,
+        )
+        captured = {}
+
+        class _GuerrillaMailAdapter:
+            def run(self, context):
+                context.email_service.create_email()
+                code = context.email_service.get_verification_code(
+                    timeout=30, exclude_codes={"m-1"}
+                )
+                captured["code"] = code
+                captured["message_id"] = getattr(
+                    context.email_service, "_last_message_id", ""
+                )
+                captured["uses_cloudmail"] = getattr(
+                    context.email_service, "_cloudmail_message_dedupe", False
+                )
+                return mock.Mock(success=True)
+
+            def build_account(self, result, fallback_password):
+                return {"success": True, "password": fallback_password}
+
+        with mock.patch(
+            "platforms.chatgpt.plugin.build_chatgpt_registration_mode_adapter",
+            return_value=_GuerrillaMailAdapter(),
         ):
             result = platform.register()
 

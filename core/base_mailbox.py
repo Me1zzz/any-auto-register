@@ -296,6 +296,13 @@ def create_mailbox(
             domain=extra.get("gptmail_domain", ""),
             proxy=proxy,
         )
+    elif provider == "guerrillamail":
+        return GuerrillaMailMailbox(
+            api_url=extra.get(
+                "guerrillamail_api_url", "https://api.guerrillamail.com/ajax.php"
+            ),
+            proxy=proxy,
+        )
     elif provider == "applemail":
         return AppleMailMailbox(
             api_url=extra.get("applemail_base_url", "https://www.appleemail.top"),
@@ -2372,6 +2379,233 @@ class GPTMailMailbox(BaseMailbox):
                         continue
                     if code:
                         self._log(f"[GPTMail] 收到验证码: {code}")
+                        return code
+            except Exception:
+                pass
+            return None
+
+        return self._run_polling_wait(
+            timeout=timeout,
+            poll_interval=3,
+            poll_once=poll_once,
+        )
+
+
+class GuerrillaMailMailbox(BaseMailbox):
+    """Guerrilla Mail 临时邮箱服务"""
+
+    VERIFIED_DOMAINS = [
+        "sharklasers.com",
+        "guerrillamail.info",
+        "grr.la",
+        "guerrillamail.biz",
+        "guerrillamail.com",
+        "guerrillamail.de",
+        "guerrillamail.net",
+        "guerrillamail.org",
+        "guerrillamailblock.com",
+        "pokemail.net",
+        "spam4.me",
+    ]
+
+    def __init__(
+        self,
+        api_url: str = "https://api.guerrillamail.com/ajax.php",
+        proxy: str = None,
+    ):
+        self.api = str(api_url or "https://api.guerrillamail.com/ajax.php").strip()
+        self.proxy = build_requests_proxy_config(proxy)
+        self._session = None
+        self._email = ""
+        self._sid_token = ""
+        self._email_user = ""
+        self._email_domain = ""
+        self._last_matched_message_id = ""
+
+    @staticmethod
+    def _generate_local_part() -> str:
+        import string
+
+        return "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
+
+    def _get_session(self):
+        import requests
+
+        if self._session is None:
+            session = requests.Session()
+            session.proxies = self.proxy or {}
+            self._session = session
+        return self._session
+
+    def _request_json(self, params: dict[str, Any], timeout: int = 15) -> dict[str, Any]:
+        session = self._get_session()
+        response = session.get(self.api, params=params, timeout=timeout)
+        try:
+            payload = response.json()
+        except Exception as exc:
+            preview = (response.text or "")[:200]
+            raise RuntimeError(
+                f"Guerrilla Mail API 返回非 JSON: HTTP {response.status_code} {preview}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Guerrilla Mail API 返回异常: {payload}")
+        return payload
+
+    @staticmethod
+    def _mail_id(message: dict[str, Any]) -> str:
+        for key in ("mail_id", "id", "email_id", "message_id"):
+            value = str(message.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _message_timestamp(message: dict[str, Any]) -> Optional[float]:
+        for key in ("mail_timestamp", "timestamp", "ts", "date"):
+            value = message.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            return numeric / 1000 if numeric > 10_000_000_000 else numeric
+        return None
+
+    def get_email(self) -> MailboxAccount:
+        initial = self._request_json({"f": "get_email_address", "lang": "en"})
+        initial_sid_token = str(initial.get("sid_token") or "").strip()
+        if not initial_sid_token:
+            raise RuntimeError(f"Guerrilla Mail 初始化未返回 sid_token: {initial}")
+        self._email_user = self._generate_local_part()
+        self._email_domain = random.choice(self.VERIFIED_DOMAINS)
+        data = self._request_json(
+            {
+                "f": "set_email_user",
+                "email_user": self._email_user,
+                "lang": "en",
+                "sid_token": initial_sid_token,
+            }
+        )
+
+        canonical_email = str(data.get("email_addr") or "").strip()
+        sid_token = str(data.get("sid_token") or "").strip()
+        if not canonical_email or not sid_token:
+            raise RuntimeError(f"Guerrilla Mail 返回空邮箱或 sid_token: {data}")
+
+        resolved_local_part = canonical_email.split("@", 1)[0].strip() or self._email_user
+        email = f"{resolved_local_part}@{self._email_domain}"
+
+        self._email = email
+        self._sid_token = sid_token
+        self._log(f"[GuerrillaMail] 生成邮箱: {email}")
+        return MailboxAccount(
+            email=email,
+            account_id=sid_token,
+            extra={
+                "provider": "guerrillamail",
+                "domain": self._email_domain,
+                "email_user": resolved_local_part,
+                "canonical_email": canonical_email,
+            },
+        )
+
+    def _list_messages(self, account: MailboxAccount) -> list[dict[str, Any]]:
+        payload = self._request_json(
+            {
+                "f": "get_email_list",
+                "offset": 0,
+                "sid_token": account.account_id,
+            },
+            timeout=10,
+        )
+        messages = payload.get("list") or []
+        return [item for item in messages if isinstance(item, dict)]
+
+    def _get_message_detail(
+        self, account: MailboxAccount, message_id: str
+    ) -> dict[str, Any]:
+        payload = self._request_json(
+            {
+                "f": "fetch_email",
+                "email_id": message_id,
+                "sid_token": account.account_id,
+            },
+            timeout=10,
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            return {
+                message_id
+                for message in self._list_messages(account)
+                for message_id in [self._mail_id(message)]
+                if message_id
+            }
+        except Exception:
+            return set()
+
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+        **kwargs,
+    ) -> str:
+        self._last_matched_message_id = ""
+        seen = {str(mid).strip() for mid in (before_ids or set()) if str(mid).strip()}
+        otp_sent_at = kwargs.get("otp_sent_at")
+        exclude_message_ids = {
+            str(message_id).strip()
+            for message_id in (kwargs.get("exclude_codes") or set())
+            if str(message_id or "").strip()
+        }
+
+        def poll_once() -> Optional[str]:
+            try:
+                messages = self._list_messages(account)
+                for message in messages:
+                    message_id = self._mail_id(message)
+                    if not message_id or message_id in seen:
+                        continue
+
+                    message_ts = self._message_timestamp(message)
+                    if (
+                        otp_sent_at is not None
+                        and message_ts is not None
+                        and message_ts < float(otp_sent_at)
+                    ):
+                        seen.add(message_id)
+                        continue
+
+                    if message_id in exclude_message_ids:
+                        seen.add(message_id)
+                        continue
+
+                    seen.add(message_id)
+                    detail = self._get_message_detail(account, message_id)
+                    search_text = " ".join(
+                        [
+                            str(message.get("mail_subject") or ""),
+                            str(message.get("mail_excerpt") or ""),
+                            str(message.get("mail_from") or ""),
+                            str(detail.get("mail_subject") or ""),
+                            str(detail.get("mail_excerpt") or ""),
+                            str(detail.get("mail_body") or ""),
+                            str(detail.get("mail_from") or ""),
+                            str(detail.get("body") or ""),
+                        ]
+                    ).strip()
+                    search_text = self._decode_raw_content(search_text) or search_text
+                    if keyword and keyword.lower() not in search_text.lower():
+                        continue
+                    code = self._safe_extract(search_text, code_pattern)
+                    if code:
+                        self._last_matched_message_id = message_id
+                        self._log(f"[GuerrillaMail] 命中验证码: {code}")
                         return code
             except Exception:
                 pass
