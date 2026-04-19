@@ -473,6 +473,19 @@ class InteractiveProviderContractTests(unittest.TestCase):
 
 
 class EmailShieldAndSimpleLoginTests(unittest.TestCase):
+    _PROVIDER_CONFIG_SIGNED_OPTIONS_HTML = """
+    <select name="signed-alias-suffix">
+      <option value=".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk">Mismatch label without canonical domain</option>
+      <option value=".onion376@simplelogin.com.aeSMmw.tkj3IFpsj8LgW4ikJ55LVeeCILo">Another mismatched label</option>
+    </select>
+    """
+
+    _SESSION_SIGNED_OPTIONS_HTML = """
+    <select name="signed-alias-suffix">
+      <option value=".orbit999@sessiondomain.com.aeSMmw.sessionToken123">Session label override</option>
+    </select>
+    """
+
     def test_emailshield_maps_account_verify_gate(self):
         provider = EmailShieldAliasProvider(
             spec=AliasProviderSourceSpec(
@@ -530,12 +543,7 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
                 provider_config={
                     "site_url": "https://simplelogin.io/",
                     "accounts": [{"email": "fust@fst.cxwsss.online"}],
-                    "signed_alias_suffix_html": """
-                    <select name="signed-alias-suffix">
-                      <option value=".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk">.relearn763@aleeas.com (Public domain)</option>
-                      <option value=".onion376@simplelogin.com.aeSMmw.tkj3IFpsj8LgW4ikJ55LVeeCILo">.onion376@simplelogin.com (Premium domain)</option>
-                    </select>
-                    """,
+                    "signed_alias_suffix_html": self._PROVIDER_CONFIG_SIGNED_OPTIONS_HTML,
                 },
             ),
             context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
@@ -547,6 +555,88 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
         self.assertEqual([item.domain for item in options], ["aleeas.com", "simplelogin.com"])
         self.assertEqual(options[0].key, ".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk")
         self.assertEqual(options[0].raw["signed_value"], ".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk")
+        self.assertEqual(options[0].raw["text"], "Mismatch label without canonical domain")
+
+    def test_simplelogin_prefers_session_state_signed_options_over_provider_config(self):
+        provider = SimpleLoginAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="simplelogin-primary",
+                provider_type="simplelogin",
+                state_key="simplelogin-primary",
+                desired_alias_count=3,
+                provider_config={
+                    "site_url": "https://simplelogin.io/",
+                    "accounts": [{"email": "fust@fst.cxwsss.online"}],
+                    "signed_alias_suffix_html": self._PROVIDER_CONFIG_SIGNED_OPTIONS_HTML,
+                },
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        context = AuthenticatedProviderContext(
+            service_account_email="fust@fst.cxwsss.online",
+            confirmation_inbox_email="fust@fst.cxwsss.online",
+            real_mailbox_email="fust@fst.cxwsss.online",
+            service_password="fust@fst.cxwsss.online",
+            username="fust",
+            session_state={"signed_alias_suffix_html": self._SESSION_SIGNED_OPTIONS_HTML},
+        )
+
+        options = provider.discover_alias_domains(context)
+
+        self.assertEqual([item.domain for item in options], ["sessiondomain.com"])
+        self.assertEqual(options[0].key, ".orbit999@sessiondomain.com.aeSMmw.sessionToken123")
+
+    def test_simplelogin_shared_flow_discovers_signed_options_and_returns_aliases(self):
+        provider = SimpleLoginAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="simplelogin-primary",
+                provider_type="simplelogin",
+                state_key="simplelogin-primary",
+                desired_alias_count=2,
+                provider_config={
+                    "site_url": "https://simplelogin.io/",
+                    "accounts": [{"email": "fust@fst.cxwsss.online", "label": "fust"}],
+                    "signed_alias_suffix_html": self._PROVIDER_CONFIG_SIGNED_OPTIONS_HTML,
+                },
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=2,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            [item.code for item in result.stage_timeline],
+            [
+                "session_ready",
+                "discover_alias_domains",
+                "list_aliases",
+                "create_aliases",
+                "aliases_ready",
+            ],
+        )
+        self.assertEqual(len(result.aliases), 2)
+        self.assertTrue(result.aliases[0]["email"].startswith("simplelogin-1@"))
+        self.assertIn(
+            result.aliases[0]["email"],
+            {"simplelogin-1@aleeas.com", "simplelogin-1@simplelogin.com"},
+        )
+        self.assertIn(
+            result.aliases[0]["signed_value"],
+            {
+                ".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk",
+                ".onion376@simplelogin.com.aeSMmw.tkj3IFpsj8LgW4ikJ55LVeeCILo",
+            },
+        )
+        self.assertEqual(result.account_identity.service_account_email, "fust@fst.cxwsss.online")
 
     def test_simplelogin_shared_flow_returns_structured_failure_when_signed_options_missing(self):
         provider = SimpleLoginAliasProvider(

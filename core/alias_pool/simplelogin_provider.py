@@ -20,6 +20,17 @@ class SimpleLoginProvider(ExistingAccountAliasProviderBase):
             username=account["label"],
         )
 
+    def _extract_domain_from_signed_value(self, signed_value: str) -> str:
+        value = str(signed_value or "").strip()
+        if not value:
+            return ""
+
+        domain_segment = value.split(".aeSMmw.", 1)[0]
+        at_index = domain_segment.rfind("@")
+        if at_index < 0:
+            return ""
+        return domain_segment[at_index + 1 :].strip(" .").lower()
+
     def _parse_signed_domain_options(self, html: str) -> list[AliasDomainOption]:
         pattern = re.compile(
             r'<option[^>]*value="(?P<value>[^"]+)"[^>]*>(?P<text>.*?)</option>',
@@ -29,10 +40,9 @@ class SimpleLoginProvider(ExistingAccountAliasProviderBase):
         for match in pattern.finditer(html):
             signed_value = str(match.group("value") or "").strip()
             text = re.sub(r"\s+", " ", str(match.group("text") or "")).strip()
-            domain_match = re.search(r"@([A-Za-z0-9.-]+)", text)
-            if not signed_value or domain_match is None:
+            domain = self._extract_domain_from_signed_value(signed_value)
+            if not signed_value or not domain:
                 continue
-            domain = domain_match.group(1).lower()
             options.append(
                 AliasDomainOption(
                     key=signed_value,
@@ -55,6 +65,8 @@ class SimpleLoginProvider(ExistingAccountAliasProviderBase):
         for value in (
             session_state.get("signed_alias_suffix_html"),
             session_state.get("signed_options_html"),
+            session_state.get("signed_alias_suffix_payload"),
+            session_state.get("signed_options_payload"),
             self._spec.provider_config.get("signed_alias_suffix_html"),
             self._spec.provider_config.get("signed_options_html"),
             self._spec.provider_config.get("signed_alias_suffix_payload"),
