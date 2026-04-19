@@ -193,6 +193,63 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["sourceId"], "legacy-static")
         self.assertEqual(body["aliasEmail"], "a@example.com")
 
+    def test_alias_generation_test_api_supports_myalias_source_shape(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "myalias-primary",
+                        "type": "myalias_pro",
+                        "alias_count": 3,
+                        "state_key": "myalias-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                        "provider_config": {
+                            "signup_url": "https://myalias.pro/signup/",
+                            "login_url": "https://myalias.pro/login/",
+                        },
+                    }
+                ],
+            },
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service = service_cls.return_value
+            service.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="myalias-primary",
+                source_type="myalias_pro",
+                alias_email="myalias-1@myalias.pro",
+                real_mailbox_email="real@example.com",
+                service_email="service@myalias.pro",
+                account={"realMailboxEmail": "real@example.com", "serviceEmail": "service@myalias.pro", "password": "secret-pass"},
+                aliases=[
+                    {"email": "myalias-1@myalias.pro"},
+                    {"email": "myalias-2@myalias.pro"},
+                    {"email": "myalias-3@myalias.pro"},
+                ],
+                current_stage={"code": "aliases_ready", "label": "别名预览已生成"},
+                stages=[
+                    {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                    {"code": "verify_account_email", "label": "验证服务账号邮箱", "status": "completed"},
+                    {"code": "create_aliases", "label": "创建别名", "status": "completed"},
+                ],
+            )
+
+            resp = client.post("/api/config/alias-test", json={"sourceId": "myalias-primary", "useDraftConfig": False})
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["sourceType"], "myalias_pro")
+        self.assertEqual(len(body["aliases"]), 3)
+        self.assertEqual(body["stages"][1]["code"], "verify_account_email")
+
     def test_get_config_decodes_sources_json_string(self):
         client = TestClient(app)
 
