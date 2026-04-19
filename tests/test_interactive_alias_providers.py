@@ -1,5 +1,6 @@
 import unittest
 
+from core.alias_pool.myalias_pro_provider import MyAliasProProvider
 from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase, InteractiveAliasProviderBase
 from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.interactive_provider_models import (
@@ -15,6 +16,7 @@ from core.alias_pool.provider_contracts import (
     AliasProviderBootstrapContext,
     AliasProviderSourceSpec,
 )
+from core.alias_pool.secureinseconds_provider import SecureInSecondsProvider
 
 
 class _MemoryStore:
@@ -394,6 +396,62 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
         self.assertEqual(
             account,
             {"email": "fust@example.com", "password": "fust@example.com", "label": "Fust"},
+        )
+
+
+class InteractiveProviderContractTests(unittest.TestCase):
+    def test_myalias_pro_maps_account_email_verification_to_shared_requirement(self):
+        provider = MyAliasProProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="myalias-primary",
+                provider_type="myalias_pro",
+                state_key="myalias-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={
+                    "account_email": "real@example.com",
+                    "account_password": "mail-pass",
+                    "match_email": "real@example.com",
+                },
+                provider_config={
+                    "signup_url": "https://myalias.pro/signup/",
+                    "login_url": "https://myalias.pro/login/",
+                },
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        requirements = provider.resolve_verification_requirements(provider.ensure_authenticated_context("alias_test"))
+
+        self.assertEqual(
+            requirements,
+            [VerificationRequirement(kind="account_email", label="验证服务账号邮箱", inbox_role="confirmation_inbox")],
+        )
+
+    def test_secureinseconds_maps_forwarding_verification_to_shared_requirement(self):
+        provider = SecureInSecondsProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="secureinseconds-primary",
+                provider_type="secureinseconds",
+                state_key="secureinseconds-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={
+                    "account_email": "real@example.com",
+                    "account_password": "mail-pass",
+                    "match_email": "real@example.com",
+                },
+                provider_config={
+                    "register_url": "https://alias.secureinseconds.com/auth/register",
+                    "login_url": "https://alias.secureinseconds.com/auth/signin",
+                },
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        requirements = provider.resolve_verification_requirements(provider.ensure_authenticated_context("alias_test"))
+
+        self.assertEqual(
+            requirements,
+            [VerificationRequirement(kind="forwarding_email", label="验证转发邮箱", inbox_role="confirmation_inbox")],
         )
 
 
