@@ -182,6 +182,33 @@ const fixedServiceRoundTrip = deriveCloudmailAliasServiceFormValues({
   sources: fixedServiceDraftConfig.sources,
 })
 
+const hiddenSimpleGeneratorDraftConfig = createAliasGenerationTestDraftConfig({
+  cloudmail_alias_enabled: true,
+  cloudmail_alias_emails: 'legacy@example.com',
+  sources: [
+    {
+      id: 'hidden-simple-generator',
+      type: 'simple_generator',
+      prefix: 'msi.',
+      suffix: '@example.com',
+      count: 2,
+      middle_length_min: 3,
+      middle_length_max: 6,
+    },
+  ],
+})
+
+const hiddenSimpleGeneratorRoundTrip = deriveCloudmailAliasServiceFormValues({
+  cloudmail_alias_enabled: true,
+  sources: hiddenSimpleGeneratorDraftConfig.sources,
+})
+
+const hiddenSimpleGeneratorSourceCount = Array.isArray(hiddenSimpleGeneratorDraftConfig.sources)
+  ? hiddenSimpleGeneratorDraftConfig.sources.length
+  : -1
+
+const hiddenSimpleGeneratorRejected = hiddenSimpleGeneratorSourceCount === 0
+
 void [
   providerTypes,
   simpleLoginSource,
@@ -191,6 +218,9 @@ void [
   fixedServiceRoundTrip.cloudmail_alias_emailshield_enabled,
   fixedServiceRoundTrip.cloudmail_alias_simplelogin_enabled,
   fixedServiceRoundTrip.cloudmail_alias_alias_email_enabled,
+  hiddenSimpleGeneratorDraftConfig.sources,
+  hiddenSimpleGeneratorRejected,
+  hiddenSimpleGeneratorRoundTrip.cloudmail_alias_simplelogin_enabled,
   modernDisplay.summaryAliasEmail,
   modernDisplay.account.realMailboxEmail,
   modernDisplay.account.serviceEmail,

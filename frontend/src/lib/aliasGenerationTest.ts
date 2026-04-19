@@ -1145,12 +1145,7 @@ export function deriveAliasGenerationDraftSources(
     draftConfig,
     findDraftSourceByType(normalizedSources, 'alias_email'),
   )
-  const preservedOtherSources = normalizedSources.filter((source) => (
-    source.type === 'simple_generator'
-  ))
-
   return [
-    ...preservedOtherSources,
     staticSource,
     vendSource,
     myaliasProSource,
