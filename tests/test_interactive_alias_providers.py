@@ -427,6 +427,48 @@ class InteractiveProviderContractTests(unittest.TestCase):
             [VerificationRequirement(kind="account_email", label="验证服务账号邮箱", inbox_role="confirmation_inbox")],
         )
 
+    def test_myalias_pro_shared_loop_maps_requirement_to_verify_account_email_stage(self):
+        provider = MyAliasProProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="myalias-primary",
+                provider_type="myalias_pro",
+                state_key="myalias-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={
+                    "account_email": "real@example.com",
+                    "account_password": "mail-pass",
+                    "match_email": "real@example.com",
+                },
+                provider_config={
+                    "signup_url": "https://myalias.pro/signup/",
+                    "login_url": "https://myalias.pro/login/",
+                },
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            [item.code for item in result.stage_timeline],
+            [
+                "session_ready",
+                "verify_account_email",
+                "discover_alias_domains",
+                "list_aliases",
+                "create_aliases",
+                "aliases_ready",
+            ],
+        )
+
     def test_secureinseconds_maps_forwarding_verification_to_shared_requirement(self):
         provider = SecureInSecondsProvider(
             spec=AliasProviderSourceSpec(
@@ -452,6 +494,48 @@ class InteractiveProviderContractTests(unittest.TestCase):
         self.assertEqual(
             requirements,
             [VerificationRequirement(kind="forwarding_email", label="验证转发邮箱", inbox_role="confirmation_inbox")],
+        )
+
+    def test_secureinseconds_shared_loop_maps_requirement_to_verify_forwarding_email_stage(self):
+        provider = SecureInSecondsProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="secureinseconds-primary",
+                provider_type="secureinseconds",
+                state_key="secureinseconds-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={
+                    "account_email": "real@example.com",
+                    "account_password": "mail-pass",
+                    "match_email": "real@example.com",
+                },
+                provider_config={
+                    "register_url": "https://alias.secureinseconds.com/auth/register",
+                    "login_url": "https://alias.secureinseconds.com/auth/signin",
+                },
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            [item.code for item in result.stage_timeline],
+            [
+                "session_ready",
+                "verify_forwarding_email",
+                "discover_alias_domains",
+                "list_aliases",
+                "create_aliases",
+                "aliases_ready",
+            ],
         )
 
 

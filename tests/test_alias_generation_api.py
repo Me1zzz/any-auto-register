@@ -195,29 +195,28 @@ class AliasGenerationApiTests(unittest.TestCase):
 
     def test_alias_generation_test_api_supports_myalias_source_shape(self):
         client = TestClient(app)
+        expected_source = {
+            "id": "myalias-primary",
+            "type": "myalias_pro",
+            "alias_count": 3,
+            "state_key": "myalias-primary",
+            "confirmation_inbox": {
+                "provider": "cloudmail",
+                "account_email": "real@example.com",
+                "account_password": "mail-pass",
+                "match_email": "real@example.com",
+            },
+            "provider_config": {
+                "signup_url": "https://myalias.pro/signup/",
+                "login_url": "https://myalias.pro/login/",
+            },
+        }
 
         with patch("core.config_store.config_store.get", return_value=""), patch(
             "api.config.config_store.get_all",
             return_value={
                 "cloudmail_alias_enabled": True,
-                "sources": [
-                    {
-                        "id": "myalias-primary",
-                        "type": "myalias_pro",
-                        "alias_count": 3,
-                        "state_key": "myalias-primary",
-                        "confirmation_inbox": {
-                            "provider": "cloudmail",
-                            "account_email": "real@example.com",
-                            "account_password": "mail-pass",
-                            "match_email": "real@example.com",
-                        },
-                        "provider_config": {
-                            "signup_url": "https://myalias.pro/signup/",
-                            "login_url": "https://myalias.pro/login/",
-                        },
-                    }
-                ],
+                "sources": [expected_source],
             },
         ), patch("api.config.AliasAutomationTestService") as service_cls:
             service = service_cls.return_value
@@ -245,6 +244,10 @@ class AliasGenerationApiTests(unittest.TestCase):
             resp = client.post("/api/config/alias-test", json={"sourceId": "myalias-primary", "useDraftConfig": False})
 
         self.assertEqual(resp.status_code, 200)
+        service.run.assert_called_once()
+        pool_config = service.run.call_args.kwargs["pool_config"]
+        self.assertEqual(pool_config["sources"], [expected_source])
+        self.assertEqual(service.run.call_args.kwargs["source_id"], "myalias-primary")
         body = resp.json()
         self.assertEqual(body["sourceType"], "myalias_pro")
         self.assertEqual(len(body["aliases"]), 3)
