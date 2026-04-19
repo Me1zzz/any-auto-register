@@ -44,6 +44,12 @@ class AliasProviderBootstrapTests(unittest.TestCase):
                     "type": "simplelogin",
                     "alias_count": 3,
                     "state_key": "simplelogin-primary",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "account_email": "real@example.com",
+                        "account_password": "mail-pass",
+                        "match_email": "real@example.com",
+                    },
                     "provider_config": {
                         "site_url": "https://simplelogin.io/",
                         "accounts": [
@@ -70,7 +76,79 @@ class AliasProviderBootstrapTests(unittest.TestCase):
                 {"email": "logon@fst.cxwsss.online", "label": "logon", "password": "secret-pass"},
             ],
         )
-        self.assertEqual(specs[0].confirmation_inbox_config, {})
+        self.assertEqual(
+            specs[0].confirmation_inbox_config,
+            {
+                "provider": "cloudmail",
+                "account_email": "real@example.com",
+                "account_password": "mail-pass",
+                "match_email": "real@example.com",
+            },
+        )
+
+    def test_build_alias_provider_source_specs_populates_vend_provider_config_for_migration(self):
+        pool_config = {
+            "enabled": True,
+            "task_id": "alias-test",
+            "sources": [
+                {
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://legacy.example/register",
+                    "cloudmail_api_base": "https://legacy.example/api",
+                    "cloudmail_admin_email": "legacy-admin@example.com",
+                    "cloudmail_admin_password": "legacy-pass",
+                    "cloudmail_domain": "legacy.example.com",
+                    "cloudmail_subdomain": "legacy-sub",
+                    "cloudmail_timeout": 41,
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://mailbox.example/api",
+                        "admin_email": "mailbox-admin@example.com",
+                        "admin_password": "mailbox-pass",
+                        "domain": "mailbox.example.com",
+                        "subdomain": "mailbox-sub",
+                        "timeout": 55,
+                        "account_email": "real@example.com",
+                        "account_password": "real-pass",
+                        "match_email": "real@example.com",
+                    },
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 2,
+                    "state_key": "vend-email-primary",
+                }
+            ],
+        }
+
+        specs = build_alias_provider_source_specs(pool_config)
+
+        self.assertEqual(specs[0].provider_config["register_url"], "https://legacy.example/register")
+        self.assertEqual(specs[0].provider_config["cloudmail_api_base"], "https://legacy.example/api")
+        self.assertEqual(specs[0].provider_config["cloudmail_admin_email"], "legacy-admin@example.com")
+        self.assertEqual(specs[0].provider_config["cloudmail_admin_password"], "legacy-pass")
+        self.assertEqual(specs[0].provider_config["cloudmail_domain"], "legacy.example.com")
+        self.assertEqual(specs[0].provider_config["cloudmail_subdomain"], "legacy-sub")
+        self.assertEqual(specs[0].provider_config["cloudmail_timeout"], 41)
+        self.assertEqual(specs[0].provider_config["alias_domain"], "serf.me")
+        self.assertEqual(specs[0].provider_config["alias_domain_id"], "42")
+        self.assertEqual(specs[0].provider_config["alias_count"], 2)
+        self.assertEqual(specs[0].provider_config["state_key"], "vend-email-primary")
+        self.assertEqual(
+            specs[0].provider_config["confirmation_inbox"],
+            {
+                "provider": "cloudmail",
+                "api_base": "https://mailbox.example/api",
+                "admin_email": "mailbox-admin@example.com",
+                "admin_password": "mailbox-pass",
+                "domain": "mailbox.example.com",
+                "subdomain": "mailbox-sub",
+                "timeout": 55,
+                "account_email": "real@example.com",
+                "account_password": "real-pass",
+                "match_email": "real@example.com",
+            },
+        )
 
     def test_build_alias_provider_source_specs_wraps_vend_confirmation_inbox_config(self):
         pool_config = {

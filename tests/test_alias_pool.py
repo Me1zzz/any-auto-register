@@ -22,6 +22,7 @@ from core.alias_pool.provider_contracts import (
     AliasProviderSourceSpec,
     AliasProviderStage,
 )
+from core.alias_pool.vend_provider import VendAliasProvider
 from core.alias_pool.service_base import AliasServiceProducerBase
 from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
 from core.alias_pool.static_list import StaticAliasListProducer
@@ -424,6 +425,15 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
         self.assertEqual(result["sources"][0]["type"], "myalias_pro")
         self.assertEqual(result["sources"][1]["type"], "simplelogin")
         self.assertEqual(result["sources"][1]["provider_config"]["site_url"], "https://simplelogin.io/")
+        self.assertEqual(
+            result["sources"][0]["confirmation_inbox"],
+            {
+                "provider": "cloudmail",
+                "account_email": "real@example.com",
+                "account_password": "mail-pass",
+                "match_email": "real@example.com",
+            },
+        )
 
     def test_decode_alias_provider_sources_excludes_manyme(self):
         from core.alias_pool.config import decode_alias_provider_sources
@@ -535,6 +545,28 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                         "domain": "mail.example.com",
                         "subdomain": "pool-a",
                         "timeout": 45,
+                    },
+                    "provider_config": {
+                        "register_url": "https://accounts.example.test/register",
+                        "cloudmail_api_base": "https://cloudmail.example/api",
+                        "cloudmail_admin_email": "admin@example.com",
+                        "cloudmail_admin_password": "secret-pass",
+                        "cloudmail_domain": "mail.example.com",
+                        "cloudmail_subdomain": "pool-a",
+                        "cloudmail_timeout": 45,
+                        "alias_domain": "serf.me",
+                        "alias_domain_id": "42",
+                        "alias_count": 2,
+                        "state_key": "vend-state",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "api_base": "https://cloudmail.example/api",
+                            "admin_email": "admin@example.com",
+                            "admin_password": "secret-pass",
+                            "domain": "mail.example.com",
+                            "subdomain": "pool-a",
+                            "timeout": 45,
+                        },
                     },
                 },
             ],
@@ -1640,6 +1672,59 @@ class _UnsafeConfirmationExecutor(_FakeVendEmailDefaultExecutor):
 
 
 class VendEmailRuntimeContractTests(unittest.TestCase):
+    def test_vend_alias_provider_prefers_legacy_top_level_fields_over_provider_config_during_migration(self):
+        spec = AliasProviderSourceSpec(
+            source_id="vend-email-primary",
+            provider_type="vend_email",
+            state_key="vend-email-primary",
+            desired_alias_count=2,
+            confirmation_inbox_config={
+                "provider": "cloudmail",
+                "account_email": "real@example.com",
+            },
+            provider_config={
+                "register_url": "https://provider-config.example/register",
+                "cloudmail_api_base": "https://provider-config.example/api",
+                "cloudmail_admin_email": "provider-config-admin@example.com",
+                "alias_domain": "provider-config.example",
+                "confirmation_inbox": {
+                    "provider": "cloudmail",
+                    "account_email": "provider-config@example.com",
+                },
+            },
+            raw_source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://legacy.example/register",
+                "cloudmail_api_base": "https://legacy.example/api",
+                "cloudmail_admin_email": "legacy-admin@example.com",
+                "alias_domain": "legacy.example",
+                "provider_config": {
+                    "register_url": "https://provider-config.example/register",
+                },
+            },
+        )
+
+        provider = VendAliasProvider(
+            spec=spec,
+            state_repository=mock.Mock(store=mock.Mock()),
+            runtime=mock.Mock(),
+            confirmation_reader=mock.Mock(),
+            telemetry=mock.Mock(),
+        )
+
+        self.assertEqual(provider.source["register_url"], "https://legacy.example/register")
+        self.assertEqual(provider.source["cloudmail_api_base"], "https://legacy.example/api")
+        self.assertEqual(provider.source["cloudmail_admin_email"], "legacy-admin@example.com")
+        self.assertEqual(provider.source["alias_domain"], "legacy.example")
+        self.assertEqual(
+            provider.source["confirmation_inbox"],
+            {
+                "provider": "cloudmail",
+                "account_email": "provider-config@example.com",
+            },
+        )
+
     def test_default_runtime_executor_prefers_confirmation_inbox_contract_for_mailbox_lookup(self):
         from core.alias_pool.vend_email_service import DefaultVendEmailRuntimeExecutor
 

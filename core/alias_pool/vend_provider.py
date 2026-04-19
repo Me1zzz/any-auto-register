@@ -44,8 +44,8 @@ class VendAliasProvider:
         provider_config = dict(getattr(spec, "provider_config", {}) or {})
         raw_source = dict(spec.raw_source or {})
         self.source = {
-            **{key: value for key, value in raw_source.items() if key != "provider_config"},
             **provider_config,
+            **{key: value for key, value in raw_source.items() if key != "provider_config"},
         }
         self.source_id = spec.source_id
         self.state_store = getattr(state_repository, "store", state_repository)

@@ -185,6 +185,27 @@ def _decode_vend_source(item: dict[str, Any], source_id: str) -> dict[str, Any]:
     if confirmation_inbox:
         vend_item["confirmation_inbox"] = confirmation_inbox
 
+    provider_config = {
+        key: vend_item[key]
+        for key in (
+            "register_url",
+            "cloudmail_api_base",
+            "cloudmail_admin_email",
+            "cloudmail_admin_password",
+            "cloudmail_domain",
+            "cloudmail_subdomain",
+            "cloudmail_timeout",
+            "alias_domain",
+            "alias_domain_id",
+            "alias_count",
+        )
+        if key in vend_item
+    }
+    provider_config["state_key"] = item.get("state_key") or source_id
+    if confirmation_inbox:
+        provider_config["confirmation_inbox"] = confirmation_inbox
+    vend_item["provider_config"] = provider_config
+
     vend_item["state_key"] = item.get("state_key") or source_id
     return vend_item
 
@@ -595,8 +616,14 @@ def build_alias_provider_source_specs(pool_config: dict[str, Any]) -> list[Alias
                     if value in (None, ""):
                         continue
                     confirmation_inbox_config[key] = value
+            provider_config = _parse_provider_config(source.get("provider_config"))
+            if not provider_config:
+                provider_config = _decode_vend_source(source, source_id).get("provider_config", {})
         if provider_type in INTERACTIVE_PROVIDER_TYPES:
             provider_config = _parse_provider_config(source.get("provider_config"))
+            explicit_confirmation_inbox = source.get("confirmation_inbox")
+            if isinstance(explicit_confirmation_inbox, dict):
+                confirmation_inbox_config = dict(explicit_confirmation_inbox)
 
         specs.append(
             AliasProviderSourceSpec(
