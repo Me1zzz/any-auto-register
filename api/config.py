@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException
+import json
+import re
 from pydantic import BaseModel, Field
 from core.alias_pool.config import normalize_cloudmail_alias_pool_config
 from core.alias_pool.probe import AliasSourceProbeService
@@ -37,7 +39,17 @@ CONFIG_KEYS = [
     "cloudmail_subdomain",
     "cloudmail_alias_enabled",
     "cloudmail_alias_emails",
-    "cloudmail_alias_mailbox_email",
+    "cloudmail_alias_service_static_enabled",
+    "cloudmail_alias_service_simple_enabled",
+    "cloudmail_alias_service_simple_prefix",
+    "cloudmail_alias_service_simple_suffix",
+    "cloudmail_alias_service_simple_count",
+    "cloudmail_alias_service_simple_middle_length_min",
+    "cloudmail_alias_service_simple_middle_length_max",
+    "cloudmail_alias_service_vend_enabled",
+    "cloudmail_alias_service_vend_source_id",
+    "cloudmail_alias_service_vend_alias_count",
+    "cloudmail_alias_service_vend_state_key",
     "sources",
     "cloudmail_timeout",
     "mail_provider",
@@ -110,6 +122,10 @@ CONFIG_KEYS = [
     "contribution_key",
 ]
 
+WRITE_ONLY_CONFIG_KEYS = {
+    "cloudmail_admin_password",
+}
+
 
 class ConfigUpdate(BaseModel):
     data: dict
@@ -126,6 +142,169 @@ class AliasGenerationTestRequest(BaseModel):
     sourceId: str
     useDraftConfig: bool = False
     config: dict = Field(default_factory=dict)
+
+
+def _decode_config_value(key: str, value):
+    if key in WRITE_ONLY_CONFIG_KEYS:
+        return ""
+    if key != "sources":
+        return value
+    if isinstance(value, list):
+        return value
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if isinstance(parsed, list):
+        sanitized = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            source_type = str(item.get("type") or "").strip()
+            source_id = str(item.get("id") or "").strip()
+            if source_type == "static_list":
+                sanitized.append(
+                    {
+                        "id": source_id,
+                        "type": "static_list",
+                        "emails": item.get("emails") or [],
+                    }
+                )
+            elif source_type == "simple_generator":
+                sanitized.append(
+                    {
+                        "id": source_id,
+                        "type": "simple_generator",
+                        "prefix": item.get("prefix") or "",
+                        "suffix": item.get("suffix") or "",
+                        "count": item.get("count"),
+                        "middle_length_min": item.get("middle_length_min"),
+                        "middle_length_max": item.get("middle_length_max"),
+                    }
+                )
+            elif source_type == "vend_email":
+                sanitized.append(
+                    {
+                        "id": source_id,
+                        "type": "vend_email",
+                        "alias_count": item.get("alias_count"),
+                        "state_key": item.get("state_key") or source_id,
+                        "alias_domain_id": item.get("alias_domain_id") or "",
+                    }
+                )
+        return sanitized
+    return []
+
+
+def _encode_config_value(key: str, value):
+    if key != "sources":
+        return value
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+        if isinstance(parsed, list):
+            value = parsed
+        else:
+            return ""
+    if key == "sources" and isinstance(value, list):
+        sanitized = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            source_type = str(item.get("type") or "").strip()
+            source_id = str(item.get("id") or "").strip()
+            if source_type == "static_list":
+                sanitized.append(
+                    {
+                        "id": source_id,
+                        "type": "static_list",
+                        "emails": item.get("emails") or [],
+                    }
+                )
+            elif source_type == "simple_generator":
+                sanitized.append(
+                    {
+                        "id": source_id,
+                        "type": "simple_generator",
+                        "prefix": item.get("prefix") or "",
+                        "suffix": item.get("suffix") or "",
+                        "count": item.get("count"),
+                        "middle_length_min": item.get("middle_length_min"),
+                        "middle_length_max": item.get("middle_length_max"),
+                    }
+                )
+            elif source_type == "vend_email":
+                sanitized.append(
+                    {
+                        "id": source_id,
+                        "type": "vend_email",
+                        "alias_count": item.get("alias_count"),
+                        "state_key": item.get("state_key") or source_id,
+                    }
+                )
+        value = sanitized
+    return json.dumps(value, ensure_ascii=False)
+
+
+_SENSITIVE_QUERY_PATTERNS = [
+    re.compile(r"((?:user\[)?password(?:\])?=)([^&\s]+)", re.IGNORECASE),
+    re.compile(r"((?:token|authorization)=)([^&\s]+)", re.IGNORECASE),
+    re.compile(r"(([A-Za-z0-9_\-]*token[A-Za-z0-9_\-]*=))([^&\s]+)", re.IGNORECASE),
+    re.compile(r"(([A-Za-z0-9_\-]*code[A-Za-z0-9_\-]*=))([^&\s]+)", re.IGNORECASE),
+]
+
+
+def _redact_sensitive_text(value):
+    text = str(value or "")
+    if not text:
+        return ""
+    redacted = text
+    for pattern in _SENSITIVE_QUERY_PATTERNS:
+        redacted = pattern.sub(r"\1[REDACTED]", redacted)
+    return redacted
+
+
+def _sanitize_capture_summary(items):
+    sanitized = []
+    for item in list(items or []):
+        if not isinstance(item, dict):
+            continue
+        capture_name = str(item.get("name") or "").strip().lower()
+        request_summary = _redact_sensitive_text(
+            item.get("request_summary") or item.get("request_body_excerpt")
+        )
+        response_summary = _redact_sensitive_text(
+            item.get("response_summary") or item.get("response_body_excerpt")
+        )
+        if capture_name == "mailbox_verification":
+            request_summary = "mailbox verification request"
+            response_summary = "mailbox verification result"
+            request_body_excerpt = "mailbox verification request"
+            response_body_excerpt = "mailbox verification result"
+        else:
+            request_body_excerpt = _redact_sensitive_text(item.get("request_body_excerpt"))
+            response_body_excerpt = _redact_sensitive_text(item.get("response_body_excerpt"))
+        sanitized.append(
+            {
+                **item,
+                "url": _redact_sensitive_text(item.get("url")),
+                "request_body_excerpt": request_body_excerpt,
+                "response_body_excerpt": response_body_excerpt,
+                "request_summary": request_summary,
+                "response_summary": response_summary,
+            }
+        )
+    return sanitized
 
 
 @router.get("")
@@ -152,7 +331,7 @@ def get_config():
     if not all_cfg.get("contribution_server_url"):
         all_cfg["contribution_server_url"] = "http://new.xem8k5.top:7317/"
     # 只返回已知 key，未设置的返回空字符串
-    return {k: all_cfg.get(k, "") for k in CONFIG_KEYS}
+    return {k: _decode_config_value(k, all_cfg.get(k, "")) for k in CONFIG_KEYS}
 
 
 @router.put("")
@@ -161,6 +340,10 @@ def update_config(body: ConfigUpdate):
     safe = {k: v for k, v in body.data.items() if k in CONFIG_KEYS}
     if safe.get("mail_provider") == "outlook":
         safe["mail_provider"] = "microsoft"
+    for key in list(safe.keys()):
+        if key in WRITE_ONLY_CONFIG_KEYS and str(safe.get(key) or "") == "":
+            safe.pop(key, None)
+    safe = {k: _encode_config_value(k, v) for k, v in safe.items()}
     config_store.set_many(safe)
     return {"ok": True, "updated": list(safe.keys())}
 
@@ -169,21 +352,44 @@ def update_config(body: ConfigUpdate):
 def alias_generation_test(body: AliasGenerationTestRequest):
     merged = config_store.get_all().copy()
     if body.useDraftConfig:
-        merged.update(body.config or {})
+        draft_config = dict(body.config or {})
+        if "sources" not in draft_config and any(
+            key in draft_config
+            for key in (
+                "cloudmail_alias_enabled",
+                "cloudmail_alias_emails",
+            )
+        ):
+            draft_config["sources"] = []
+        merged.update(draft_config)
 
     result = AliasSourceProbeService().probe(
         pool_config=normalize_cloudmail_alias_pool_config(merged, task_id="alias-test"),
         source_id=body.sourceId,
         task_id="alias-test",
     )
+    aliases = list(result.aliases or [])
+    compatibility_alias_email = result.alias_email
+    if aliases and isinstance(aliases[0], dict):
+        compatibility_alias_email = str(
+            aliases[0].get("email")
+            or aliases[0].get("aliasEmail")
+            or compatibility_alias_email
+            or ""
+        )
     return {
         "ok": result.ok,
         "sourceId": result.source_id,
         "sourceType": result.source_type,
-        "aliasEmail": result.alias_email,
+        "aliasEmail": compatibility_alias_email,
         "realMailboxEmail": result.real_mailbox_email,
         "serviceEmail": result.service_email,
-        "captureSummary": result.capture_summary,
+        "account": dict(result.account or {}),
+        "aliases": aliases,
+        "currentStage": result.current_stage,
+        "stages": list(result.stages or []),
+        "failure": dict(result.failure or {"stage": "", "reason": ""}),
+        "captureSummary": _sanitize_capture_summary(result.capture_summary),
         "steps": result.steps,
         "logs": result.logs,
         "error": result.error,
