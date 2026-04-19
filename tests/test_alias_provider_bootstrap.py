@@ -3,6 +3,7 @@ import unittest
 from core.alias_pool.alias_email_provider import build_alias_email_alias_provider
 from core.alias_pool.emailshield_provider import build_emailshield_alias_provider
 from core.alias_pool.myalias_pro_provider import build_myalias_pro_alias_provider
+from core.alias_pool.interactive_provider_registry import register_interactive_alias_providers
 from core.alias_pool.secureinseconds_provider import build_secureinseconds_alias_provider
 from core.alias_pool.simplelogin_provider import build_simplelogin_alias_provider
 from core.alias_pool.config import build_alias_provider_source_specs
@@ -40,6 +41,18 @@ class _DummyAliasProvider:
 
 
 class AliasProviderBootstrapTests(unittest.TestCase):
+    def test_shared_interactive_provider_registry_helper_registers_all_planned_types(self):
+        registry = AliasProviderRegistry()
+
+        returned = register_interactive_alias_providers(registry)
+
+        self.assertIs(returned, registry)
+        self.assertIs(registry.resolve("myalias_pro"), build_myalias_pro_alias_provider)
+        self.assertIs(registry.resolve("secureinseconds"), build_secureinseconds_alias_provider)
+        self.assertIs(registry.resolve("emailshield"), build_emailshield_alias_provider)
+        self.assertIs(registry.resolve("simplelogin"), build_simplelogin_alias_provider)
+        self.assertIs(registry.resolve("alias_email"), build_alias_email_alias_provider)
+
     def test_planned_provider_modules_export_expected_builder_functions(self):
         registry = AliasProviderRegistry()
         registry.register("myalias_pro", build_myalias_pro_alias_provider)
