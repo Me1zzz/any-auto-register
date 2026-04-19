@@ -194,6 +194,45 @@ export interface AliasGenerationTestDraftConfig {
   cloudmail_alias_vend_alias_count?: unknown
   cloudmail_alias_vend_source_id?: unknown
   cloudmail_alias_vend_state_key?: unknown
+  cloudmail_alias_myalias_pro_enabled?: unknown
+  cloudmail_alias_myalias_pro_source_id?: unknown
+  cloudmail_alias_myalias_pro_state_key?: unknown
+  cloudmail_alias_myalias_pro_alias_count?: unknown
+  cloudmail_alias_myalias_pro_signup_url?: unknown
+  cloudmail_alias_myalias_pro_login_url?: unknown
+  cloudmail_alias_myalias_pro_confirmation_email?: unknown
+  cloudmail_alias_myalias_pro_confirmation_password?: unknown
+  cloudmail_alias_myalias_pro_match_email?: unknown
+  cloudmail_alias_secureinseconds_enabled?: unknown
+  cloudmail_alias_secureinseconds_source_id?: unknown
+  cloudmail_alias_secureinseconds_state_key?: unknown
+  cloudmail_alias_secureinseconds_alias_count?: unknown
+  cloudmail_alias_secureinseconds_register_url?: unknown
+  cloudmail_alias_secureinseconds_login_url?: unknown
+  cloudmail_alias_secureinseconds_confirmation_email?: unknown
+  cloudmail_alias_secureinseconds_confirmation_password?: unknown
+  cloudmail_alias_secureinseconds_match_email?: unknown
+  cloudmail_alias_emailshield_enabled?: unknown
+  cloudmail_alias_emailshield_source_id?: unknown
+  cloudmail_alias_emailshield_state_key?: unknown
+  cloudmail_alias_emailshield_alias_count?: unknown
+  cloudmail_alias_emailshield_register_url?: unknown
+  cloudmail_alias_emailshield_login_url?: unknown
+  cloudmail_alias_emailshield_confirmation_email?: unknown
+  cloudmail_alias_emailshield_confirmation_password?: unknown
+  cloudmail_alias_emailshield_match_email?: unknown
+  cloudmail_alias_simplelogin_enabled?: unknown
+  cloudmail_alias_simplelogin_source_id?: unknown
+  cloudmail_alias_simplelogin_state_key?: unknown
+  cloudmail_alias_simplelogin_alias_count?: unknown
+  cloudmail_alias_simplelogin_site_url?: unknown
+  cloudmail_alias_simplelogin_accounts?: unknown
+  cloudmail_alias_alias_email_enabled?: unknown
+  cloudmail_alias_alias_email_source_id?: unknown
+  cloudmail_alias_alias_email_state_key?: unknown
+  cloudmail_alias_alias_email_alias_count?: unknown
+  cloudmail_alias_alias_email_login_url?: unknown
+  cloudmail_alias_alias_email_match_email?: unknown
   sources?: unknown
 }
 
@@ -762,6 +801,98 @@ function findDraftSourceByType(
   return sources.find((source) => source.type === type) ?? null
 }
 
+function sanitizeSimpleLoginAccounts(value: unknown): Array<Record<string, string>> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  const accounts = value
+    .map((item) => {
+      const record = asRecord(item)
+      if (!record) {
+        return null
+      }
+
+      const email = stringifyFieldValue(record.email)
+      const label = stringifyFieldValue(record.label)
+      const password = stringifyFieldValue(record.password)
+
+      if (!email && !label && !password) {
+        return null
+      }
+
+      return {
+        email,
+        label,
+        password,
+      }
+    })
+    .filter((item): item is { email: string; label: string; password: string } => item !== null)
+
+  return accounts.length > 0 ? accounts : undefined
+}
+
+function buildConfirmationInboxConfig(params: {
+  provider: 'cloudmail'
+  accountEmail?: unknown
+  accountPassword?: unknown
+  matchEmail?: unknown
+}): Record<string, unknown> | undefined {
+  const accountEmail = stringifyFieldValue(params.accountEmail)
+  const accountPassword = stringifyFieldValue(params.accountPassword)
+  const matchEmail = stringifyFieldValue(params.matchEmail)
+
+  if (!accountEmail && !accountPassword && !matchEmail) {
+    return undefined
+  }
+
+  return {
+    provider: params.provider,
+    ...(accountEmail ? { account_email: accountEmail } : {}),
+    ...(accountPassword ? { account_password: accountPassword } : {}),
+    ...(matchEmail ? { match_email: matchEmail } : {}),
+  }
+}
+
+function buildProviderSourceFromFixedFields(params: {
+  type: 'myalias_pro' | 'secureinseconds' | 'emailshield' | 'simplelogin' | 'alias_email'
+  enabled: unknown
+  sourceId: unknown
+  stateKey: unknown
+  aliasCount: unknown
+  preservedSource: AliasGenerationTestDraftSource | null
+  providerConfig: Record<string, unknown> | undefined
+  confirmationInbox?: Record<string, unknown> | undefined
+}): AliasGenerationTestDraftSource | null {
+  const enabled = parseBooleanConfigValue(params.enabled)
+  if (!enabled) {
+    return null
+  }
+
+  const sourceId =
+    stringifyFieldValue(params.sourceId)
+    || stringifyFieldValue(params.preservedSource?.id)
+    || getDefaultAliasGenerationSourceId(params.type)
+
+  const stateKey =
+    stringifyFieldValue(params.stateKey)
+    || stringifyFieldValue(params.preservedSource?.state_key)
+    || sourceId
+
+  const aliasCount =
+    normalizeNumericFieldValue(params.aliasCount)
+    ?? normalizeNumericFieldValue(params.preservedSource?.alias_count)
+
+  return {
+    id: sourceId,
+    type: params.type,
+    alias_count: aliasCount,
+    state_key: stateKey,
+    confirmation_inbox: params.confirmationInbox ?? asRecord(params.preservedSource?.confirmation_inbox) ?? undefined,
+    provider_config: params.providerConfig ?? asRecord(params.preservedSource?.provider_config) ?? undefined,
+  }
+}
+
 function buildVendDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
@@ -807,6 +938,155 @@ function buildVendDraftSource(
   }
 }
 
+function buildMyAliasProDraftSource(
+  draftConfig: AliasGenerationTestDraftConfig,
+  preservedSource: AliasGenerationTestDraftSource | null,
+): AliasGenerationTestDraftSource | null {
+  return buildProviderSourceFromFixedFields({
+    type: 'myalias_pro',
+    enabled: draftConfig.cloudmail_alias_myalias_pro_enabled,
+    sourceId: draftConfig.cloudmail_alias_myalias_pro_source_id,
+    stateKey: draftConfig.cloudmail_alias_myalias_pro_state_key,
+    aliasCount: draftConfig.cloudmail_alias_myalias_pro_alias_count,
+    preservedSource,
+    providerConfig: {
+      signup_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_myalias_pro_signup_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.signup_url),
+      login_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_myalias_pro_login_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
+    },
+    confirmationInbox: buildConfirmationInboxConfig({
+      provider: 'cloudmail',
+      accountEmail:
+        draftConfig.cloudmail_alias_myalias_pro_confirmation_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.account_email,
+      accountPassword:
+        draftConfig.cloudmail_alias_myalias_pro_confirmation_password
+        ?? asRecord(preservedSource?.confirmation_inbox)?.account_password,
+      matchEmail:
+        draftConfig.cloudmail_alias_myalias_pro_match_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
+    }),
+  })
+}
+
+function buildSecureInSecondsDraftSource(
+  draftConfig: AliasGenerationTestDraftConfig,
+  preservedSource: AliasGenerationTestDraftSource | null,
+): AliasGenerationTestDraftSource | null {
+  return buildProviderSourceFromFixedFields({
+    type: 'secureinseconds',
+    enabled: draftConfig.cloudmail_alias_secureinseconds_enabled,
+    sourceId: draftConfig.cloudmail_alias_secureinseconds_source_id,
+    stateKey: draftConfig.cloudmail_alias_secureinseconds_state_key,
+    aliasCount: draftConfig.cloudmail_alias_secureinseconds_alias_count,
+    preservedSource,
+    providerConfig: {
+      register_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_secureinseconds_register_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.register_url),
+      login_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_secureinseconds_login_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
+    },
+    confirmationInbox: buildConfirmationInboxConfig({
+      provider: 'cloudmail',
+      accountEmail:
+        draftConfig.cloudmail_alias_secureinseconds_confirmation_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.account_email,
+      accountPassword:
+        draftConfig.cloudmail_alias_secureinseconds_confirmation_password
+        ?? asRecord(preservedSource?.confirmation_inbox)?.account_password,
+      matchEmail:
+        draftConfig.cloudmail_alias_secureinseconds_match_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
+    }),
+  })
+}
+
+function buildEmailShieldDraftSource(
+  draftConfig: AliasGenerationTestDraftConfig,
+  preservedSource: AliasGenerationTestDraftSource | null,
+): AliasGenerationTestDraftSource | null {
+  return buildProviderSourceFromFixedFields({
+    type: 'emailshield',
+    enabled: draftConfig.cloudmail_alias_emailshield_enabled,
+    sourceId: draftConfig.cloudmail_alias_emailshield_source_id,
+    stateKey: draftConfig.cloudmail_alias_emailshield_state_key,
+    aliasCount: draftConfig.cloudmail_alias_emailshield_alias_count,
+    preservedSource,
+    providerConfig: {
+      register_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_emailshield_register_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.register_url),
+      login_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_emailshield_login_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
+    },
+    confirmationInbox: buildConfirmationInboxConfig({
+      provider: 'cloudmail',
+      accountEmail:
+        draftConfig.cloudmail_alias_emailshield_confirmation_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.account_email,
+      accountPassword:
+        draftConfig.cloudmail_alias_emailshield_confirmation_password
+        ?? asRecord(preservedSource?.confirmation_inbox)?.account_password,
+      matchEmail:
+        draftConfig.cloudmail_alias_emailshield_match_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
+    }),
+  })
+}
+
+function buildSimpleLoginDraftSource(
+  draftConfig: AliasGenerationTestDraftConfig,
+  preservedSource: AliasGenerationTestDraftSource | null,
+): AliasGenerationTestDraftSource | null {
+  return buildProviderSourceFromFixedFields({
+    type: 'simplelogin',
+    enabled: draftConfig.cloudmail_alias_simplelogin_enabled,
+    sourceId: draftConfig.cloudmail_alias_simplelogin_source_id,
+    stateKey: draftConfig.cloudmail_alias_simplelogin_state_key,
+    aliasCount: draftConfig.cloudmail_alias_simplelogin_alias_count,
+    preservedSource,
+    providerConfig: {
+      site_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_simplelogin_site_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.site_url),
+      accounts:
+        sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_simplelogin_accounts)
+        ?? sanitizeSimpleLoginAccounts(asRecord(preservedSource?.provider_config)?.accounts),
+    },
+  })
+}
+
+function buildAliasEmailDraftSource(
+  draftConfig: AliasGenerationTestDraftConfig,
+  preservedSource: AliasGenerationTestDraftSource | null,
+): AliasGenerationTestDraftSource | null {
+  return buildProviderSourceFromFixedFields({
+    type: 'alias_email',
+    enabled: draftConfig.cloudmail_alias_alias_email_enabled,
+    sourceId: draftConfig.cloudmail_alias_alias_email_source_id,
+    stateKey: draftConfig.cloudmail_alias_alias_email_state_key,
+    aliasCount: draftConfig.cloudmail_alias_alias_email_alias_count,
+    preservedSource,
+    providerConfig: {
+      login_url:
+        stringifyFieldValue(draftConfig.cloudmail_alias_alias_email_login_url)
+        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
+    },
+    confirmationInbox: buildConfirmationInboxConfig({
+      provider: 'cloudmail',
+      matchEmail:
+        draftConfig.cloudmail_alias_alias_email_match_email
+        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
+    }),
+  })
+}
+
 function buildLegacyStaticDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
@@ -845,12 +1125,40 @@ export function deriveAliasGenerationDraftSources(
     draftConfig,
     findDraftSourceByType(normalizedSources, 'vend_email'),
   )
+  const myaliasProSource = buildMyAliasProDraftSource(
+    draftConfig,
+    findDraftSourceByType(normalizedSources, 'myalias_pro'),
+  )
+  const secureInSecondsSource = buildSecureInSecondsDraftSource(
+    draftConfig,
+    findDraftSourceByType(normalizedSources, 'secureinseconds'),
+  )
+  const emailShieldSource = buildEmailShieldDraftSource(
+    draftConfig,
+    findDraftSourceByType(normalizedSources, 'emailshield'),
+  )
+  const simpleLoginSource = buildSimpleLoginDraftSource(
+    draftConfig,
+    findDraftSourceByType(normalizedSources, 'simplelogin'),
+  )
+  const aliasEmailSource = buildAliasEmailDraftSource(
+    draftConfig,
+    findDraftSourceByType(normalizedSources, 'alias_email'),
+  )
   const preservedOtherSources = normalizedSources.filter((source) => (
-    source.type !== 'static_list'
-    && source.type !== 'vend_email'
+    source.type === 'simple_generator'
   ))
 
-  return [...preservedOtherSources, staticSource, vendSource].filter(
+  return [
+    ...preservedOtherSources,
+    staticSource,
+    vendSource,
+    myaliasProSource,
+    secureInSecondsSource,
+    emailShieldSource,
+    simpleLoginSource,
+    aliasEmailSource,
+  ].filter(
     (source): source is AliasGenerationTestDraftSource => source !== null,
   )
 }
@@ -865,14 +1173,67 @@ export function deriveCloudmailAliasServiceFormValues(
   | 'cloudmail_alias_vend_alias_count'
   | 'cloudmail_alias_vend_source_id'
   | 'cloudmail_alias_vend_state_key'
+  | 'cloudmail_alias_myalias_pro_enabled'
+  | 'cloudmail_alias_myalias_pro_source_id'
+  | 'cloudmail_alias_myalias_pro_state_key'
+  | 'cloudmail_alias_myalias_pro_alias_count'
+  | 'cloudmail_alias_myalias_pro_signup_url'
+  | 'cloudmail_alias_myalias_pro_login_url'
+  | 'cloudmail_alias_myalias_pro_confirmation_email'
+  | 'cloudmail_alias_myalias_pro_confirmation_password'
+  | 'cloudmail_alias_myalias_pro_match_email'
+  | 'cloudmail_alias_secureinseconds_enabled'
+  | 'cloudmail_alias_secureinseconds_source_id'
+  | 'cloudmail_alias_secureinseconds_state_key'
+  | 'cloudmail_alias_secureinseconds_alias_count'
+  | 'cloudmail_alias_secureinseconds_register_url'
+  | 'cloudmail_alias_secureinseconds_login_url'
+  | 'cloudmail_alias_secureinseconds_confirmation_email'
+  | 'cloudmail_alias_secureinseconds_confirmation_password'
+  | 'cloudmail_alias_secureinseconds_match_email'
+  | 'cloudmail_alias_emailshield_enabled'
+  | 'cloudmail_alias_emailshield_source_id'
+  | 'cloudmail_alias_emailshield_state_key'
+  | 'cloudmail_alias_emailshield_alias_count'
+  | 'cloudmail_alias_emailshield_register_url'
+  | 'cloudmail_alias_emailshield_login_url'
+  | 'cloudmail_alias_emailshield_confirmation_email'
+  | 'cloudmail_alias_emailshield_confirmation_password'
+  | 'cloudmail_alias_emailshield_match_email'
+  | 'cloudmail_alias_simplelogin_enabled'
+  | 'cloudmail_alias_simplelogin_source_id'
+  | 'cloudmail_alias_simplelogin_state_key'
+  | 'cloudmail_alias_simplelogin_alias_count'
+  | 'cloudmail_alias_simplelogin_site_url'
+  | 'cloudmail_alias_simplelogin_accounts'
+  | 'cloudmail_alias_alias_email_enabled'
+  | 'cloudmail_alias_alias_email_source_id'
+  | 'cloudmail_alias_alias_email_state_key'
+  | 'cloudmail_alias_alias_email_alias_count'
+  | 'cloudmail_alias_alias_email_login_url'
+  | 'cloudmail_alias_alias_email_match_email'
 > {
   const normalizedSources = normalizeAliasGenerationDraftSources(draftConfig.sources)
   const vendSource = findDraftSourceByType(normalizedSources, 'vend_email')
   const staticSource = findDraftSourceByType(normalizedSources, 'static_list')
+  const myaliasProSource = findDraftSourceByType(normalizedSources, 'myalias_pro')
+  const secureInSecondsSource = findDraftSourceByType(normalizedSources, 'secureinseconds')
+  const emailShieldSource = findDraftSourceByType(normalizedSources, 'emailshield')
+  const simpleLoginSource = findDraftSourceByType(normalizedSources, 'simplelogin')
+  const aliasEmailSource = findDraftSourceByType(normalizedSources, 'alias_email')
   const normalizedEmails = normalizeMultilineValue(staticSource?.emails)
   const hasExistingAliasEnabledValue =
     typeof draftConfig.cloudmail_alias_enabled !== 'undefined'
       && String(draftConfig.cloudmail_alias_enabled).trim() !== ''
+  const myaliasConfirmation = asRecord(myaliasProSource?.confirmation_inbox)
+  const secureInSecondsConfirmation = asRecord(secureInSecondsSource?.confirmation_inbox)
+  const emailShieldConfirmation = asRecord(emailShieldSource?.confirmation_inbox)
+  const aliasEmailConfirmation = asRecord(aliasEmailSource?.confirmation_inbox)
+  const myaliasConfig = asRecord(myaliasProSource?.provider_config)
+  const secureInSecondsConfig = asRecord(secureInSecondsSource?.provider_config)
+  const emailShieldConfig = asRecord(emailShieldSource?.provider_config)
+  const simpleLoginConfig = asRecord(simpleLoginSource?.provider_config)
+  const aliasEmailConfig = asRecord(aliasEmailSource?.provider_config)
 
   return {
     cloudmail_alias_enabled: hasExistingAliasEnabledValue
@@ -894,6 +1255,48 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_vend_state_key:
       stringifyFieldValue(draftConfig.cloudmail_alias_service_vend_state_key)
       || stringifyFieldValue(vendSource?.state_key),
+    cloudmail_alias_myalias_pro_enabled: Boolean(myaliasProSource),
+    cloudmail_alias_myalias_pro_source_id: stringifyFieldValue(myaliasProSource?.id),
+    cloudmail_alias_myalias_pro_state_key: stringifyFieldValue(myaliasProSource?.state_key),
+    cloudmail_alias_myalias_pro_alias_count: normalizeNumericFieldValue(myaliasProSource?.alias_count),
+    cloudmail_alias_myalias_pro_signup_url: stringifyFieldValue(myaliasConfig?.signup_url),
+    cloudmail_alias_myalias_pro_login_url: stringifyFieldValue(myaliasConfig?.login_url),
+    cloudmail_alias_myalias_pro_confirmation_email: stringifyFieldValue(myaliasConfirmation?.account_email),
+    cloudmail_alias_myalias_pro_confirmation_password: stringifyFieldValue(myaliasConfirmation?.account_password),
+    cloudmail_alias_myalias_pro_match_email: stringifyFieldValue(myaliasConfirmation?.match_email),
+    cloudmail_alias_secureinseconds_enabled: Boolean(secureInSecondsSource),
+    cloudmail_alias_secureinseconds_source_id: stringifyFieldValue(secureInSecondsSource?.id),
+    cloudmail_alias_secureinseconds_state_key: stringifyFieldValue(secureInSecondsSource?.state_key),
+    cloudmail_alias_secureinseconds_alias_count: normalizeNumericFieldValue(secureInSecondsSource?.alias_count),
+    cloudmail_alias_secureinseconds_register_url: stringifyFieldValue(secureInSecondsConfig?.register_url),
+    cloudmail_alias_secureinseconds_login_url: stringifyFieldValue(secureInSecondsConfig?.login_url),
+    cloudmail_alias_secureinseconds_confirmation_email: stringifyFieldValue(secureInSecondsConfirmation?.account_email),
+    cloudmail_alias_secureinseconds_confirmation_password: stringifyFieldValue(secureInSecondsConfirmation?.account_password),
+    cloudmail_alias_secureinseconds_match_email: stringifyFieldValue(secureInSecondsConfirmation?.match_email),
+    cloudmail_alias_emailshield_enabled: Boolean(emailShieldSource),
+    cloudmail_alias_emailshield_source_id: stringifyFieldValue(emailShieldSource?.id),
+    cloudmail_alias_emailshield_state_key: stringifyFieldValue(emailShieldSource?.state_key),
+    cloudmail_alias_emailshield_alias_count: normalizeNumericFieldValue(emailShieldSource?.alias_count),
+    cloudmail_alias_emailshield_register_url: stringifyFieldValue(emailShieldConfig?.register_url),
+    cloudmail_alias_emailshield_login_url: stringifyFieldValue(emailShieldConfig?.login_url),
+    cloudmail_alias_emailshield_confirmation_email: stringifyFieldValue(emailShieldConfirmation?.account_email),
+    cloudmail_alias_emailshield_confirmation_password: stringifyFieldValue(emailShieldConfirmation?.account_password),
+    cloudmail_alias_emailshield_match_email: stringifyFieldValue(emailShieldConfirmation?.match_email),
+    cloudmail_alias_simplelogin_enabled: Boolean(simpleLoginSource),
+    cloudmail_alias_simplelogin_source_id: stringifyFieldValue(simpleLoginSource?.id),
+    cloudmail_alias_simplelogin_state_key: stringifyFieldValue(simpleLoginSource?.state_key),
+    cloudmail_alias_simplelogin_alias_count: normalizeNumericFieldValue(simpleLoginSource?.alias_count),
+    cloudmail_alias_simplelogin_site_url: stringifyFieldValue(simpleLoginConfig?.site_url),
+    cloudmail_alias_simplelogin_accounts:
+      sanitizeSimpleLoginAccounts(simpleLoginConfig?.accounts)
+      ?? sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_simplelogin_accounts)
+      ?? [],
+    cloudmail_alias_alias_email_enabled: Boolean(aliasEmailSource),
+    cloudmail_alias_alias_email_source_id: stringifyFieldValue(aliasEmailSource?.id),
+    cloudmail_alias_alias_email_state_key: stringifyFieldValue(aliasEmailSource?.state_key),
+    cloudmail_alias_alias_email_alias_count: normalizeNumericFieldValue(aliasEmailSource?.alias_count),
+    cloudmail_alias_alias_email_login_url: stringifyFieldValue(aliasEmailConfig?.login_url),
+    cloudmail_alias_alias_email_match_email: stringifyFieldValue(aliasEmailConfirmation?.match_email),
   }
 }
 
@@ -922,6 +1325,45 @@ export function createAliasGenerationTestDraftConfig(
     cloudmail_alias_vend_alias_count: vendAliasCount,
     cloudmail_alias_vend_source_id: vendSourceId,
     cloudmail_alias_vend_state_key: vendStateKey,
+    cloudmail_alias_myalias_pro_enabled: formValues.cloudmail_alias_myalias_pro_enabled,
+    cloudmail_alias_myalias_pro_source_id: formValues.cloudmail_alias_myalias_pro_source_id,
+    cloudmail_alias_myalias_pro_state_key: formValues.cloudmail_alias_myalias_pro_state_key,
+    cloudmail_alias_myalias_pro_alias_count: formValues.cloudmail_alias_myalias_pro_alias_count,
+    cloudmail_alias_myalias_pro_signup_url: formValues.cloudmail_alias_myalias_pro_signup_url,
+    cloudmail_alias_myalias_pro_login_url: formValues.cloudmail_alias_myalias_pro_login_url,
+    cloudmail_alias_myalias_pro_confirmation_email: formValues.cloudmail_alias_myalias_pro_confirmation_email,
+    cloudmail_alias_myalias_pro_confirmation_password: formValues.cloudmail_alias_myalias_pro_confirmation_password,
+    cloudmail_alias_myalias_pro_match_email: formValues.cloudmail_alias_myalias_pro_match_email,
+    cloudmail_alias_secureinseconds_enabled: formValues.cloudmail_alias_secureinseconds_enabled,
+    cloudmail_alias_secureinseconds_source_id: formValues.cloudmail_alias_secureinseconds_source_id,
+    cloudmail_alias_secureinseconds_state_key: formValues.cloudmail_alias_secureinseconds_state_key,
+    cloudmail_alias_secureinseconds_alias_count: formValues.cloudmail_alias_secureinseconds_alias_count,
+    cloudmail_alias_secureinseconds_register_url: formValues.cloudmail_alias_secureinseconds_register_url,
+    cloudmail_alias_secureinseconds_login_url: formValues.cloudmail_alias_secureinseconds_login_url,
+    cloudmail_alias_secureinseconds_confirmation_email: formValues.cloudmail_alias_secureinseconds_confirmation_email,
+    cloudmail_alias_secureinseconds_confirmation_password: formValues.cloudmail_alias_secureinseconds_confirmation_password,
+    cloudmail_alias_secureinseconds_match_email: formValues.cloudmail_alias_secureinseconds_match_email,
+    cloudmail_alias_emailshield_enabled: formValues.cloudmail_alias_emailshield_enabled,
+    cloudmail_alias_emailshield_source_id: formValues.cloudmail_alias_emailshield_source_id,
+    cloudmail_alias_emailshield_state_key: formValues.cloudmail_alias_emailshield_state_key,
+    cloudmail_alias_emailshield_alias_count: formValues.cloudmail_alias_emailshield_alias_count,
+    cloudmail_alias_emailshield_register_url: formValues.cloudmail_alias_emailshield_register_url,
+    cloudmail_alias_emailshield_login_url: formValues.cloudmail_alias_emailshield_login_url,
+    cloudmail_alias_emailshield_confirmation_email: formValues.cloudmail_alias_emailshield_confirmation_email,
+    cloudmail_alias_emailshield_confirmation_password: formValues.cloudmail_alias_emailshield_confirmation_password,
+    cloudmail_alias_emailshield_match_email: formValues.cloudmail_alias_emailshield_match_email,
+    cloudmail_alias_simplelogin_enabled: formValues.cloudmail_alias_simplelogin_enabled,
+    cloudmail_alias_simplelogin_source_id: formValues.cloudmail_alias_simplelogin_source_id,
+    cloudmail_alias_simplelogin_state_key: formValues.cloudmail_alias_simplelogin_state_key,
+    cloudmail_alias_simplelogin_alias_count: formValues.cloudmail_alias_simplelogin_alias_count,
+    cloudmail_alias_simplelogin_site_url: formValues.cloudmail_alias_simplelogin_site_url,
+    cloudmail_alias_simplelogin_accounts: formValues.cloudmail_alias_simplelogin_accounts,
+    cloudmail_alias_alias_email_enabled: formValues.cloudmail_alias_alias_email_enabled,
+    cloudmail_alias_alias_email_source_id: formValues.cloudmail_alias_alias_email_source_id,
+    cloudmail_alias_alias_email_state_key: formValues.cloudmail_alias_alias_email_state_key,
+    cloudmail_alias_alias_email_alias_count: formValues.cloudmail_alias_alias_email_alias_count,
+    cloudmail_alias_alias_email_login_url: formValues.cloudmail_alias_alias_email_login_url,
+    cloudmail_alias_alias_email_match_email: formValues.cloudmail_alias_alias_email_match_email,
     cloudmail_alias_service_vend_enabled:
       typeof formValues.cloudmail_alias_service_vend_enabled === 'undefined'
         ? vendEnabled

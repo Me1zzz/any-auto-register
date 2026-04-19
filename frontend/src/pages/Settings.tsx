@@ -14,8 +14,8 @@ import {
   LockOutlined,
 } from '@ant-design/icons'
 import { parseBooleanConfigValue } from '@/lib/configValueParsers'
-import AliasGenerationSourceEditor from '@/components/settings/AliasGenerationSourceEditor'
 import AliasGenerationTestCard from '@/components/settings/AliasGenerationTestCard'
+import SimpleLoginAccountListEditor from '@/components/settings/SimpleLoginAccountListEditor'
 import {
   createAliasGenerationTestDraftConfig,
   deriveCloudmailAliasServiceFormValues,
@@ -656,6 +656,43 @@ function ConfigSection({ section }: { section: SectionConfig }) {
   )
 }
 
+function AliasServiceToggleCard({
+  form,
+  fieldKey,
+  title,
+  description,
+  children,
+}: {
+  form: SettingsFormInstance
+  fieldKey: string
+  title: string
+  description: string
+  children: React.ReactNode
+}) {
+  const enabled = parseBooleanConfigValue(Form.useWatch(fieldKey, form))
+
+  return (
+    <Card
+      size="small"
+      title={title}
+      extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>固定单实例 source；启用后自动写入 `sources`</span>}
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <ConfigField
+          field={{
+            key: fieldKey,
+            label: `启用 ${title}`,
+            type: 'boolean',
+            description,
+          }}
+        />
+
+        {enabled ? children : null}
+      </Space>
+    </Card>
+  )
+}
+
 function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>[0] }) {
   const aliasEnabled = parseBooleanConfigValue(Form.useWatch('cloudmail_alias_enabled', form))
   const vendEnabled = parseBooleanConfigValue(Form.useWatch('cloudmail_alias_vend_enabled', form))
@@ -726,12 +763,177 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
                 ) : null}
 
                 <Typography.Text type="secondary">
-                  后续如接入新的 CloudMail alias 服务，可继续在这里增加开关和最小必要的运营字段，而不再暴露原始 source 行编辑器。
+                  所有别名邮箱服务都以固定单实例 source 的方式接入；前端通过开关与固定配置项维护，最终仍统一序列化到 `sources` 给后端使用。
                 </Typography.Text>
               </Space>
             </Card>
 
-            <AliasGenerationSourceEditor form={form} />
+            <AliasServiceToggleCard
+              form={form}
+              fieldKey="cloudmail_alias_myalias_pro_enabled"
+              title="MyAlias Pro"
+              description="启用后会把单实例 MyAlias Pro source 加入 alias 池。"
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <Form.Item label="Source ID" name="cloudmail_alias_myalias_pro_source_id" style={{ marginBottom: 0 }}>
+                  <Input placeholder="myalias-primary" />
+                </Form.Item>
+                <Form.Item label="State Key" name="cloudmail_alias_myalias_pro_state_key" style={{ marginBottom: 0 }}>
+                  <Input placeholder="myalias-primary" />
+                </Form.Item>
+                <Form.Item label="目标别名数" name="cloudmail_alias_myalias_pro_alias_count" style={{ marginBottom: 0 }}>
+                  <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                </Form.Item>
+                <Form.Item label="注册页 URL" name="cloudmail_alias_myalias_pro_signup_url" style={{ marginBottom: 0 }}>
+                  <Input placeholder="https://myalias.pro/signup/" />
+                </Form.Item>
+                <Form.Item label="登录页 URL" name="cloudmail_alias_myalias_pro_login_url" style={{ marginBottom: 0 }}>
+                  <Input placeholder="https://myalias.pro/login/" />
+                </Form.Item>
+                <Form.Item label="确认邮箱账号" name="cloudmail_alias_myalias_pro_confirmation_email" style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+                <Form.Item label="确认邮箱密码" name="cloudmail_alias_myalias_pro_confirmation_password" style={{ marginBottom: 0 }}>
+                  <Input.Password placeholder="mail-pass" />
+                </Form.Item>
+                <Form.Item label="匹配邮箱" name="cloudmail_alias_myalias_pro_match_email" style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+              </div>
+            </AliasServiceToggleCard>
+
+            <AliasServiceToggleCard
+              form={form}
+              fieldKey="cloudmail_alias_secureinseconds_enabled"
+              title="SecureInSeconds"
+              description="启用后会把单实例 SecureInSeconds source 加入 alias 池。"
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <Form.Item label="Source ID" name="cloudmail_alias_secureinseconds_source_id" style={{ marginBottom: 0 }}>
+                  <Input placeholder="secureinseconds-primary" />
+                </Form.Item>
+                <Form.Item label="State Key" name="cloudmail_alias_secureinseconds_state_key" style={{ marginBottom: 0 }}>
+                  <Input placeholder="secureinseconds-primary" />
+                </Form.Item>
+                <Form.Item label="目标别名数" name="cloudmail_alias_secureinseconds_alias_count" style={{ marginBottom: 0 }}>
+                  <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                </Form.Item>
+                <Form.Item label="注册地址 URL" name="cloudmail_alias_secureinseconds_register_url" style={{ marginBottom: 0 }}>
+                  <Input placeholder="https://alias.secureinseconds.com/auth/register" />
+                </Form.Item>
+                <Form.Item label="登录页 URL" name="cloudmail_alias_secureinseconds_login_url" style={{ marginBottom: 0 }}>
+                  <Input placeholder="https://alias.secureinseconds.com/auth/signin" />
+                </Form.Item>
+                <Form.Item label="确认邮箱账号" name="cloudmail_alias_secureinseconds_confirmation_email" style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+                <Form.Item label="确认邮箱密码" name="cloudmail_alias_secureinseconds_confirmation_password" style={{ marginBottom: 0 }}>
+                  <Input.Password placeholder="mail-pass" />
+                </Form.Item>
+                <Form.Item label="匹配邮箱" name="cloudmail_alias_secureinseconds_match_email" style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+              </div>
+            </AliasServiceToggleCard>
+
+            <AliasServiceToggleCard
+              form={form}
+              fieldKey="cloudmail_alias_emailshield_enabled"
+              title="EmailShield"
+              description="启用后会把单实例 EmailShield source 加入 alias 池。"
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <Form.Item label="Source ID" name="cloudmail_alias_emailshield_source_id" style={{ marginBottom: 0 }}>
+                  <Input placeholder="emailshield-primary" />
+                </Form.Item>
+                <Form.Item label="State Key" name="cloudmail_alias_emailshield_state_key" style={{ marginBottom: 0 }}>
+                  <Input placeholder="emailshield-primary" />
+                </Form.Item>
+                <Form.Item label="目标别名数" name="cloudmail_alias_emailshield_alias_count" style={{ marginBottom: 0 }}>
+                  <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                </Form.Item>
+                <Form.Item label="注册地址 URL" name="cloudmail_alias_emailshield_register_url" style={{ marginBottom: 0 }}>
+                  <Input placeholder="https://emailshield.app/accounts/register/" />
+                </Form.Item>
+                <Form.Item label="登录页 URL" name="cloudmail_alias_emailshield_login_url" style={{ marginBottom: 0 }}>
+                  <Input placeholder="https://emailshield.app/accounts/login/" />
+                </Form.Item>
+                <Form.Item label="确认邮箱账号" name="cloudmail_alias_emailshield_confirmation_email" style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+                <Form.Item label="确认邮箱密码" name="cloudmail_alias_emailshield_confirmation_password" style={{ marginBottom: 0 }}>
+                  <Input.Password placeholder="mail-pass" />
+                </Form.Item>
+                <Form.Item label="匹配邮箱" name="cloudmail_alias_emailshield_match_email" style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+              </div>
+            </AliasServiceToggleCard>
+
+            <AliasServiceToggleCard
+              form={form}
+              fieldKey="cloudmail_alias_simplelogin_enabled"
+              title="SimpleLogin"
+              description="启用后会把单实例 SimpleLogin source 加入 alias 池。"
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  <Form.Item label="Source ID" name="cloudmail_alias_simplelogin_source_id" style={{ marginBottom: 0 }}>
+                    <Input placeholder="simplelogin-primary" />
+                  </Form.Item>
+                  <Form.Item label="State Key" name="cloudmail_alias_simplelogin_state_key" style={{ marginBottom: 0 }}>
+                    <Input placeholder="simplelogin-primary" />
+                  </Form.Item>
+                  <Form.Item label="目标别名数" name="cloudmail_alias_simplelogin_alias_count" style={{ marginBottom: 0 }}>
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                  </Form.Item>
+                  <Form.Item label="站点 URL" name="cloudmail_alias_simplelogin_site_url" style={{ marginBottom: 0 }}>
+                    <Input placeholder="https://simplelogin.io/" />
+                  </Form.Item>
+                </div>
+
+                <div style={{ padding: 12, borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa' }}>
+                  <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                    SimpleLogin 服务账号
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                    运行时会从账号列表中选择服务账号，并通过已登录页面动态解析 signed domain options；这里不提供静态 alias domain 输入项。
+                  </Typography.Text>
+                  <SimpleLoginAccountListEditor name={['cloudmail_alias_simplelogin_accounts']} />
+                </div>
+              </Space>
+            </AliasServiceToggleCard>
+
+            <AliasServiceToggleCard
+              form={form}
+              fieldKey="cloudmail_alias_alias_email_enabled"
+              title="Alias Email"
+              description="启用后会把单实例 alias.email source 加入 alias 池。"
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  <Form.Item label="Source ID" name="cloudmail_alias_alias_email_source_id" style={{ marginBottom: 0 }}>
+                    <Input placeholder="alias-email-primary" />
+                  </Form.Item>
+                  <Form.Item label="State Key" name="cloudmail_alias_alias_email_state_key" style={{ marginBottom: 0 }}>
+                    <Input placeholder="alias-email-primary" />
+                  </Form.Item>
+                  <Form.Item label="目标别名数" name="cloudmail_alias_alias_email_alias_count" style={{ marginBottom: 0 }}>
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                  </Form.Item>
+                  <Form.Item label="登录页 URL" name="cloudmail_alias_alias_email_login_url" style={{ marginBottom: 0 }}>
+                    <Input placeholder="https://alias.email/users/login/" />
+                  </Form.Item>
+                  <Form.Item label="匹配邮箱" name="cloudmail_alias_alias_email_match_email" style={{ marginBottom: 0 }}>
+                    <Input placeholder="real@example.com" />
+                  </Form.Item>
+                </div>
+
+                <Typography.Text type="secondary">
+                  alias.email 通过确认邮箱中的 magic link 完成登录；这里仅维护固定单实例 source 配置，并继续统一写入 `sources`。
+                </Typography.Text>
+              </Space>
+            </AliasServiceToggleCard>
           </>
         ) : null}
       </Space>
@@ -1861,6 +2063,10 @@ export default function Settings() {
       values.contribution_enabled = parseBooleanConfigValue(values.contribution_enabled)
 
       await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
+      const savedAliasServiceFields = deriveCloudmailAliasServiceFormValues({
+        ...values,
+        sources: aliasGenerationDraftConfig.sources,
+      })
       form.setFieldsValue({
         mail_provider: values.mail_provider === 'microsoft' || values.mail_provider === 'applemail' ? 'mail_import' : values.mail_provider,
         mail_import_source: values.mail_provider === 'applemail' ? 'applemail' : 'microsoft',
@@ -1872,9 +2078,7 @@ export default function Settings() {
         cfworker_random_subdomain: values.cfworker_random_subdomain,
         cfworker_random_name_subdomain: values.cfworker_random_name_subdomain,
         contribution_enabled: values.contribution_enabled,
-        cloudmail_alias_service_static_enabled: values.cloudmail_alias_service_static_enabled,
-        cloudmail_alias_service_vend_enabled: values.cloudmail_alias_service_vend_enabled,
-        cloudmail_alias_service_vend_alias_count: values.cloudmail_alias_service_vend_alias_count,
+        ...savedAliasServiceFields,
         sources: aliasGenerationDraftConfig.sources,
       })
       setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig({
