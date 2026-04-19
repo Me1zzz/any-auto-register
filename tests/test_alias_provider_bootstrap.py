@@ -10,6 +10,7 @@ from core.alias_pool.provider_contracts import (
     AliasProviderBootstrapContext,
 )
 from core.alias_pool.provider_registry import AliasProviderRegistry
+from core.alias_pool.automation_test import AliasAutomationTestService
 
 
 class _DummyAliasProvider:
@@ -34,6 +35,126 @@ class _DummyAliasProvider:
 
 
 class AliasProviderBootstrapTests(unittest.TestCase):
+    def test_supported_interactive_provider_types_all_build_alias_provider_instances(self):
+        bootstrap = AliasAutomationTestService()._build_default_bootstrap()
+        specs = build_alias_provider_source_specs(
+            {
+                "enabled": True,
+                "task_id": "alias-test",
+                "sources": [
+                    {
+                        "id": "myalias-pro-primary",
+                        "type": "myalias_pro",
+                        "alias_count": 2,
+                        "state_key": "myalias-pro-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                    },
+                    {
+                        "id": "secureinseconds-primary",
+                        "type": "secureinseconds",
+                        "alias_count": 2,
+                        "state_key": "secureinseconds-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                    },
+                    {
+                        "id": "emailshield-primary",
+                        "type": "emailshield",
+                        "alias_count": 2,
+                        "state_key": "emailshield-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                    },
+                    {
+                        "id": "simplelogin-primary",
+                        "type": "simplelogin",
+                        "alias_count": 2,
+                        "state_key": "simplelogin-primary",
+                        "provider_config": {
+                            "site_url": "https://simplelogin.io/",
+                            "accounts": [
+                                {"email": "fust@fst.cxwsss.online", "label": "fust"},
+                            ],
+                        },
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                    },
+                    {
+                        "id": "alias-email-primary",
+                        "type": "alias_email",
+                        "alias_count": 2,
+                        "state_key": "alias-email-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                    },
+                ],
+            }
+        )
+        context = AliasProviderBootstrapContext(task_id="alias-test-run", purpose="automation_test")
+
+        for spec in specs:
+            provider = bootstrap.build(spec=spec, context=context)
+            self.assertIsInstance(provider, AliasProvider)
+            self.assertEqual(provider.provider_type, spec.provider_type)
+
+    def test_simplelogin_provider_returns_clear_not_implemented_domain_discovery_failure(self):
+        service = AliasAutomationTestService()
+
+        result = service.run(
+            pool_config={
+                "enabled": True,
+                "task_id": "alias-test",
+                "sources": [
+                    {
+                        "id": "simplelogin-primary",
+                        "type": "simplelogin",
+                        "alias_count": 2,
+                        "state_key": "simplelogin-primary",
+                        "provider_config": {
+                            "site_url": "https://simplelogin.io/",
+                            "accounts": [
+                                {"email": "fust@fst.cxwsss.online", "label": "fust"},
+                            ],
+                        },
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                    }
+                ],
+            },
+            source_id="simplelogin-primary",
+            task_id="alias-test-run",
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.source_type, "simplelogin")
+        self.assertEqual(result.failure.get("stageCode"), "discover_alias_domains")
+        self.assertIn("signed domain discovery not implemented yet", result.error)
+
     def test_build_alias_provider_source_specs_supports_provider_config_backed_simplelogin_source(self):
         pool_config = {
             "enabled": True,
