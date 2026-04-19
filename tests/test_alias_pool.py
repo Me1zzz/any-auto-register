@@ -1,3 +1,5 @@
+import importlib
+import importlib.util
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -11,6 +13,15 @@ from core.alias_pool.base import (
 )
 from core.alias_pool.config import normalize_cloudmail_alias_pool_config
 from core.alias_pool.manager import AliasEmailPoolManager
+from core.alias_pool.provider_contracts import (
+    AliasAccountIdentity,
+    AliasAutomationTestPolicy,
+    AliasAutomationTestResult,
+    AliasProviderBootstrapContext,
+    AliasProviderFailure,
+    AliasProviderSourceSpec,
+    AliasProviderStage,
+)
 from core.alias_pool.service_base import AliasServiceProducerBase
 from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
 from core.alias_pool.static_list import StaticAliasListProducer
@@ -188,6 +199,15 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "alias_domain_id": "42",
                     "alias_count": 0,
                     "state_key": "vend-1",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example/base",
+                        "admin_email": "Admin@Example.COM",
+                        "admin_password": "secret-pass",
+                        "domain": "mail.example.com",
+                        "subdomain": "pool-a",
+                        "timeout": 45,
+                    },
                 }
             ],
         )
@@ -225,6 +245,15 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "alias_domain_id": "42",
                     "alias_count": 2,
                     "state_key": "vend-1",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example",
+                        "admin_email": "Admin@Example.COM",
+                        "admin_password": "secret-pass",
+                        "domain": "mail.example.com",
+                        "subdomain": "pool-a",
+                        "timeout": 50,
+                    },
                 }
             ],
         )
@@ -282,8 +311,192 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "alias_domain_id": "42",
                     "alias_count": 5,
                     "state_key": "vend-state",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "admin_password": "cloudmail-pass",
+                        "timeout": 30,
+                    },
                 },
             ],
+        )
+
+    def test_normalize_prefers_explicit_vend_values_over_synthesized_defaults_for_same_source_id(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "cloudmail_api_base": "https://payload.example/api",
+                "cloudmail_admin_email": "payload-admin@example.com",
+                "cloudmail_admin_password": "payload-secret",
+                "cloudmail_domain": "payload.example.com",
+                "cloudmail_subdomain": "payload-sub",
+                "cloudmail_timeout": 99,
+                "cloudmail_alias_service_vend_enabled": True,
+                "cloudmail_alias_service_vend_source_id": "vend-primary",
+                "cloudmail_alias_service_vend_alias_count": 2,
+                "cloudmail_alias_service_vend_state_key": "vend-state",
+                "sources": [
+                    {
+                        "id": "vend-primary",
+                        "type": "vend_email",
+                        "register_url": "https://explicit.example/register",
+                        "cloudmail_api_base": "https://explicit.example/api",
+                        "cloudmail_admin_email": "explicit-admin@example.com",
+                        "cloudmail_admin_password": "explicit-secret",
+                        "cloudmail_domain": "explicit.example.com",
+                        "cloudmail_subdomain": "explicit-sub",
+                        "cloudmail_timeout": 41,
+                        "alias_domain": "custom.example",
+                        "alias_domain_id": "99",
+                        "alias_count": 7,
+                        "state_key": "explicit-state",
+                    }
+                ],
+            },
+            task_id="task-vend-explicit-precedence",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-primary",
+                    "type": "vend_email",
+                    "register_url": "https://explicit.example/register",
+                    "cloudmail_api_base": "https://explicit.example/api",
+                    "cloudmail_admin_email": "explicit-admin@example.com",
+                    "cloudmail_admin_password": "explicit-secret",
+                    "cloudmail_domain": "explicit.example.com",
+                    "cloudmail_subdomain": "explicit-sub",
+                    "cloudmail_timeout": 41,
+                    "alias_domain": "custom.example",
+                    "alias_domain_id": "99",
+                    "alias_count": 7,
+                    "state_key": "explicit-state",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://explicit.example/api",
+                        "admin_email": "explicit-admin@example.com",
+                        "admin_password": "explicit-secret",
+                        "domain": "explicit.example.com",
+                        "subdomain": "explicit-sub",
+                        "timeout": 41,
+                    },
+                }
+            ],
+        )
+
+
+class AliasProviderConfigEncodingTests(unittest.TestCase):
+    def test_encode_and_decode_alias_provider_sources_round_trip_supported_types(self):
+        from core.alias_pool import config as alias_config
+
+        self.assertTrue(hasattr(alias_config, "encode_alias_provider_sources"))
+        self.assertTrue(hasattr(alias_config, "decode_alias_provider_sources"))
+
+        sources = [
+            {
+                "id": "legacy-static",
+                "type": "static_list",
+                "emails": ["alias1@example.com"],
+                "mailbox_email": "real@example.com",
+            },
+            {
+                "id": "simple-1",
+                "type": "simple_generator",
+                "prefix": "msi.",
+                "suffix": "@manyme.com",
+                "count": 2,
+                "middle_length_min": 3,
+                "middle_length_max": 6,
+                "mailbox_email": "real@example.com",
+            },
+            {
+                "id": "vend-1",
+                "type": "vend_email",
+                "register_url": "https://accounts.example.test/register",
+                "cloudmail_api_base": "https://cloudmail.example/api",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret-pass",
+                "cloudmail_domain": "mail.example.com",
+                "cloudmail_subdomain": "pool-a",
+                "cloudmail_timeout": 45,
+                "alias_domain": "serf.me",
+                "alias_count": 2,
+                "state_key": "vend-state",
+                "alias_domain_id": "42",
+            },
+        ]
+
+        encoded = alias_config.encode_alias_provider_sources(sources)
+
+        self.assertEqual(
+            alias_config.decode_alias_provider_sources(encoded),
+            [
+                {
+                    "id": "legacy-static",
+                    "type": "static_list",
+                    "emails": ["alias1@example.com"],
+                },
+                {
+                    "id": "simple-1",
+                    "type": "simple_generator",
+                    "prefix": "msi.",
+                    "suffix": "@manyme.com",
+                    "count": 2,
+                    "middle_length_min": 3,
+                    "middle_length_max": 6,
+                },
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "register_url": "https://accounts.example.test/register",
+                    "cloudmail_api_base": "https://cloudmail.example/api",
+                    "cloudmail_admin_email": "admin@example.com",
+                    "cloudmail_admin_password": "secret-pass",
+                    "cloudmail_domain": "mail.example.com",
+                    "cloudmail_subdomain": "pool-a",
+                    "cloudmail_timeout": 45,
+                    "alias_domain": "serf.me",
+                    "alias_count": 2,
+                    "state_key": "vend-state",
+                    "alias_domain_id": "42",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example/api",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "secret-pass",
+                        "domain": "mail.example.com",
+                        "subdomain": "pool-a",
+                        "timeout": 45,
+                    },
+                },
+            ],
+        )
+
+    def test_decode_alias_provider_sources_is_shape_consistent_for_vend_list_and_json_inputs(self):
+        from core.alias_pool import config as alias_config
+
+        logical_source = [
+            {
+                "id": "vend-1",
+                "type": "vend_email",
+                "register_url": "https://accounts.example.test/register",
+                "cloudmail_api_base": "https://cloudmail.example/api",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret-pass",
+                "cloudmail_domain": "mail.example.com",
+                "cloudmail_subdomain": "pool-a",
+                "cloudmail_timeout": 45,
+                "alias_domain": "serf.me",
+                "alias_count": 2,
+                "state_key": "vend-state",
+                "alias_domain_id": "42",
+            }
+        ]
+
+        self.assertEqual(
+            alias_config.decode_alias_provider_sources(logical_source),
+            alias_config.decode_alias_provider_sources(alias_config.encode_alias_provider_sources(logical_source)),
         )
 
 
@@ -1021,6 +1234,338 @@ class _FakeVendEmailDefaultExecutor:
         return "https://www.vend.email/auth/confirmation?confirmation_token=abc123"
 
 
+class _RecordingAutomationProvider:
+    source_kind = "recording_provider"
+
+    def __init__(self, *, spec: AliasProviderSourceSpec, context: AliasProviderBootstrapContext, result: AliasAutomationTestResult):
+        self.source_id = spec.source_id
+        self.spec = spec
+        self.context = context
+        self.result = result
+        self.received_policy = None
+
+    @property
+    def provider_type(self) -> str:
+        return self.source_kind
+
+    def load_into(self, pool_manager) -> None:
+        raise AssertionError("automation test path should not call load_into")
+
+    def run_alias_generation_test(self, policy: AliasAutomationTestPolicy) -> AliasAutomationTestResult:
+        self.received_policy = policy
+        return self.result
+
+
+class AliasAutomationTestServiceTests(unittest.TestCase):
+    def test_service_builds_provider_context_and_maps_structured_result(self):
+        spec = AliasProviderSourceSpec(
+            source_id="simple-1",
+            provider_type="simple_generator",
+            raw_source={"id": "simple-1", "type": "simple_generator"},
+            desired_alias_count=1,
+        )
+        provider_result = AliasAutomationTestResult(
+            provider_type="simple_generator",
+            source_id="simple-1",
+            account_identity=AliasAccountIdentity(real_mailbox_email="real@example.com"),
+            aliases=[{"email": "alias@example.com"}],
+            current_stage=AliasProviderStage(code="ready", label="Ready", status="completed"),
+            stage_timeline=[AliasProviderStage(code="ready", label="Ready", status="completed")],
+            failure=AliasProviderFailure(),
+            ok=True,
+            error="",
+        )
+        seen = {}
+
+        def bootstrap_build(*, spec, context):
+            seen["spec"] = spec
+            seen["context"] = context
+            provider = _RecordingAutomationProvider(spec=spec, context=context, result=provider_result)
+            seen["provider"] = provider
+            return provider
+
+        service_module = importlib.import_module("core.alias_pool.automation_test")
+        service = service_module.AliasAutomationTestService(
+            source_spec_builder=lambda pool_config: [spec],
+            bootstrap=mock.Mock(build=bootstrap_build),
+        )
+
+        result = service.run(pool_config={"enabled": True, "sources": [spec.raw_source]}, source_id="simple-1", task_id="alias-test")
+
+        self.assertEqual(result.source_id, "simple-1")
+        self.assertEqual(result.source_type, "simple_generator")
+        self.assertEqual(result.alias_email, "alias@example.com")
+        self.assertEqual(result.real_mailbox_email, "real@example.com")
+        self.assertEqual(result.current_stage, {"code": "ready", "label": "Ready"})
+        self.assertEqual(result.stages, [{"code": "ready", "label": "Ready", "status": "completed"}])
+        self.assertEqual(result.failure, {"stageCode": "", "stageLabel": "", "reason": ""})
+        self.assertEqual(seen["spec"], spec)
+        self.assertEqual(seen["context"].purpose, "automation_test")
+        self.assertEqual(seen["context"].task_id, "alias-test")
+        self.assertEqual(seen["context"].test_policy, AliasAutomationTestPolicy(
+            fresh_service_account=True,
+            persist_state=False,
+            minimum_alias_count=3,
+            capture_enabled=True,
+        ))
+        self.assertEqual(seen["provider"].received_policy, seen["context"].test_policy)
+
+    def test_service_is_provider_first_for_vend_and_does_not_use_probe_service_as_primary_path(self):
+        spec = AliasProviderSourceSpec(
+            source_id="vend-1",
+            provider_type="vend_email",
+            raw_source={"id": "vend-1", "type": "vend_email"},
+            desired_alias_count=2,
+            state_key="vend-state",
+            alias_domain_id="42",
+        )
+        provider_result = AliasAutomationTestResult(
+            provider_type="vend_email",
+            source_id="vend-1",
+            account_identity=AliasAccountIdentity(
+                service_account_email="service@example.com",
+                real_mailbox_email="real@example.com",
+                service_password="secret-pass",
+                username="service",
+            ),
+            aliases=[{"email": "alias-001@example.com"}, {"email": "alias-002@example.com"}],
+            current_stage=AliasProviderStage(code="aliases_ready", label="别名预览已生成", status="completed"),
+            stage_timeline=[
+                AliasProviderStage(code="session_ready", label="会话已就绪", status="completed"),
+                AliasProviderStage(code="aliases_ready", label="别名预览已生成", status="completed", detail="预览共 2 个别名"),
+            ],
+            failure=AliasProviderFailure(),
+            ok=True,
+            error="",
+        )
+        seen = {}
+
+        def bootstrap_build(*, spec, context):
+            seen["spec"] = spec
+            seen["context"] = context
+            provider = _RecordingAutomationProvider(spec=spec, context=context, result=provider_result)
+            seen["provider"] = provider
+            return provider
+
+        service_module = importlib.import_module("core.alias_pool.automation_test")
+        service = service_module.AliasAutomationTestService(
+            source_spec_builder=lambda pool_config: [spec],
+            bootstrap=mock.Mock(build=bootstrap_build),
+        )
+
+        result = service.run(pool_config={"enabled": True, "sources": [spec.raw_source]}, source_id="vend-1", task_id="alias-test")
+
+        self.assertEqual(result.source_id, "vend-1")
+        self.assertEqual(result.source_type, "vend_email")
+        self.assertEqual(result.alias_email, "alias-001@example.com")
+        self.assertEqual(result.service_email, "service@example.com")
+        self.assertEqual(result.real_mailbox_email, "real@example.com")
+        self.assertEqual(result.account["password"], "secret-pass")
+        self.assertEqual(result.account["username"], "service")
+        self.assertEqual(result.steps, ["load_source", "acquire_alias"])
+        self.assertEqual(result.current_stage, {"code": "aliases_ready", "label": "别名预览已生成"})
+        self.assertEqual(result.stages[1]["detail"], "预览共 2 个别名")
+        self.assertEqual(seen["spec"], spec)
+        self.assertEqual(seen["context"].test_policy.minimum_alias_count, 3)
+
+    def test_vend_adapter_calls_provider_run_alias_generation_test_directly(self):
+        service_module = importlib.import_module("core.alias_pool.automation_test")
+        spec = AliasProviderSourceSpec(
+            source_id="vend-1",
+            provider_type="vend_email",
+            raw_source={"id": "vend-1", "type": "vend_email"},
+            desired_alias_count=2,
+            state_key="vend-state",
+            alias_domain_id="42",
+        )
+        policy = AliasAutomationTestPolicy(
+            fresh_service_account=True,
+            persist_state=False,
+            minimum_alias_count=3,
+            capture_enabled=True,
+        )
+        context = AliasProviderBootstrapContext(
+            task_id="manual-debug-run",
+            purpose="automation_test",
+            runtime_builder=mock.sentinel.runtime_builder,
+            state_store_factory=mock.sentinel.state_store_factory,
+            test_policy=policy,
+        )
+        provider_result = AliasAutomationTestResult(
+            provider_type="vend_email",
+            source_id="vend-1",
+            account_identity=AliasAccountIdentity(
+                service_account_email="service@example.com",
+                real_mailbox_email="real@example.com",
+                service_password="secret-pass",
+                username="service",
+            ),
+            aliases=[
+                {"email": "alias-001@example.com"},
+                {"email": "alias-002@example.com"},
+                {"email": "alias-003@example.com"},
+            ],
+            current_stage=AliasProviderStage(code="aliases_ready", label="别名预览已生成", status="completed"),
+            stage_timeline=[AliasProviderStage(code="aliases_ready", label="别名预览已生成", status="completed")],
+            failure=AliasProviderFailure(),
+            ok=True,
+            error="",
+        )
+        provider = mock.Mock()
+        provider.provider_type = "vend_email"
+        provider.run_alias_generation_test.return_value = provider_result
+
+        with mock.patch.object(service_module, "build_vend_email_alias_service_producer", return_value=provider) as builder:
+            adapter = service_module._VendEmailAliasProviderAdapter(spec=spec, context=context)
+            result = adapter.run_alias_generation_test(policy)
+
+        builder.assert_called_once_with(
+            source=spec.raw_source,
+            task_id="manual-debug-run",
+            state_store_factory=mock.sentinel.state_store_factory,
+            runtime_builder=mock.sentinel.runtime_builder,
+        )
+        provider.run_alias_generation_test.assert_called_once_with(policy)
+        provider.load_into.assert_not_called()
+        self.assertIs(result, provider_result)
+
+    def test_provider_adapters_honor_context_task_id_and_policy_minimum_alias_count(self):
+        module_path = Path(__file__).resolve().parents[1] / "core" / "alias_pool" / "provider_adapters.py"
+        spec = importlib.util.spec_from_file_location("alias_provider_adapters_under_test", module_path)
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(module, "AliasEmailPoolManager") as manager_cls:
+            manager = manager_cls.return_value
+            leases = [
+                mock.Mock(alias_email="alias-001@example.com", real_mailbox_email="real@example.com"),
+                mock.Mock(alias_email="alias-002@example.com", real_mailbox_email="real@example.com"),
+                mock.Mock(alias_email="alias-003@example.com", real_mailbox_email="real@example.com"),
+            ]
+            manager.acquire_alias.side_effect = leases
+            adapter = module.build_simple_generator_alias_provider(
+                AliasProviderSourceSpec(
+                    source_id="simple-1",
+                    provider_type="simple_generator",
+                    raw_source={
+                        "id": "simple-1",
+                        "type": "simple_generator",
+                        "prefix": "msi.",
+                        "suffix": "@manyme.com",
+                        "mailbox_email": "real@example.com",
+                        "count": 1,
+                        "middle_length_min": 3,
+                        "middle_length_max": 3,
+                    },
+                    desired_alias_count=1,
+                ),
+                AliasProviderBootstrapContext(task_id="task-from-context", purpose="automation_test"),
+            )
+
+            producer = adapter.producer
+            result = adapter.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                )
+            )
+
+        manager_cls.assert_called_once_with(task_id="task-from-context")
+        self.assertEqual(producer.count, 3)
+        self.assertEqual(result.aliases, [
+            {"email": "alias-001@example.com"},
+            {"email": "alias-002@example.com"},
+            {"email": "alias-003@example.com"},
+        ])
+        self.assertEqual(result.account_identity.real_mailbox_email, "real@example.com")
+
+    def test_provider_adapter_module_exists_for_static_and_simple_sources(self):
+        module_path = Path(__file__).resolve().parents[1] / "core" / "alias_pool" / "provider_adapters.py"
+
+        self.assertTrue(module_path.exists(), f"missing module: {module_path}")
+
+        spec = importlib.util.spec_from_file_location("alias_provider_adapters_under_test", module_path)
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        self.assertTrue(hasattr(module, "build_static_list_alias_provider"))
+        self.assertTrue(hasattr(module, "build_simple_generator_alias_provider"))
+
+        static_provider = module.build_static_list_alias_provider(
+            AliasProviderSourceSpec(
+                source_id="legacy-static",
+                provider_type="static_list",
+                raw_source={
+                    "id": "legacy-static",
+                    "type": "static_list",
+                    "emails": ["a@example.com", "b@example.com", "c@example.com"],
+                    "mailbox_email": "real@example.com",
+                },
+            ),
+            AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+        simple_provider = module.build_simple_generator_alias_provider(
+            AliasProviderSourceSpec(
+                source_id="simple-1",
+                provider_type="simple_generator",
+                raw_source={
+                    "id": "simple-1",
+                    "type": "simple_generator",
+                    "prefix": "msi.",
+                    "suffix": "@manyme.com",
+                    "mailbox_email": "real@example.com",
+                    "count": 1,
+                    "middle_length_min": 3,
+                    "middle_length_max": 3,
+                },
+            ),
+            AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        static_result = static_provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+        simple_result = simple_provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertEqual(static_result.provider_type, "static_list")
+        self.assertEqual(
+            static_result.aliases,
+            [
+                {"email": "a@example.com"},
+                {"email": "b@example.com"},
+                {"email": "c@example.com"},
+            ],
+        )
+        self.assertEqual(static_result.account_identity.real_mailbox_email, "real@example.com")
+        self.assertEqual(simple_result.provider_type, "simple_generator")
+        self.assertEqual(simple_result.source_id, "simple-1")
+        self.assertEqual(simple_result.account_identity.real_mailbox_email, "real@example.com")
+        self.assertEqual(len(simple_result.aliases), 3)
+        for item in simple_result.aliases:
+            self.assertTrue(item["email"].startswith("msi."))
+            self.assertTrue(item["email"].endswith("@manyme.com"))
+
+
 class _UnsafeConfirmationExecutor(_FakeVendEmailDefaultExecutor):
     def fetch_confirmation_link(self, state, source) -> str:
         super().fetch_confirmation_link(state, source)
@@ -1028,6 +1573,78 @@ class _UnsafeConfirmationExecutor(_FakeVendEmailDefaultExecutor):
 
 
 class VendEmailRuntimeContractTests(unittest.TestCase):
+    def test_default_runtime_executor_prefers_confirmation_inbox_contract_for_mailbox_lookup(self):
+        from core.alias_pool.vend_email_service import DefaultVendEmailRuntimeExecutor
+
+        state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            mailbox_email="confirm-admin@cxwsss.online",
+        )
+        source = {
+            "register_url": "https://www.vend.email/auth/register",
+            "cloudmail_api_base": "https://legacy.example/api",
+            "cloudmail_admin_email": "legacy-admin@example.com",
+            "cloudmail_admin_password": "legacy-secret",
+            "cloudmail_domain": "legacy.example.com",
+            "cloudmail_subdomain": "legacy-sub",
+            "cloudmail_timeout": 12,
+            "confirmation_inbox": {
+                "provider": "cloudmail",
+                "api_base": "https://mailbox.example/api",
+                "admin_email": "cloudmail-admin@example.com",
+                "admin_password": "cloudmail-secret",
+                "domain": "mail.example.com",
+                "subdomain": "pool-a",
+                "timeout": 45,
+            },
+        }
+        captured_init = {}
+
+        class _CloudMailMailboxFake:
+            def __init__(self, *, api_base, admin_email, admin_password, domain, subdomain, timeout):
+                captured_init.update(
+                    {
+                        "api_base": api_base,
+                        "admin_email": admin_email,
+                        "admin_password": admin_password,
+                        "domain": domain,
+                        "subdomain": subdomain,
+                        "timeout": timeout,
+                    }
+                )
+
+            def _list_mails(self, _email):
+                return [
+                    {
+                        "subject": "Confirm your vend account",
+                        "content": "https://www.vend.email/auth/confirmation?confirmation_token=abc123",
+                    }
+                ]
+
+            def _match_alias_receipt(self, _message, alias_email):
+                return alias_email == "confirm-admin@cxwsss.online"
+
+        with mock.patch("core.alias_pool.vend_email_service.CloudMailMailbox", _CloudMailMailboxFake):
+            executor = DefaultVendEmailRuntimeExecutor(source=source)
+            confirmation_link = executor.fetch_confirmation_link(state, source)
+
+        self.assertEqual(
+            captured_init,
+            {
+                "api_base": "https://mailbox.example/api",
+                "admin_email": "cloudmail-admin@example.com",
+                "admin_password": "cloudmail-secret",
+                "domain": "mail.example.com",
+                "subdomain": "pool-a",
+                "timeout": 45,
+            },
+        )
+        self.assertEqual(
+            confirmation_link,
+            "https://www.vend.email/auth/confirmation?confirmation_token=abc123",
+        )
+
     def test_contract_uses_base_url_when_register_url_points_to_register_page(self):
         state = VendEmailServiceState(
             state_key="vend-email-primary",
@@ -1165,6 +1782,225 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertIn("forwarder[recipient]=admin%40cxwsss.online", executor.calls[2]["request_body_excerpt"])
 
 
+class VendAliasProviderAutomationTestTests(unittest.TestCase):
+    def test_builder_returns_vend_alias_provider(self):
+        from core.alias_pool.vend_email_service import build_vend_email_alias_service_producer
+        from core.alias_pool.vend_provider import VendAliasProvider
+
+        producer = build_vend_email_alias_service_producer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://www.vend.email/auth/register",
+                "alias_domain": "serf.me",
+                "alias_domain_id": "42",
+                "alias_count": 1,
+                "state_key": "vend-email-primary",
+            },
+            task_id="task-vend-provider-builder",
+            runtime_builder=lambda source: _FakeVendEmailRuntime(
+                restore_ok=True,
+                login_ok=False,
+                register_ok=False,
+                aliases=["alias-001@serf.me"],
+            ),
+        )
+
+        self.assertIsInstance(producer, VendAliasProvider)
+
+    def test_run_alias_generation_test_uses_policy_for_fresh_run_and_alias_count(self):
+        from core.alias_pool.vend_provider import VendAliasProvider
+        from core.alias_pool.vend_state_repository import VendStateRepository
+        from core.alias_pool.vend_telemetry import VendTelemetryRecorder
+
+        stale_state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="old@example.com",
+            mailbox_email="old@example.com",
+            service_password="old-pass",
+            known_aliases=["old@serf.me"],
+        )
+        fresh_state = VendEmailServiceState(state_key="vend-email-primary")
+        state_repository = mock.Mock()
+        state_repository.load.return_value = stale_state
+        state_repository.new_state.return_value = fresh_state
+        self.assertFalse(hasattr(importlib.import_module("core.alias_pool.vend_email_service"), "_build_service_email"))
+        self.assertFalse(hasattr(importlib.import_module("core.alias_pool.vend_email_service"), "_build_service_password"))
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=[False, True],
+            register_ok=True,
+            confirm_ok=True,
+            aliases=["new-001@serf.me"],
+            created_aliases=["new-002@serf.me", "new-003@serf.me"],
+        )
+        provider = VendAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="vend-email-primary",
+                provider_type="vend_email",
+                raw_source={
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_domain": "example.com",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "account_email": "confirm@example.com",
+                        "match_email": "confirm@example.com",
+                    },
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 1,
+                    "state_key": "vend-email-primary",
+                },
+                desired_alias_count=1,
+                state_key="vend-email-primary",
+                alias_domain_id="42",
+                confirmation_inbox_config={
+                    "provider": "cloudmail",
+                    "account_email": "confirm@example.com",
+                    "match_email": "confirm@example.com",
+                },
+            ),
+            state_repository=state_repository,
+            runtime=runtime,
+            confirmation_reader=mock.Mock(),
+            telemetry=VendTelemetryRecorder(),
+        )
+
+        with mock.patch(
+            "core.alias_pool.vend_provider.build_service_email",
+            return_value="fresh-service@example.com",
+        ), mock.patch(
+            "core.alias_pool.vend_provider.build_service_password",
+            return_value="fresh-pass",
+        ):
+            result = provider.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                )
+            )
+
+        state_repository.load.assert_not_called()
+        state_repository.save.assert_not_called()
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            result.aliases,
+            [
+                {"email": "new-001@serf.me"},
+                {"email": "new-002@serf.me"},
+                {"email": "new-003@serf.me"},
+            ],
+        )
+        self.assertTrue(result.account_identity.service_account_email)
+        self.assertNotEqual(result.account_identity.service_account_email, "old@example.com")
+        self.assertEqual(result.account_identity.confirmation_inbox_email, "confirm@example.com")
+        self.assertEqual(result.account_identity.real_mailbox_email, "confirm@example.com")
+        self.assertEqual(result.account_identity.service_password, "fresh-pass")
+        self.assertEqual(result.account_identity.username, "fresh-service")
+
+    def test_run_alias_generation_test_does_not_default_mailbox_identity_to_service_email_without_confirmation_inbox(self):
+        from core.alias_pool.vend_provider import VendAliasProvider
+        from core.alias_pool.vend_telemetry import VendTelemetryRecorder
+
+        fresh_state = VendEmailServiceState(state_key="vend-email-primary")
+        state_repository = mock.Mock()
+        state_repository.new_state.return_value = fresh_state
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=True,
+            login_ok=False,
+            register_ok=False,
+            aliases=["new-001@serf.me"],
+        )
+        provider = VendAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="vend-email-primary",
+                provider_type="vend_email",
+                raw_source={
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_domain": "example.com",
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 1,
+                    "state_key": "vend-email-primary",
+                },
+                desired_alias_count=1,
+                state_key="vend-email-primary",
+                alias_domain_id="42",
+            ),
+            state_repository=state_repository,
+            runtime=runtime,
+            confirmation_reader=mock.Mock(),
+            telemetry=VendTelemetryRecorder(),
+        )
+
+        with mock.patch(
+            "core.alias_pool.vend_provider.build_service_email",
+            return_value="fresh-service@example.com",
+        ), mock.patch(
+            "core.alias_pool.vend_provider.build_service_password",
+            return_value="fresh-pass",
+        ):
+            result = provider.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=1,
+                    capture_enabled=True,
+                )
+            )
+
+        self.assertEqual(fresh_state.service_email, "fresh-service@example.com")
+        self.assertEqual(fresh_state.mailbox_email, "")
+        self.assertEqual(result.account_identity.service_account_email, "fresh-service@example.com")
+        self.assertEqual(result.account_identity.confirmation_inbox_email, "")
+        self.assertEqual(result.account_identity.real_mailbox_email, "")
+
+    def test_compatibility_builder_delegates_old_producer_load_into_to_provider(self):
+        from core.alias_pool.vend_email_service import VendEmailAliasServiceProducer
+
+        manager = mock.Mock()
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=True,
+            login_ok=False,
+            register_ok=False,
+            aliases=["alias-001@serf.me"],
+        )
+        state_store = mock.Mock()
+        producer = VendEmailAliasServiceProducer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://www.vend.email/auth/register",
+                "alias_domain": "serf.me",
+                "alias_domain_id": "42",
+                "alias_count": 1,
+                "state_key": "vend-email-primary",
+            },
+            state_store=state_store,
+            runtime=runtime,
+        )
+
+        with mock.patch("core.alias_pool.vend_email_service.build_vend_email_alias_service_producer") as builder:
+            delegated = mock.Mock()
+            builder.return_value = delegated
+
+            producer.load_into(manager)
+
+        builder.assert_called_once_with(
+            source=producer.source,
+            task_id="vend-email-primary",
+            state_store_factory=mock.ANY,
+            runtime_builder=mock.ANY,
+        )
+        delegated.load_into.assert_called_once_with(manager)
+
+
 class VendEmailAliasServiceProducerTests(unittest.TestCase):
     def test_default_runtime_bootstrap_fetches_confirmation_link_before_confirming(self):
         manager = AliasEmailPoolManager(task_id="task-vend-email-default-bootstrap")
@@ -1195,7 +2031,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "core.alias_pool.vend_email_service._build_service_email",
+            "core.alias_pool.vend_provider.build_service_email",
             return_value="vendcap202604170108@cxwsss.online",
         ):
             producer.load_into(manager)
@@ -1294,7 +2130,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         lease1 = manager.acquire_alias()
         lease2 = manager.acquire_alias()
         self.assertEqual(lease1.source_kind, "vend_email")
-        self.assertEqual(lease1.real_mailbox_email, "vendcap202604170108@cxwsss.online")
+        self.assertEqual(lease1.real_mailbox_email, "admin@cxwsss.online")
         self.assertEqual(
             {lease1.alias_email, lease2.alias_email},
             {"vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"},
@@ -1305,7 +2141,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         saved_state = state_store.save.call_args.args[0]
         self.assertIs(saved_state, loaded_state)
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
-        self.assertEqual(saved_state.mailbox_email, "vendcap202604170108@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
         self.assertEqual(saved_state.service_password, "vend-secret")
         self.assertEqual(
             [capture.name for capture in saved_state.last_capture_summary],
@@ -1349,10 +2185,10 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
 
         saved_state = state_store.save.call_args.args[0]
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
-        self.assertEqual(saved_state.mailbox_email, "vendcap202604170108@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
         self.assertEqual(saved_state.service_password, "vend-secret")
         lease = manager.acquire_alias()
-        self.assertEqual(lease.real_mailbox_email, "vendcap202604170108@cxwsss.online")
+        self.assertEqual(lease.real_mailbox_email, "admin@cxwsss.online")
         self.assertEqual(lease.alias_email, "vendcapdemo20260417@serf.me")
 
     def test_producer_bootstrap_registers_confirms_then_logs_in_before_alias_loading(self):
@@ -1500,7 +2336,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         )
         saved_state = state_store.save.call_args.args[0]
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
-        self.assertEqual(saved_state.mailbox_email, "vendcap202604170108@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
         self.assertEqual(saved_state.service_password, "old-pass")
         self.assertEqual(
             saved_state.last_capture_summary,
@@ -1751,7 +2587,8 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],
         )
         saved_state = state_store.save.call_args.args[0]
-        self.assertEqual(saved_state.service_email, saved_state.mailbox_email)
+        self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
         self.assertEqual(
             getattr(saved_state, "known_aliases", None),
             ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],

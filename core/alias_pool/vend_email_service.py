@@ -17,11 +17,16 @@ from typing import Any, Callable, Protocol, cast
 from core.http_client import HTTPClient
 from core.base_mailbox import CloudMailMailbox, MailboxAccount
 
-from .base import AliasEmailLease, AliasSourceState
+from .base import AliasSourceState
 from .mailbox_verification_adapter import extract_anchored_link_from_message_content
+from .provider_contracts import AliasProviderSourceSpec
+from .vend_confirmation import VendConfirmationReader
 from .vend_email_state import VendEmailServiceState
 from .vend_email_state import VendEmailFileStateStore
 from .vend_email_state import VendEmailCaptureRecord
+from .vend_provider import VendAliasProvider
+from .vend_state_repository import VendStateRepository
+from .vend_telemetry import VendTelemetryRecorder
 
 
 class VendEmailTaskStateStore:
@@ -57,32 +62,6 @@ def build_vend_email_state_store_for_key(*, state_key: str):
 
 def _utc_now_isoformat() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _build_service_email(source: dict) -> str:
-    mailbox = CloudMailMailbox(
-        api_base=str(source.get("cloudmail_api_base") or "").strip(),
-        admin_email=str(source.get("cloudmail_admin_email") or "").strip(),
-        admin_password=str(source.get("cloudmail_admin_password") or "").strip(),
-        domain=source.get("cloudmail_domain") or "",
-        subdomain=str(source.get("cloudmail_subdomain") or "").strip(),
-        timeout=int(source.get("cloudmail_timeout") or 30),
-    )
-    return mailbox.get_email().email
-
-
-def _build_service_password() -> str:
-    return secrets.token_urlsafe(18)
-
-
-def _is_cloudmail_domain_email(value: str, source: dict) -> bool:
-    email = str(value or "").strip().lower()
-    if not email or "@" not in email:
-        return False
-    expected_domain = str(source.get("cloudmail_domain") or "").strip().lower()
-    if not expected_domain:
-        return bool(email)
-    return email.endswith(f"@{expected_domain}")
 
 
 def _ensure_safe_outbound_url(*, url: str, field_name: str) -> str:
@@ -218,14 +197,40 @@ class DefaultVendEmailRuntimeExecutor:
     def _service_mailbox_email(self, state) -> str:
         return str(getattr(state, "mailbox_email", "") or "").strip().lower()
 
+    def _confirmation_inbox_config(self, source: dict) -> dict[str, Any]:
+        confirmation_inbox = source.get("confirmation_inbox")
+        resolved = dict(confirmation_inbox) if isinstance(confirmation_inbox, dict) else {}
+
+        def _set_if_missing(key: str, value: Any) -> None:
+            if key in resolved and resolved.get(key) not in (None, ""):
+                return
+            if value in (None, ""):
+                return
+            resolved[key] = value
+
+        _set_if_missing("provider", "cloudmail")
+        _set_if_missing("api_base", source.get("cloudmail_api_base") or source.get("mailbox_base_url") or "")
+        _set_if_missing("base_url", source.get("mailbox_base_url") or source.get("cloudmail_api_base") or "")
+        _set_if_missing("admin_email", source.get("cloudmail_admin_email") or "")
+        _set_if_missing("admin_password", source.get("cloudmail_admin_password") or "")
+        _set_if_missing("domain", source.get("cloudmail_domain") or "")
+        _set_if_missing("subdomain", source.get("cloudmail_subdomain") or "")
+        if resolved.get("timeout") in (None, ""):
+            resolved["timeout"] = int(source.get("cloudmail_timeout") or 30)
+        _set_if_missing("account_email", source.get("mailbox_email") or "")
+        _set_if_missing("account_password", source.get("mailbox_password") or "")
+        _set_if_missing("match_email", resolved.get("account_email") or source.get("mailbox_email") or "")
+        return resolved
+
     def _build_cloudmail_mailbox(self, source: dict) -> CloudMailMailbox:
+        confirmation_inbox = self._confirmation_inbox_config(source)
         return CloudMailMailbox(
-            api_base=self._require_string(source, "cloudmail_api_base"),
-            admin_email=str(source.get("cloudmail_admin_email") or "").strip(),
-            admin_password=self._require_string(source, "cloudmail_admin_password"),
-            domain=source.get("cloudmail_domain") or "",
-            subdomain=str(source.get("cloudmail_subdomain") or "").strip(),
-            timeout=int(source.get("cloudmail_timeout") or 30),
+            api_base=self._require_string(confirmation_inbox, "api_base"),
+            admin_email=str(confirmation_inbox.get("admin_email") or "").strip(),
+            admin_password=self._require_string(confirmation_inbox, "admin_password"),
+            domain=confirmation_inbox.get("domain") or "",
+            subdomain=str(confirmation_inbox.get("subdomain") or "").strip(),
+            timeout=int(confirmation_inbox.get("timeout") or 30),
         )
 
     def _resolve_confirmation_anchor(self, source: dict) -> str:
@@ -309,11 +314,57 @@ def build_vend_email_alias_service_producer(
     task_id: str,
     state_store_factory=None,
     runtime_builder=None,
-) -> "VendEmailAliasServiceProducer":
+) -> object:
     resolved_state_store_factory = cast(Any, state_store_factory)
     resolved_runtime_builder = cast(Any, runtime_builder)
-    source_id = str(source.get("id") or "vend-email")
-    state_key = str(source.get("state_key") or source_id).strip() or source_id
+    normalized_source = dict(source)
+    source_id = str(normalized_source.get("id") or "vend-email")
+    state_key = str(normalized_source.get("state_key") or source_id).strip() or source_id
+    confirmation_inbox = normalized_source.get("confirmation_inbox")
+    if not isinstance(confirmation_inbox, dict):
+        confirmation_inbox = {}
+
+    if not confirmation_inbox:
+        fallback_account_email = str(normalized_source.get("mailbox_email") or "").strip()
+        fallback_account_password = str(normalized_source.get("mailbox_password") or "").strip()
+        fallback_base_url = str(normalized_source.get("mailbox_base_url") or "").strip()
+        fallback_provider = "cloudmail" if any(
+            [
+                str(normalized_source.get("cloudmail_api_base") or "").strip(),
+                str(normalized_source.get("cloudmail_admin_email") or "").strip(),
+                str(normalized_source.get("cloudmail_admin_password") or "").strip(),
+                str(normalized_source.get("cloudmail_domain") or "").strip(),
+                str(normalized_source.get("cloudmail_subdomain") or "").strip(),
+                fallback_account_email,
+                fallback_account_password,
+                fallback_base_url,
+            ]
+        ) else ""
+        if fallback_provider:
+            confirmation_inbox = {
+                "provider": fallback_provider,
+                "api_base": str(normalized_source.get("cloudmail_api_base") or "").strip(),
+                "admin_email": str(normalized_source.get("cloudmail_admin_email") or "").strip(),
+                "admin_password": str(normalized_source.get("cloudmail_admin_password") or "").strip(),
+                "domain": normalized_source.get("cloudmail_domain") or "",
+                "subdomain": str(normalized_source.get("cloudmail_subdomain") or "").strip(),
+                "timeout": int(normalized_source.get("cloudmail_timeout") or 30),
+                "account_email": fallback_account_email,
+                "account_password": fallback_account_password,
+                "match_email": fallback_account_email,
+                "base_url": fallback_base_url,
+            }
+    else:
+        confirmation_inbox = dict(confirmation_inbox)
+
+    if confirmation_inbox:
+        normalized_source["confirmation_inbox"] = confirmation_inbox
+        if confirmation_inbox.get("base_url") and not normalized_source.get("mailbox_base_url"):
+            normalized_source["mailbox_base_url"] = confirmation_inbox.get("base_url")
+        if confirmation_inbox.get("account_email") and not normalized_source.get("mailbox_email"):
+            normalized_source["mailbox_email"] = confirmation_inbox.get("account_email")
+        if confirmation_inbox.get("account_password") and not normalized_source.get("mailbox_password"):
+            normalized_source["mailbox_password"] = confirmation_inbox.get("account_password")
 
     if state_store_factory is None:
         state_store = build_vend_email_state_store_for_key(state_key=state_key)
@@ -368,10 +419,24 @@ def build_vend_email_alias_service_producer(
     if not callable(resolved_runtime_builder):
         resolved_runtime_builder = build_default_vend_email_runtime
 
-    return VendEmailAliasServiceProducer(
-        source=source,
-        state_store=state_store,
-        runtime=resolved_runtime_builder(source),
+    spec = AliasProviderSourceSpec(
+        source_id=source_id,
+        provider_type="vend_email",
+        raw_source=normalized_source,
+        desired_alias_count=max(int(normalized_source.get("alias_count") or 0), 0),
+        state_key=state_key,
+        register_url=str(normalized_source.get("register_url") or ""),
+        alias_domain=str(normalized_source.get("alias_domain") or ""),
+        alias_domain_id=str(normalized_source.get("alias_domain_id") or ""),
+        confirmation_inbox_config=confirmation_inbox,
+    )
+    runtime = resolved_runtime_builder(normalized_source)
+    return VendAliasProvider(
+        spec=spec,
+        state_repository=VendStateRepository(store=state_store, state_key=state_key),
+        runtime=runtime,
+        confirmation_reader=VendConfirmationReader(runtime=runtime),
+        telemetry=VendTelemetryRecorder(),
     )
 
 
@@ -990,287 +1055,18 @@ class VendEmailAliasServiceProducer:
     def state(self) -> AliasSourceState:
         return self._state
 
-    _STAGE_LABELS = {
-        "session_ready": "会话已就绪",
-        "register_submit": "注册表单提交",
-        "fetch_confirmation_mail": "查找确认邮件",
-        "open_confirmation_link": "打开确认链接",
-        "list_aliases": "列出现有别名",
-        "create_aliases": "创建别名",
-        "aliases_ready": "别名预览已生成",
-        "save_state": "保存预览状态",
-    }
-
-    def _stage_label(self, code: str) -> str:
-        return self._STAGE_LABELS.get(str(code or ""), str(code or ""))
-
-    def _record_stage(self, state, name: str, *, status: str, **extras: Any) -> None:
-        stage_entry: dict[str, Any] = {
-            "code": str(name or ""),
-            "label": self._stage_label(str(name or "")),
-            "status": str(status or ""),
-        }
-        for key, value in extras.items():
-            if value is None or value == "":
-                continue
-            if key == "detail":
-                stage_entry["detail"] = str(value)
-            else:
-                stage_entry[str(key)] = value
-        if stage_entry["code"] != "save_state":
-            state.current_stage = {
-                "code": stage_entry["code"],
-                "label": stage_entry["label"],
-            }
-        state.stage_history = list(getattr(state, "stage_history", []) or []) + [stage_entry]
-
-    def _record_failure(self, state, stage: str, reason: str, *, retryable: bool | None = None) -> None:
-        state.current_stage = {
-            "code": str(stage or ""),
-            "label": self._stage_label(str(stage or "")),
-        }
-        failure: dict[str, Any] = {
-            "stageCode": str(stage or ""),
-            "stageLabel": self._stage_label(str(stage or "")),
-            "reason": str(reason or ""),
-        }
-        if retryable is not None:
-            failure["retryable"] = bool(retryable)
-        state.last_failure = failure
-
-    def _update_stage_status(self, state, code: str, *, status: str, detail: str = "", update_current: bool = True) -> None:
-        updated_history = []
-        for entry in list(getattr(state, "stage_history", []) or []):
-            if isinstance(entry, dict) and str(entry.get("code") or "") == str(code or ""):
-                updated_entry = dict(entry)
-                updated_entry["status"] = status
-                if detail:
-                    updated_entry["detail"] = detail
-                updated_history.append(updated_entry)
-            else:
-                updated_history.append(entry)
-        state.stage_history = updated_history
-        if update_current:
-            state.current_stage = {"code": str(code or ""), "label": self._stage_label(str(code or ""))}
-
-    def _ensure_session(self, state) -> None:
-        current_service_email = str(getattr(state, "service_email", "") or "").strip().lower()
-        if not current_service_email or not _is_cloudmail_domain_email(current_service_email, self.source):
-            state.service_email = _build_service_email(self.source)
-        expected_mailbox_email = str(getattr(state, "service_email", "") or "").strip().lower()
-        current_mailbox_email = str(getattr(state, "mailbox_email", "") or "").strip().lower()
-        if not current_mailbox_email or current_mailbox_email != expected_mailbox_email:
-            state.mailbox_email = expected_mailbox_email
-        if not getattr(state, "service_password", ""):
-            state.service_password = _build_service_password()
-        if self.runtime.restore_session(state):
-            self._record_stage(state, "session_ready", status="completed")
-            return
-        if self.runtime.login(state, self.source):
-            self._record_stage(state, "session_ready", status="completed")
-            return
-        if self.runtime.register(state, self.source):
-            self._record_stage(state, "register_submit", status="completed")
-            confirmation_bootstrap_available = callable(getattr(self.runtime, "fetch_confirmation_link", None)) and callable(getattr(self.runtime, "confirm", None))
-            confirmation_bootstrap_error = self._attempt_confirmation_bootstrap(state)
-            if confirmation_bootstrap_error is None:
-                self._record_stage(state, "session_ready", status="completed")
-                return
-            if confirmation_bootstrap_available:
-                raise confirmation_bootstrap_error
-            elif not self.runtime.resend_confirmation(state, self.source):
-                raise RuntimeError("vend.email confirmation bootstrap failed")
-            if self.runtime.login(state, self.source):
-                self._record_stage(state, "session_ready", status="completed")
-                return
-        raise RuntimeError("vend.email session bootstrap failed")
-
-    def _attempt_confirmation_bootstrap(self, state) -> Exception | None:
-        fetch_confirmation_link = getattr(self.runtime, "fetch_confirmation_link", None)
-        confirm = getattr(self.runtime, "confirm", None)
-        if not callable(fetch_confirmation_link) or not callable(confirm):
-            return RuntimeError("vend.email confirmation bootstrap unavailable")
-        try:
-            self._record_stage(state, "fetch_confirmation_mail", status="pending")
-            confirmation_link = str(fetch_confirmation_link(state, self.source) or "").strip()
-            if not confirmation_link:
-                error = RuntimeError("vend.email confirmation mail did not contain a confirmation link")
-                self._update_stage_status(
-                    state,
-                    "fetch_confirmation_mail",
-                    status="failed",
-                    detail=str(error),
-                )
-                return error
-            self._update_stage_status(state, "fetch_confirmation_mail", status="completed")
-            self._record_stage(state, "open_confirmation_link", status="pending")
-            if not confirm(confirmation_link, self.source):
-                error = RuntimeError("vend.email confirmation step returned unsuccessful result")
-                self._update_stage_status(
-                    state,
-                    "open_confirmation_link",
-                    status="failed",
-                    detail=str(error),
-                )
-                return error
-            self._update_stage_status(state, "open_confirmation_link", status="completed")
-            if self.runtime.login(state, self.source):
-                return None
-            return RuntimeError("vend.email login failed after confirmation bootstrap")
-        except Exception as exc:
-            return exc
-
-    def _capture_summary(self) -> list[VendEmailCaptureRecord]:
-        capture_summary = getattr(self.runtime, "capture_summary", None)
-        if not callable(capture_summary):
-            raise VendEmailRuntimeProtocolError(
-                "vend.email runtime must define callable capture_summary()"
-            )
-        typed_capture_summary = cast(
-            Callable[[], list[VendEmailCaptureRecord]],
-            capture_summary,
-        )
-        records = []
-        for item in typed_capture_summary():
-            if isinstance(item, VendEmailCaptureRecord):
-                records.append(item)
-            elif isinstance(item, dict):
-                records.append(VendEmailCaptureRecord.from_dict(item))
-            else:
-                raise VendEmailRuntimeProtocolError(
-                    "vend.email runtime capture_summary() must return VendEmailCaptureRecord items"
-                )
-        return records
-
     def load_into(self, manager) -> None:
+        delegated = build_vend_email_alias_service_producer(
+            source=self.source,
+            task_id=self.source_id,
+            state_store_factory=lambda *_args, **_kwargs: self.state_store,
+            runtime_builder=lambda _source: self.runtime,
+        )
+        typed_delegated = cast(VendAliasProvider, delegated)
         self._state = AliasSourceState.ACTIVE
-        state = None
         try:
-            state_key = str(self.source.get("state_key") or self.source_id)
-            state = self.state_store.load(state_key)
-            state.stage_history = []
-            state.current_stage = {"code": "", "label": ""}
-            state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
-            self._ensure_session(state)
-
-            self._record_stage(state, "list_aliases", status="pending")
-            aliases = list(self.runtime.list_aliases(state, self.source))
-            target = max(int(self.source.get("alias_count") or 0), 0)
-            missing_count = max(target - len(aliases), 0)
-            existing_aliases_seen = set(aliases)
-            created_alias_total = 0
-            list_alias_detail = f"找到 {len(aliases)} 个别名"
-            if missing_count:
-                self._update_stage_status(state, "list_aliases", status="completed", detail=list_alias_detail)
-                self._record_stage(state, "create_aliases", status="pending")
-                initial_created_aliases = list(self.runtime.create_aliases(state, self.source, missing_count))
-                aliases.extend(initial_created_aliases)
-                for alias in initial_created_aliases:
-                    if alias in existing_aliases_seen:
-                        continue
-                    existing_aliases_seen.add(alias)
-                    created_alias_total += 1
-                self._update_stage_status(
-                    state,
-                    "create_aliases",
-                    status="completed",
-                    detail=f"已补齐 {created_alias_total} 个别名",
-                )
-            else:
-                self._update_stage_status(state, "list_aliases", status="completed", detail=list_alias_detail)
-
-            unique_aliases = []
-            seen = set()
-            for alias in aliases:
-                if alias in seen:
-                    continue
-                seen.add(alias)
-                unique_aliases.append(alias)
-
-            while len(unique_aliases) < target:
-                remaining_missing_count = target - len(unique_aliases)
-                created_aliases = list(
-                    self.runtime.create_aliases(
-                        state,
-                        self.source,
-                        remaining_missing_count,
-                    )
-                )
-                if not created_aliases:
-                    break
-
-                for alias in created_aliases:
-                    if alias not in existing_aliases_seen:
-                        existing_aliases_seen.add(alias)
-                        created_alias_total += 1
-                    if alias in seen:
-                        continue
-                    seen.add(alias)
-                    unique_aliases.append(alias)
-
-                self._update_stage_status(
-                    state,
-                    "create_aliases",
-                    status="completed",
-                    detail=f"已补齐 {created_alias_total} 个别名",
-                )
-
-            state.last_capture_summary = self._capture_summary()
-            state.known_aliases = list(unique_aliases)
-            self._record_stage(
-                state,
-                "aliases_ready",
-                status="completed",
-                detail=f"预览共 {len(unique_aliases[:target])} 个别名",
-            )
-            state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
-            state.last_error = ""
-
-            for alias_email in unique_aliases[:target]:
-                manager.add_lease(
-                    AliasEmailLease(
-                        alias_email=alias_email,
-                        real_mailbox_email=str(getattr(state, "mailbox_email", "") or "").strip().lower(),
-                        source_kind=self.source_kind,
-                        source_id=self.source_id,
-                        source_session_id=state_key,
-                    )
-                )
-
-            state.state_key = state_key
-            self._record_stage(state, "save_state", status="completed")
-            self.state_store.save(state)
-            self._state = AliasSourceState.EXHAUSTED
-        except Exception as exc:
-            self._state = AliasSourceState.FAILED
-            if state is not None:
-                if hasattr(self.runtime, "capture_summary") and callable(self.runtime.capture_summary):
-                    try:
-                        state.last_capture_summary = self._capture_summary()
-                    except Exception:
-                        pass
-                stage_code = self._resolve_failure_stage_code(state)
-                history = [item for item in list(getattr(state, "stage_history", []) or []) if isinstance(item, dict)]
-                if history and str(history[-1].get("code") or "") == stage_code:
-                    self._update_stage_status(state, stage_code, status="failed", detail=str(exc))
-                else:
-                    self._record_stage(state, stage_code, status="failed", detail=str(exc))
-                self._record_failure(state, stage_code, str(exc), retryable=True)
-                state.last_error = str(exc)
-                self.state_store.save(state)
+            typed_delegated.load_into(manager)
+            self._state = typed_delegated.state()
+        except Exception:
+            self._state = typed_delegated.state()
             raise
-
-    def _resolve_failure_stage_code(self, state) -> str:
-        history = [item for item in list(getattr(state, "stage_history", []) or []) if isinstance(item, dict)]
-        if history:
-            last_code = str(history[-1].get("code") or "")
-            if last_code in {"fetch_confirmation_mail", "register_submit", "list_aliases", "create_aliases", "save_state"}:
-                return last_code
-            if last_code == "open_confirmation_link":
-                return "open_confirmation_link"
-        codes = {str(item.get("code") or "") for item in history}
-        if "register_submit" in codes and "open_confirmation_link" not in codes:
-            return "fetch_confirmation_mail"
-        if "list_aliases" in codes and "create_aliases" not in codes:
-            return "list_aliases"
-        return "session_ready"
