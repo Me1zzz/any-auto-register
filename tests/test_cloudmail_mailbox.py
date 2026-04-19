@@ -54,7 +54,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "alias1@alias.example.com\nalias2@alias.example.com",
-                "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
 
@@ -62,14 +61,14 @@ class CloudMailMailboxTests(unittest.TestCase):
             account = mailbox.get_email()
 
         self.assertEqual(account.email, "alias2@alias.example.com")
-        self.assertEqual(account.account_id, "real@mail.example.com")
+        self.assertEqual(account.account_id, "")
         self.assertEqual(
             account.extra,
             {
                 "mailbox_alias": {
                     "enabled": True,
                     "alias_email": "alias2@alias.example.com",
-                    "mailbox_email": "real@mail.example.com",
+                    "mailbox_email": "",
                 }
             },
         )
@@ -110,7 +109,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "alias1@alias.example.com\nalias2@alias.example.com",
-                "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
         mailbox_b = create_mailbox(
@@ -121,7 +119,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "alias1@alias.example.com\nalias2@alias.example.com",
-                "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
         assert isinstance(mailbox_a, CloudMailMailbox)
@@ -145,7 +142,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "alias1@alias.example.com",
-                "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
         mailbox_b = create_mailbox(
@@ -156,7 +152,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "alias1@alias.example.com",
-                "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
         assert isinstance(mailbox_a, CloudMailMailbox)
@@ -177,7 +172,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "legacy1@alias.example.com\nlegacy2@alias.example.com",
-                "cloudmail_alias_mailbox_email": "legacy@mail.example.com",
             },
         )
         assert isinstance(mailbox, CloudMailMailbox)
@@ -222,7 +216,6 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "cloudmail_domain": "mail.example.com",
                 "cloudmail_alias_enabled": "1",
                 "cloudmail_alias_emails": "alias1@alias.example.com\nalias2@alias.example.com",
-                "cloudmail_alias_mailbox_email": "real@mail.example.com",
             },
         )
         assert isinstance(mailbox, CloudMailMailbox)

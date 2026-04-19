@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
@@ -513,19 +514,20 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                 "mail_provider": "cloudmail",
                 "cloudmail_alias_enabled": True,
                 "sources": [
-                    {
-                        "id": "vend-email-primary",
-                        "type": "vend_email",
-                        "register_url": "https://vend.example/register",
-                        "mailbox_base_url": "https://mailbox.example/base",
-                        "mailbox_email": "real@example.com",
-                        "mailbox_password": "secret-pass",
-                        "alias_domain": "vend.example.com",
-                        "alias_count": 2,
-                        "state_key": "vend-email-state-key",
-                    }
-                ],
-                "vend_email_runtime_builder": _VendEmailRuntimeBuilder(),
+                {
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://vend.example/register",
+                    "mailbox_base_url": "https://mailbox.example/base",
+                    "mailbox_email": "real@example.com",
+                    "mailbox_password": "secret-pass",
+                    "alias_domain": "vend.example.com",
+                    "alias_domain_id": "42",
+                    "alias_count": 2,
+                    "state_key": "vend-email-state-key",
+                }
+            ],
+            "vend_email_runtime_builder": _VendEmailRuntimeBuilder(),
                 "vend_email_state_store_factory": _build_state_store,
             },
             count=2,
@@ -563,11 +565,11 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertEqual(len(created_state_stores[0].saved_states), 1)
         self.assertEqual(
             created_state_stores[0].saved_states[0].service_email,
-            "vendcap202604170108@cxwsss.online",
+            created_state_stores[0].saved_states[0].mailbox_email,
         )
         self.assertEqual(
             created_state_stores[0].saved_states[0].mailbox_email,
-            "real@example.com",
+            created_state_stores[0].saved_states[0].service_email,
         )
         self.assertEqual(
             created_state_stores[0].saved_states[0].service_password,
@@ -587,11 +589,15 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                 {
                     "id": "vend-email-primary",
                     "type": "vend_email",
-                    "register_url": "https://vend.example/register",
-                    "mailbox_base_url": "https://mailbox.example/base",
-                    "mailbox_email": "real@example.com",
-                    "mailbox_password": "secret-pass",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_api_base": "",
+                    "cloudmail_admin_email": "",
+                    "cloudmail_admin_password": "",
+                    "cloudmail_domain": "",
+                    "cloudmail_subdomain": "",
+                    "cloudmail_timeout": 30,
                     "alias_domain": "vend.example.com",
+                    "alias_domain_id": "42",
                     "alias_count": 2,
                     "state_key": "vend-email-state-key",
                 }
@@ -619,6 +625,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                         "mailbox_email": "real@example.com",
                         "mailbox_password": "secret-pass",
                         "alias_domain": "vend.example.com",
+                        "alias_domain_id": "42",
                         "alias_count": 2,
                         "state_key": "vend-email-state-key",
                     }
@@ -645,6 +652,76 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertEqual(snapshot["status"], "failed")
         self.assertEqual(snapshot["error"], "state store exploded internally")
         self.assertEqual(snapshot["errors"], [])
+
+    def test_run_register_uses_default_vend_runtime_builder_without_placeholder_failure(self):
+        task_id = "task-vend-email-default-runtime"
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-email-primary",
+                        "type": "vend_email",
+                        "register_url": "https://vend.example/register",
+                        "mailbox_base_url": "https://mailbox.example/base",
+                        "mailbox_email": "real@example.com",
+                        "mailbox_password": "secret-pass",
+                        "alias_domain": "vend.example.com",
+                        "alias_domain_id": "42",
+                        "alias_count": 1,
+                        "state_key": "vend-email-state-key",
+                    }
+                ],
+            },
+            count=1,
+            concurrency=1,
+        )
+        _create_task_record(task_id, req, "manual", None)
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=_MailboxFactory()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+            patch(
+                "core.alias_pool.vend_email_service.DefaultVendEmailRuntimeExecutor.execute",
+                side_effect=AssertionError("default-runtime-used"),
+            ),
+        ):
+            _run_register(task_id, req)
+
+        snapshot = _task_store.snapshot(task_id)
+        self.assertEqual(snapshot["status"], "failed")
+        self.assertEqual(snapshot["error"], "default-runtime-used")
+
+    def test_build_vend_email_alias_service_producer_uses_state_key_store_by_default(self):
+        from core.alias_pool.vend_email_service import build_vend_email_alias_service_producer
+
+        producer = build_vend_email_alias_service_producer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://vend.example/register",
+                "mailbox_base_url": "https://mailbox.example/base",
+                "mailbox_email": "real@example.com",
+                "mailbox_password": "secret-pass",
+                "alias_domain": "vend.example.com",
+                "alias_domain_id": "42",
+                "alias_count": 1,
+                "state_key": "vend-email-state-key",
+            },
+            task_id="task-vend-email-default-store",
+            runtime_builder=_VendEmailRuntimeBuilder(),
+        )
+
+        store_path = producer.state_store._store._path
+        self.assertEqual(
+            store_path,
+            Path("data") / "alias_pool" / "vend_email" / "states" / "vend-email-state-key.json",
+        )
 
     def test_create_register_task_keeps_alias_config_in_request(self):
         req = self._build_request(
