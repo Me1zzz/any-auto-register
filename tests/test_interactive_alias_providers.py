@@ -1,6 +1,7 @@
 import unittest
 
 from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase, InteractiveAliasProviderBase
+from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.interactive_provider_models import (
     AliasCreatedRecord,
     AliasDomainOption,
@@ -20,17 +21,25 @@ class _MemoryStore:
     def __init__(self, state=None):
         self.state = state
         self.saved = []
+        self.loaded_keys = []
+        self.saved_keys = []
 
-    def load(self):
+    def load(self, state_key=None):
+        self.loaded_keys.append(state_key)
         return self.state
 
-    def save(self, state):
+    def save(self, state, state_key=None):
+        self.saved_keys.append(state_key)
         self.state = state
         self.saved.append(state)
 
 
 class _FakeInteractiveProvider(InteractiveAliasProviderBase):
     source_kind = "fake_interactive"
+
+    def __init__(self, *, spec, context):
+        super().__init__(spec=spec, context=context)
+        self.capture_calls = 0
 
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
         return AuthenticatedProviderContext(
@@ -62,6 +71,32 @@ class _FakeInteractiveProvider(InteractiveAliasProviderBase):
     def create_alias(self, *, context, domain, alias_index):
         assert domain is not None
         return AliasCreatedRecord(email=f"created-{alias_index}@{domain.domain}")
+
+    def build_capture_summary(self):
+        self.capture_calls += 1
+        return []
+
+
+class _DuplicateInteractiveProvider(_FakeInteractiveProvider):
+    def list_existing_aliases(self, context):
+        return [
+            {"email": "first@example.com"},
+            {"email": "FIRST@example.com"},
+        ]
+
+    def create_alias(self, *, context, domain, alias_index):
+        assert domain is not None
+        if alias_index == 2:
+            return AliasCreatedRecord(email="first@example.com")
+        return AliasCreatedRecord(email="created-3@example.com")
+
+
+class _PoolManager:
+    def __init__(self):
+        self.leases: list[AliasEmailLease] = []
+
+    def add_lease(self, lease: AliasEmailLease) -> None:
+        self.leases.append(lease)
 
 
 class _ExistingAccountProvider(ExistingAccountAliasProviderBase):
@@ -116,9 +151,38 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
                 "list_aliases",
                 "create_aliases",
                 "aliases_ready",
-                "save_state",
             ],
         )
+
+    def test_shared_loop_records_save_state_only_when_persisting(self):
+        store = _MemoryStore()
+        provider = _FakeInteractiveProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="interactive-state-key",
+                desired_alias_count=3,
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=True,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.stage_timeline[-1].code, "save_state")
+        self.assertEqual(store.saved_keys, ["interactive-state-key"])
+        self.assertEqual(store.saved[0].known_aliases, ["first@example.com", "created-2@example.com", "created-3@example.com"])
 
     def test_shared_loop_returns_structured_failure_when_domain_discovery_fails(self):
         class _FailingProvider(_FakeInteractiveProvider):
@@ -151,6 +215,78 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
         assert result.current_stage is not None
         self.assertEqual(result.current_stage.code, "discover_alias_domains")
 
+    def test_failure_capture_summary_respects_capture_enabled_false(self):
+        class _FailingProvider(_FakeInteractiveProvider):
+            def discover_alias_domains(self, context):
+                raise RuntimeError("signed domain options unavailable")
+
+        provider = _FailingProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="fake-provider",
+                desired_alias_count=3,
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=False,
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.capture_summary, [])
+        self.assertEqual(provider.capture_calls, 0)
+
+    def test_shared_loop_suppresses_duplicate_aliases_in_result(self):
+        provider = _DuplicateInteractiveProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="fake-provider",
+                desired_alias_count=3,
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertEqual(
+            [item["email"] for item in result.aliases],
+            ["first@example.com", "created-3@example.com"],
+        )
+
+    def test_load_into_suppresses_duplicate_alias_leases(self):
+        provider = _DuplicateInteractiveProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="fake-provider",
+                desired_alias_count=3,
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+        pool_manager = _PoolManager()
+
+        provider.load_into(pool_manager)
+
+        self.assertEqual(
+            [lease.alias_email for lease in pool_manager.leases],
+            ["first@example.com", "created-3@example.com"],
+        )
+
     def test_existing_account_helper_uses_first_configured_account(self):
         provider = _ExistingAccountProvider(
             spec=AliasProviderSourceSpec(
@@ -176,22 +312,34 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
 
 class InteractiveStateRepositoryTests(unittest.TestCase):
     def test_repository_load_returns_new_state_when_store_missing(self):
-        repository = InteractiveStateRepository()
+        repository = InteractiveStateRepository(state_key="interactive-state-key")
 
         state = repository.load()
 
         self.assertIsInstance(state, InteractiveProviderState)
         self.assertEqual(state.known_aliases, [])
         self.assertEqual(state.current_stage, {"code": "", "label": ""})
+        self.assertEqual(state.state_key, "interactive-state-key")
 
     def test_repository_save_passes_state_to_store(self):
         store = _MemoryStore()
-        repository = InteractiveStateRepository(store=store)
+        repository = InteractiveStateRepository(store=store, state_key="interactive-state-key")
         state = InteractiveProviderState(service_account_email="service@example.com")
 
         repository.save(state)
 
         self.assertEqual(store.saved, [state])
+        self.assertEqual(store.saved_keys, ["interactive-state-key"])
+        self.assertEqual(state.state_key, "interactive-state-key")
+
+    def test_repository_load_uses_state_key_and_normalizes_loaded_state(self):
+        store = _MemoryStore(state=InteractiveProviderState(service_account_email="service@example.com"))
+        repository = InteractiveStateRepository(store=store, state_key="interactive-state-key")
+
+        state = repository.load()
+
+        self.assertEqual(store.loaded_keys, ["interactive-state-key"])
+        self.assertEqual(state.state_key, "interactive-state-key")
 
 
 if __name__ == "__main__":

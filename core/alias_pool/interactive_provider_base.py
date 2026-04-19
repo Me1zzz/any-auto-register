@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Mapping, Sequence
 
 from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.interactive_provider_models import (
@@ -9,6 +10,8 @@ from core.alias_pool.interactive_provider_models import (
     AuthenticatedProviderContext,
     VerificationRequirement,
 )
+from core.alias_pool.interactive_provider_state import InteractiveProviderState
+from core.alias_pool.interactive_state_repository import InteractiveStateRepository
 from core.alias_pool.provider_contracts import (
     AliasAccountIdentity,
     AliasAutomationTestPolicy,
@@ -35,6 +38,7 @@ class InteractiveAliasProviderBase:
         self._spec = spec
         self._context = context
         self.source_id = spec.source_id
+        self._state_repository = self._build_state_repository()
 
     @property
     def provider_type(self) -> str:
@@ -83,7 +87,14 @@ class InteractiveAliasProviderBase:
                 detail=detail,
             )
 
+        state = None
+
         try:
+            if policy.fresh_service_account:
+                state = self._state_repository.new_state()
+            else:
+                state = self._state_repository.load()
+
             context = self.ensure_authenticated_context("alias_test")
             record("session_ready", "会话已就绪", "completed")
 
@@ -104,19 +115,50 @@ class InteractiveAliasProviderBase:
                 for item in list(self.list_existing_aliases(context))
                 if isinstance(item, dict)
             ]
+            aliases = self._dedupe_alias_items(aliases)
             update_last("completed", detail=f"找到 {len(aliases)} 个别名")
 
             target = max(int(policy.minimum_alias_count or 0), int(self._spec.desired_alias_count or 0), 1)
             record("create_aliases", "创建别名", "pending")
-            while len(aliases) < target:
-                alias_index = len(aliases) + 1
+            creation_attempt_count = len(aliases)
+            stalled_attempt_count = 0
+            max_stalled_attempts = max(target, 1)
+            while len(aliases) < target and stalled_attempt_count < max_stalled_attempts:
+                previous_alias_count = len(aliases)
+                creation_attempt_count += 1
+                alias_index = creation_attempt_count
                 domain = self.pick_domain_option(domains, alias_index)
                 created = self.create_alias(context=context, domain=domain, alias_index=alias_index)
                 aliases.append({"email": created.email, **dict(created.metadata or {})})
+                aliases = self._dedupe_alias_items(aliases)
+                if len(aliases) == previous_alias_count:
+                    stalled_attempt_count += 1
+                    continue
+                stalled_attempt_count = 0
 
             update_last("completed", detail=f"预览共 {len(aliases)} 个别名")
             record("aliases_ready", "别名预览已生成", "completed", detail=f"预览共 {len(aliases)} 个别名")
-            record("save_state", "保存预览状态", "completed")
+
+            self._update_state_from_context(state, context)
+            state.domain_options = [self._domain_to_state_item(item) for item in domains]
+            state.known_aliases = [
+                str(item.get("email") or "").strip().lower()
+                for item in aliases
+                if str(item.get("email") or "").strip()
+            ]
+            state.current_stage = {"code": "aliases_ready", "label": "别名预览已生成"}
+            state.stage_history = [self._stage_to_state_item(item) for item in timeline]
+            state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
+            state.last_error = ""
+            if policy.capture_enabled:
+                state.last_capture_summary = [self._capture_to_state_item(item) for item in self.build_capture_summary()]
+            else:
+                state.last_capture_summary = []
+
+            if policy.persist_state:
+                record("save_state", "保存预览状态", "pending")
+                self._state_repository.save(state)
+                update_last("completed")
 
             return AliasAutomationTestResult(
                 provider_type=self.provider_type,
@@ -132,7 +174,7 @@ class InteractiveAliasProviderBase:
                 current_stage=timeline[-1],
                 stage_timeline=timeline,
                 failure=AliasProviderFailure(),
-                capture_summary=self.build_capture_summary() if policy.capture_enabled else [],
+                capture_summary=self._capture_summary_for_policy(policy),
                 logs=[],
                 ok=True,
                 error="",
@@ -162,11 +204,67 @@ class InteractiveAliasProviderBase:
                     reason=str(exc),
                     retryable=True,
                 ),
-                capture_summary=self.build_capture_summary(),
+                capture_summary=self._capture_summary_for_policy(policy),
                 logs=[str(exc)],
                 ok=False,
                 error=str(exc),
             )
+
+    def _build_state_repository(self) -> InteractiveStateRepository:
+        state_key = self._spec.state_key or self.source_id
+        store_factory = getattr(self._context, "state_store_factory", None)
+        store = store_factory(state_key) if callable(store_factory) else None
+        return InteractiveStateRepository(store=store, state_key=state_key)
+
+    def _capture_summary_for_policy(self, policy: AliasAutomationTestPolicy) -> list[AliasProviderCapture]:
+        if not policy.capture_enabled:
+            return []
+        return self.build_capture_summary()
+
+    def _dedupe_alias_items(self, aliases: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+        unique_aliases: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for item in aliases:
+            email = str(item.get("email") or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            normalized = dict(item)
+            normalized["email"] = email
+            unique_aliases.append(normalized)
+        return unique_aliases
+
+    def _update_state_from_context(self, state: InteractiveProviderState, context: AuthenticatedProviderContext) -> None:
+        state.service_account_email = context.service_account_email
+        state.confirmation_inbox_email = context.confirmation_inbox_email
+        state.real_mailbox_email = context.real_mailbox_email
+        state.service_password = context.service_password
+        state.username = context.username
+        state.session_state = dict(context.session_state)
+
+    def _domain_to_state_item(self, domain: AliasDomainOption) -> dict[str, object]:
+        return {
+            "key": domain.key,
+            "domain": domain.domain,
+            "label": domain.label,
+            "raw": dict(domain.raw),
+        }
+
+    def _stage_to_state_item(self, stage: AliasProviderStage) -> dict[str, str]:
+        return {
+            "code": stage.code,
+            "label": stage.label,
+            "status": stage.status,
+            "detail": stage.detail,
+        }
+
+    def _capture_to_state_item(self, capture: AliasProviderCapture) -> dict[str, object]:
+        return {
+            "kind": capture.kind,
+            "request_summary": dict(capture.request_summary),
+            "response_summary": dict(capture.response_summary),
+            "redaction_applied": bool(capture.redaction_applied),
+        }
 
     def pick_domain_option(self, domains: list[AliasDomainOption], alias_index: int) -> AliasDomainOption | None:
         if not domains:
