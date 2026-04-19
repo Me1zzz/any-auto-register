@@ -34,6 +34,44 @@ class _DummyAliasProvider:
 
 
 class AliasProviderBootstrapTests(unittest.TestCase):
+    def test_build_alias_provider_source_specs_supports_provider_config_backed_simplelogin_source(self):
+        pool_config = {
+            "enabled": True,
+            "task_id": "alias-test",
+            "sources": [
+                {
+                    "id": "simplelogin-primary",
+                    "type": "simplelogin",
+                    "alias_count": 3,
+                    "state_key": "simplelogin-primary",
+                    "provider_config": {
+                        "site_url": "https://simplelogin.io/",
+                        "accounts": [
+                            {"email": "fust@fst.cxwsss.online", "label": "fust"},
+                            {"email": "logon@fst.cxwsss.online", "label": "logon", "password": "secret-pass"},
+                        ],
+                    },
+                }
+            ],
+        }
+
+        specs = build_alias_provider_source_specs(pool_config)
+
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].source_id, "simplelogin-primary")
+        self.assertEqual(specs[0].provider_type, "simplelogin")
+        self.assertEqual(specs[0].desired_alias_count, 3)
+        self.assertEqual(specs[0].state_key, "simplelogin-primary")
+        self.assertEqual(specs[0].provider_config["site_url"], "https://simplelogin.io/")
+        self.assertEqual(
+            specs[0].provider_config["accounts"],
+            [
+                {"email": "fust@fst.cxwsss.online", "label": "fust"},
+                {"email": "logon@fst.cxwsss.online", "label": "logon", "password": "secret-pass"},
+            ],
+        )
+        self.assertEqual(specs[0].confirmation_inbox_config, {})
+
     def test_build_alias_provider_source_specs_wraps_vend_confirmation_inbox_config(self):
         pool_config = {
             "enabled": True,

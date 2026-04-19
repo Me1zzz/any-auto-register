@@ -8,13 +8,14 @@ from typing import Any, Protocol, runtime_checkable
 class AliasProviderSourceSpec:
     source_id: str
     provider_type: str
-    raw_source: dict[str, Any]
-    desired_alias_count: int = 0
     state_key: str = ""
+    desired_alias_count: int = 0
+    confirmation_inbox_config: dict[str, Any] = field(default_factory=dict)
+    provider_config: dict[str, Any] = field(default_factory=dict)
+    raw_source: dict[str, Any] = field(default_factory=dict)
     register_url: str = ""
     alias_domain: str = ""
     alias_domain_id: str = ""
-    confirmation_inbox_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

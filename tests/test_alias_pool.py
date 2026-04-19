@@ -385,6 +385,73 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
             ],
         )
 
+    def test_normalize_accepts_interactive_provider_sources(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "myalias-primary",
+                        "type": "myalias_pro",
+                        "alias_count": 3,
+                        "state_key": "myalias-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "real@example.com",
+                        },
+                        "provider_config": {
+                            "signup_url": "https://myalias.pro/signup/",
+                            "login_url": "https://myalias.pro/login/",
+                        },
+                    },
+                    {
+                        "id": "simplelogin-primary",
+                        "type": "simplelogin",
+                        "alias_count": 3,
+                        "state_key": "simplelogin-primary",
+                        "provider_config": {
+                            "site_url": "https://simplelogin.io/",
+                            "accounts": [{"email": "fust@fst.cxwsss.online", "label": "fust"}],
+                        },
+                    },
+                ],
+            },
+            task_id="task-interactive-sources",
+        )
+
+        self.assertEqual(result["sources"][0]["type"], "myalias_pro")
+        self.assertEqual(result["sources"][1]["type"], "simplelogin")
+        self.assertEqual(result["sources"][1]["provider_config"]["site_url"], "https://simplelogin.io/")
+
+    def test_decode_alias_provider_sources_excludes_manyme(self):
+        from core.alias_pool.config import decode_alias_provider_sources
+
+        decoded = decode_alias_provider_sources(
+            [
+                {"id": "manyme-primary", "type": "manyme", "provider_config": {"site_url": "https://manyme.com/"}},
+                {
+                    "id": "alias-email-primary",
+                    "type": "alias_email",
+                    "provider_config": {"login_url": "https://alias.email/users/login/"},
+                },
+            ]
+        )
+
+        self.assertEqual(
+            decoded,
+            [
+                {
+                    "id": "alias-email-primary",
+                    "type": "alias_email",
+                    "alias_count": 0,
+                    "state_key": "alias-email-primary",
+                    "provider_config": {"login_url": "https://alias.email/users/login/"},
+                }
+            ],
+        )
+
 
 class AliasProviderConfigEncodingTests(unittest.TestCase):
     def test_encode_and_decode_alias_provider_sources_round_trip_supported_types(self):

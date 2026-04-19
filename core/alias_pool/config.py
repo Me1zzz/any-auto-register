@@ -11,6 +11,14 @@ VEND_EMAIL_DEFAULT_CONFIG = {
     "alias_domain_id": "42",
 }
 
+INTERACTIVE_PROVIDER_TYPES = {
+    "myalias_pro",
+    "secureinseconds",
+    "emailshield",
+    "simplelogin",
+    "alias_email",
+}
+
 
 def _parse_alias_emails(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
@@ -60,6 +68,24 @@ def _parse_json_list(value: Any) -> list[Any]:
 
 def _parse_string(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _parse_provider_config(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _decode_interactive_source(item: dict[str, Any], source_id: str, provider_type: str) -> dict[str, Any]:
+    normalized: dict[str, Any] = {
+        "id": source_id,
+        "type": provider_type,
+        "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
+        "state_key": _parse_string(item.get("state_key")) or source_id,
+        "provider_config": _parse_provider_config(item.get("provider_config")),
+    }
+    confirmation_inbox = item.get("confirmation_inbox")
+    if isinstance(confirmation_inbox, dict):
+        normalized["confirmation_inbox"] = dict(confirmation_inbox)
+    return normalized
 
 
 def _build_vend_confirmation_inbox_config(
@@ -414,6 +440,10 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
             if confirmation_inbox:
                 vend_source["confirmation_inbox"] = confirmation_inbox
             normalized.append(vend_source)
+            continue
+
+        if source_type in INTERACTIVE_PROVIDER_TYPES:
+            normalized.append(_decode_interactive_source(item, source_id, source_type))
     return normalized
 
 
@@ -465,6 +495,10 @@ def decode_alias_provider_sources(value: Any) -> list[dict[str, Any]]:
 
         if source_type == "vend_email":
             sanitized.append(_decode_vend_source(item, source_id))
+            continue
+
+        if source_type in INTERACTIVE_PROVIDER_TYPES:
+            sanitized.append(_decode_interactive_source(item, source_id, source_type))
 
     return sanitized
 
@@ -532,6 +566,7 @@ def build_alias_provider_source_specs(pool_config: dict[str, Any]) -> list[Alias
             continue
 
         confirmation_inbox_config: dict[str, Any] = {}
+        provider_config: dict[str, Any] = {}
         if provider_type == "vend_email":
             confirmation_inbox_config = {
                 "api_base": _parse_string(source.get("cloudmail_api_base")),
@@ -560,12 +595,14 @@ def build_alias_provider_source_specs(pool_config: dict[str, Any]) -> list[Alias
                     if value in (None, ""):
                         continue
                     confirmation_inbox_config[key] = value
+        if provider_type in INTERACTIVE_PROVIDER_TYPES:
+            provider_config = _parse_provider_config(source.get("provider_config"))
 
         specs.append(
             AliasProviderSourceSpec(
                 source_id=source_id,
                 provider_type=provider_type,
-                raw_source=dict(source),
+                state_key=_parse_string(source.get("state_key")) or source_id,
                 desired_alias_count=max(
                     _parse_int(
                         source.get("alias_count")
@@ -575,11 +612,12 @@ def build_alias_provider_source_specs(pool_config: dict[str, Any]) -> list[Alias
                     ),
                     0,
                 ),
-                state_key=_parse_string(source.get("state_key")) or source_id,
+                confirmation_inbox_config=confirmation_inbox_config,
+                provider_config=provider_config,
+                raw_source=dict(source),
                 register_url=_parse_string(source.get("register_url")),
                 alias_domain=_parse_string(source.get("alias_domain")).lower(),
                 alias_domain_id=_parse_string(source.get("alias_domain_id")),
-                confirmation_inbox_config=confirmation_inbox_config,
             )
         )
 

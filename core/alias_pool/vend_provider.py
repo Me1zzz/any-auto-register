@@ -41,7 +41,12 @@ class VendAliasProvider:
 
     def __init__(self, *, spec, state_repository, runtime, confirmation_reader, telemetry):
         self._spec = spec
-        self.source = dict(spec.raw_source or {})
+        provider_config = dict(getattr(spec, "provider_config", {}) or {})
+        raw_source = dict(spec.raw_source or {})
+        self.source = {
+            **{key: value for key, value in raw_source.items() if key != "provider_config"},
+            **provider_config,
+        }
         self.source_id = spec.source_id
         self.state_store = getattr(state_repository, "store", state_repository)
         self._state_repository = state_repository
