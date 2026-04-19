@@ -20,6 +20,9 @@ class MailboxAccount:
 
 
 class BaseMailbox(ABC):
+    def bind_alias_consumer(self, context) -> None:
+        setattr(self, "_alias_consumer_context", context)
+
     def _log(self, message: str) -> None:
         log_fn = getattr(self, "_log_fn", None)
         if callable(log_fn):
@@ -1123,6 +1126,7 @@ class CloudMailMailbox(BaseMailbox):
         self._last_account: Optional[MailboxAccount] = None
         self._task_alias_pool_key = ""
         self._task_alias_pool: Any = None
+        self._alias_consumer_context: Any = None
         self._last_alias_lease: Optional[AliasEmailLease] = None
         self._last_matched_message_id = ""
 
@@ -1246,6 +1250,12 @@ class CloudMailMailbox(BaseMailbox):
         return self._build_email()
 
     def _consume_alias_lease(self) -> Optional[AliasEmailLease]:
+        context = getattr(self, "_alias_consumer_context", None)
+        if context is not None:
+            lease = context.acquire_alias_lease()
+            self._last_alias_lease = lease
+            return lease
+
         pool = getattr(self, "_task_alias_pool", None)
         if pool is None:
             self._last_alias_lease = None

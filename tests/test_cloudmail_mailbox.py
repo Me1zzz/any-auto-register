@@ -207,6 +207,29 @@ class CloudMailMailboxTests(unittest.TestCase):
         )
         mailbox._task_alias_pool.acquire_alias.assert_called_once_with()
 
+    def test_get_email_prefers_public_alias_consumer_context(self):
+        mailbox = CloudMailMailbox(
+            api_base="https://mail.example/api",
+            admin_email="admin@example.com",
+            admin_password="secret-pass",
+            alias_enabled=True,
+        )
+        lease = AliasEmailLease(
+            alias_email="alias@example.com",
+            real_mailbox_email="real@example.com",
+            source_kind="static_list",
+            source_id="legacy-static",
+            source_session_id="task-1",
+        )
+        context = mock.Mock()
+        context.acquire_alias_lease.return_value = lease
+
+        mailbox.bind_alias_consumer(context)
+        consumed = mailbox._consume_alias_lease()
+
+        self.assertIs(consumed, lease)
+        context.acquire_alias_lease.assert_called_once_with()
+
     def test_release_alias_pool_resets_task_alias_allocation(self):
         mailbox = create_mailbox(
             "cloudmail",

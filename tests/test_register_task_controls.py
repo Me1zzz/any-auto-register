@@ -80,6 +80,10 @@ class _PoolAwareMailbox(_FakeMailbox):
     def __init__(self):
         self._task_alias_pool_key = ""
         self._task_alias_pool = None
+        self._alias_consumer_context = None
+
+    def bind_alias_consumer(self, context):
+        self._alias_consumer_context = context
 
 
 class _MailboxFactory:
@@ -231,6 +235,19 @@ class _PoolAwarePlatform(_FakePlatform):
         pool = self.mailbox._task_alias_pool
         assert pool is not None
         lease = pool.acquire_alias()
+        return Account(
+            platform="fake",
+            email=lease.alias_email,
+            password=password or "pw",
+        )
+
+
+class _PublicConsumerAwarePlatform(_FakePlatform):
+    def register(self, email: str, password: str | None = None) -> Account:
+        assert self.mailbox is not None
+        context = self.mailbox._alias_consumer_context
+        assert context is not None
+        lease = context.acquire_alias_lease()
         return Account(
             platform="fake",
             email=lease.alias_email,
@@ -451,6 +468,39 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             ["alias1@example.com", "alias2@example.com"],
         )
 
+    def test_run_register_binds_public_alias_consumer_context(self):
+        task_id = "task-public-alias-consumer"
+        req = self._build_request(
+            count=1,
+            concurrency=1,
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "legacy-static",
+                        "type": "static_list",
+                        "emails": ["alias@example.com"],
+                    }
+                ],
+            },
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+
+        with (
+            patch("core.registry.get", return_value=_PublicConsumerAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        mailbox = mailbox_factory.instances[0]
+        self.assertIsNotNone(mailbox._alias_consumer_context)
+
     def test_run_register_builds_task_pool_via_simple_generator_source(self):
         task_id = "task-simple-generator-producer-path"
         req = self._build_request(
@@ -563,13 +613,13 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertEqual(len(created_state_stores), 1)
         self.assertEqual(created_state_stores[0].loaded_keys, ["vend-email-state-key"])
         self.assertEqual(len(created_state_stores[0].saved_states), 1)
-        self.assertEqual(
+        self.assertNotEqual(
             created_state_stores[0].saved_states[0].service_email,
             created_state_stores[0].saved_states[0].mailbox_email,
         )
         self.assertEqual(
             created_state_stores[0].saved_states[0].mailbox_email,
-            created_state_stores[0].saved_states[0].service_email,
+            "real@example.com",
         )
         self.assertEqual(
             created_state_stores[0].saved_states[0].service_password,
@@ -583,25 +633,29 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             [record.name for record in created_state_stores[0].saved_states[0].last_capture_summary],
             ["register", "confirmation", "login", "create_forwarder"],
         )
+        self.assertEqual(len(runtime_builder.sources), 1)
+        runtime_source = runtime_builder.sources[0]
+        self.assertEqual(runtime_source["id"], "vend-email-primary")
+        self.assertEqual(runtime_source["type"], "vend_email")
+        self.assertEqual(runtime_source["register_url"], "https://www.vend.email/auth/register")
+        self.assertEqual(runtime_source["alias_domain"], "vend.example.com")
+        self.assertEqual(runtime_source["alias_domain_id"], "42")
+        self.assertEqual(runtime_source["alias_count"], 2)
+        self.assertEqual(runtime_source["state_key"], "vend-email-state-key")
+        self.assertEqual(runtime_source["mailbox_base_url"], "https://mailbox.example/base")
+        self.assertEqual(runtime_source["mailbox_email"], "real@example.com")
+        self.assertEqual(runtime_source["mailbox_password"], "secret-pass")
         self.assertEqual(
-            runtime_builder.sources,
-            [
-                {
-                    "id": "vend-email-primary",
-                    "type": "vend_email",
-                    "register_url": "https://www.vend.email/auth/register",
-                    "cloudmail_api_base": "",
-                    "cloudmail_admin_email": "",
-                    "cloudmail_admin_password": "",
-                    "cloudmail_domain": "",
-                    "cloudmail_subdomain": "",
-                    "cloudmail_timeout": 30,
-                    "alias_domain": "vend.example.com",
-                    "alias_domain_id": "42",
-                    "alias_count": 2,
-                    "state_key": "vend-email-state-key",
-                }
-            ],
+            runtime_source["confirmation_inbox"],
+            {
+                "provider": "cloudmail",
+                "api_base": "https://mailbox.example/base",
+                "base_url": "https://mailbox.example/base",
+                "account_email": "real@example.com",
+                "account_password": "secret-pass",
+                "match_email": "real@example.com",
+                "timeout": 30,
+            },
         )
 
     def test_run_register_propagates_internal_type_error_from_vend_email_state_store_factory(self):
@@ -687,6 +741,10 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             patch("core.db.save_account", side_effect=lambda account: account),
             patch("api.tasks._save_task_log"),
             patch(
+                "core.alias_pool.vend_email_service.build_vend_email_state_store_for_key",
+                return_value=_FakeVendEmailStateStore(),
+            ),
+            patch(
                 "core.alias_pool.vend_email_service.DefaultVendEmailRuntimeExecutor.execute",
                 side_effect=AssertionError("default-runtime-used"),
             ),
@@ -717,6 +775,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             runtime_builder=_VendEmailRuntimeBuilder(),
         )
 
+        producer = cast(Any, producer)
         store_path = producer.state_store._store._path
         self.assertEqual(
             store_path,

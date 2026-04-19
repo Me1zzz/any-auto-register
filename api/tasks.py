@@ -159,6 +159,24 @@ def _auto_upload_integrations(task_id: str, account):
 
 def _run_register(task_id: str, req: RegisterTaskRequest):
     from core.registry import get
+    from core.alias_pool.config import (
+        build_alias_provider_source_specs,
+        normalize_cloudmail_alias_pool_config,
+    )
+    from core.alias_pool.lease_consumer import AliasLeaseConsumerContext
+    from core.alias_pool.manager import AliasEmailPoolManager
+    from core.alias_pool.provider_adapters import (
+        build_simple_generator_alias_provider,
+        build_static_list_alias_provider,
+    )
+    from core.alias_pool.provider_bootstrap import AliasProviderBootstrap
+    from core.alias_pool.provider_contracts import (
+        AliasProvider,
+        AliasProviderBootstrapContext,
+        AliasProviderSourceSpec,
+    )
+    from core.alias_pool.provider_registry import AliasProviderRegistry
+    from core.alias_pool.vend_email_service import build_vend_email_alias_service_producer
     from core.base_platform import RegisterConfig
     from core.db import save_account
     from core.base_mailbox import create_mailbox
@@ -203,13 +221,19 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             )
 
         def _build_alias_pool(merged_extra: dict):
-            from core.alias_pool.config import normalize_cloudmail_alias_pool_config
-            from core.alias_pool.manager import AliasEmailPoolManager
-            from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
-            from core.alias_pool.static_list import StaticAliasListProducer
-            from core.alias_pool.vend_email_service import (
-                build_vend_email_alias_service_producer,
-            )
+            def _build_vend_email_provider(
+                spec: AliasProviderSourceSpec,
+                context: AliasProviderBootstrapContext,
+            ) -> AliasProvider:
+                return cast(
+                    AliasProvider,
+                    build_vend_email_alias_service_producer(
+                        source=dict(spec.raw_source or {}),
+                        task_id=context.task_id,
+                        state_store_factory=context.state_store_factory,
+                        runtime_builder=context.runtime_builder,
+                    ),
+                )
 
             pool_config = normalize_cloudmail_alias_pool_config(
                 merged_extra,
@@ -219,33 +243,19 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 return None
 
             manager = AliasEmailPoolManager(task_id=task_id)
-            for source in pool_config.get("sources", []):
-                source_type = source.get("type")
-                if source_type == "static_list":
-                    producer = StaticAliasListProducer(
-                        source_id=str(source.get("id") or "legacy-static"),
-                        emails=list(source.get("emails") or []),
-                        mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
-                    )
-                elif source_type == "simple_generator":
-                    producer = SimpleAliasGeneratorProducer(
-                        source_id=str(source.get("id") or "simple-generator"),
-                        prefix=str(source.get("prefix") or ""),
-                        suffix=str(source.get("suffix") or "").strip().lower(),
-                        mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
-                        count=int(source.get("count") or 0),
-                        middle_length_min=int(source.get("middle_length_min") or 3),
-                        middle_length_max=int(source.get("middle_length_max") or 6),
-                    )
-                elif source_type == "vend_email":
-                    producer = build_vend_email_alias_service_producer(
-                        source=source,
-                        task_id=task_id,
-                        state_store_factory=merged_extra.get("vend_email_state_store_factory"),
-                        runtime_builder=merged_extra.get("vend_email_runtime_builder"),
-                    )
-                else:
-                    continue
+            registry = AliasProviderRegistry()
+            registry.register("static_list", build_static_list_alias_provider)
+            registry.register("simple_generator", build_simple_generator_alias_provider)
+            registry.register("vend_email", _build_vend_email_provider)
+            bootstrap = AliasProviderBootstrap(registry=registry)
+            bootstrap_context = AliasProviderBootstrapContext(
+                task_id=task_id,
+                purpose="task_pool",
+                runtime_builder=merged_extra.get("vend_email_runtime_builder"),
+                state_store_factory=merged_extra.get("vend_email_state_store_factory"),
+            )
+            for spec in build_alias_provider_source_specs(pool_config):
+                producer = bootstrap.build(spec=spec, context=bootstrap_context)
                 manager.register_source(producer)
                 producer.load_into(manager)
             return manager
@@ -257,6 +267,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             {k: v for k, v in req.extra.items() if v is not None and v != ""}
         )
         task_alias_pool = _build_alias_pool(task_merged_extra)
+        task_alias_consumer = (
+            AliasLeaseConsumerContext(pool_manager=task_alias_pool)
+            if task_alias_pool is not None
+            else None
+        )
 
         def _do_one(i: int):
             nonlocal next_start_time, workspace_success
@@ -306,6 +321,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _mailbox = _build_mailbox(_proxy)
                 if hasattr(_mailbox, "_task_alias_pool_key"):
                     setattr(_mailbox, "_task_alias_pool_key", task_id)
+                if task_alias_consumer is not None:
+                    _mailbox.bind_alias_consumer(task_alias_consumer)
                 if hasattr(_mailbox, "_task_alias_pool"):
                     setattr(_mailbox, "_task_alias_pool", task_alias_pool)
                 platform_ctor = cast(Any, PlatformCls)
@@ -459,6 +476,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
         CloudMailMailbox.release_alias_pool(task_id)
     except Exception:
         pass
+    if task_alias_consumer is not None:
+        try:
+            task_alias_consumer.release()
+        except Exception:
+            pass
     _task_store.finish(
         task_id,
         status=final_status,
