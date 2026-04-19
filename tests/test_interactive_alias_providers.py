@@ -787,6 +787,42 @@ class AliasEmailProviderTests(unittest.TestCase):
             [VerificationRequirement(kind="magic_link_login", label="消费登录魔法链接", inbox_role="confirmation_inbox")],
         )
 
+    def test_alias_email_discovers_fixed_alias_email_domain(self):
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={"match_email": "real@example.com"},
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        context = provider.ensure_authenticated_context("alias_test")
+        options = provider.discover_alias_domains(context)
+
+        self.assertEqual(options, [AliasDomainOption(key="alias.email", domain="alias.email", label="@alias.email")])
+
+    def test_alias_email_create_alias_requires_discovered_domain(self):
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={"match_email": "real@example.com"},
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        context = provider.ensure_authenticated_context("alias_test")
+
+        with self.assertRaisesRegex(RuntimeError, "alias.email requires discovered domains"):
+            provider.create_alias(context=context, domain=None, alias_index=1)
+
 
 if __name__ == "__main__":
     unittest.main()
