@@ -6,6 +6,7 @@ from typing import Any
 
 @dataclass
 class InteractiveProviderState:
+    state_key: str = ""
     service_account_email: str = ""
     confirmation_inbox_email: str = ""
     real_mailbox_email: str = ""
