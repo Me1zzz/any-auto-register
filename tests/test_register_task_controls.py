@@ -76,6 +76,34 @@ class _FakeAliasMailbox(_FakeMailbox):
         return "123456"
 
 
+class _FakeGuerrillaMailbox(_FakeMailbox):
+    def __init__(self):
+        self._last_account = MailboxAccount(
+            email="demo123@spam4.me",
+            account_id="sid-demo-1",
+            extra={
+                "provider": "guerrillamail",
+                "domain": "spam4.me",
+                "email_user": "demo123",
+                "canonical_email": "demo123@guerrillamailblock.com",
+            },
+        )
+
+    def get_email(self) -> MailboxAccount:
+        return self._last_account
+
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set[Any] | None = None,
+        code_pattern: str | None = None,
+        **kwargs,
+    ) -> str:
+        return "123456"
+
+
 class _PoolAwareMailbox(_FakeMailbox):
     def __init__(self):
         self._task_alias_pool_key = ""
@@ -374,6 +402,35 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                 "alias_suffix": "",
             },
         )
+
+    def test_register_persists_guerrillamail_metadata_without_mailbox_email_sid(self):
+        task_id = "task-guerrillamail-mailbox-extra"
+        req = self._build_request(extra={"mail_provider": "guerrillamail"})
+        _create_task_record(task_id, req, "manual", None)
+        saved_accounts = []
+
+        def _capture(account):
+            saved_accounts.append(account)
+            return account
+
+        with (
+            patch("core.registry.get", return_value=_FakePlatform),
+            patch("core.base_mailbox.create_mailbox", return_value=_FakeGuerrillaMailbox()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=_capture),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(saved_accounts), 1)
+        account = saved_accounts[0]
+        self.assertEqual(account.email, "demo123@spam4.me")
+        self.assertEqual(account.extra.get("mail_provider"), "guerrillamail")
+        self.assertEqual(account.extra.get("canonical_email"), "demo123@guerrillamailblock.com")
+        self.assertEqual(account.extra.get("email_user"), "demo123")
+        self.assertEqual(account.extra.get("domain"), "spam4.me")
+        self.assertIsNone(account.extra.get("mailbox_email"))
 
     def test_run_register_reuses_one_task_alias_pool_across_attempts(self):
         task_id = "task-alias-pool-reuse"
