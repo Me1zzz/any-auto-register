@@ -163,6 +163,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
         build_alias_provider_source_specs,
         normalize_cloudmail_alias_pool_config,
     )
+    from core.alias_pool.interactive_provider_builders import register_interactive_alias_provider_builders
     from core.alias_pool.lease_consumer import AliasLeaseConsumerContext
     from core.alias_pool.manager import AliasEmailPoolManager
     from core.alias_pool.provider_adapters import (
@@ -247,6 +248,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             registry.register("static_list", build_static_list_alias_provider)
             registry.register("simple_generator", build_simple_generator_alias_provider)
             registry.register("vend_email", _build_vend_email_provider)
+            register_interactive_alias_provider_builders(registry)
             bootstrap = AliasProviderBootstrap(registry=registry)
             bootstrap_context = AliasProviderBootstrapContext(
                 task_id=task_id,
