@@ -50,8 +50,22 @@ class SimpleLoginProvider(ExistingAccountAliasProviderBase):
             return None
         return random.choice(domains)
 
+    def _resolve_signed_options_payload(self, context: AuthenticatedProviderContext) -> str:
+        session_state = dict(context.session_state or {})
+        for value in (
+            session_state.get("signed_alias_suffix_html"),
+            session_state.get("signed_options_html"),
+            self._spec.provider_config.get("signed_alias_suffix_html"),
+            self._spec.provider_config.get("signed_options_html"),
+            self._spec.provider_config.get("signed_alias_suffix_payload"),
+            self._spec.provider_config.get("signed_options_payload"),
+        ):
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
+
     def discover_alias_domains(self, context: AuthenticatedProviderContext):
-        raise RuntimeError("simplelogin signed domain discovery requires authenticated custom alias page parsing")
+        return self._parse_signed_domain_options(self._resolve_signed_options_payload(context))
 
     def create_alias(self, *, context: AuthenticatedProviderContext, domain, alias_index: int) -> AliasCreatedRecord:
         if domain is None:

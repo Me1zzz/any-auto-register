@@ -520,32 +520,35 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
         self.assertEqual(context.service_password, "fust@fst.cxwsss.online")
         self.assertEqual(context.username, "fust")
 
-    def test_simplelogin_parses_signed_alias_suffix_options(self):
+    def test_simplelogin_discovers_signed_alias_suffix_options_from_provider_config(self):
         provider = SimpleLoginAliasProvider(
             spec=AliasProviderSourceSpec(
                 source_id="simplelogin-primary",
                 provider_type="simplelogin",
                 state_key="simplelogin-primary",
                 desired_alias_count=3,
-                provider_config={"site_url": "https://simplelogin.io/", "accounts": [{"email": "fust@fst.cxwsss.online"}]},
+                provider_config={
+                    "site_url": "https://simplelogin.io/",
+                    "accounts": [{"email": "fust@fst.cxwsss.online"}],
+                    "signed_alias_suffix_html": """
+                    <select name="signed-alias-suffix">
+                      <option value=".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk">.relearn763@aleeas.com (Public domain)</option>
+                      <option value=".onion376@simplelogin.com.aeSMmw.tkj3IFpsj8LgW4ikJ55LVeeCILo">.onion376@simplelogin.com (Premium domain)</option>
+                    </select>
+                    """,
+                },
             ),
             context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
         )
 
-        html = """
-        <select name="signed-alias-suffix">
-          <option value=".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk">.relearn763@aleeas.com (Public domain)</option>
-          <option value=".onion376@simplelogin.com.aeSMmw.tkj3IFpsj8LgW4ikJ55LVeeCILo">.onion376@simplelogin.com (Premium domain)</option>
-        </select>
-        """
-
-        options = provider._parse_signed_domain_options(html)
+        context = provider.ensure_authenticated_context("alias_test")
+        options = provider.discover_alias_domains(context)
 
         self.assertEqual([item.domain for item in options], ["aleeas.com", "simplelogin.com"])
         self.assertEqual(options[0].key, ".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk")
         self.assertEqual(options[0].raw["signed_value"], ".relearn763@aleeas.com.aeSMmw.cVxe2e9tMg2IiC2wXAO7CLb-8Bk")
 
-    def test_simplelogin_returns_structured_failure_when_signed_options_missing(self):
+    def test_simplelogin_shared_flow_returns_structured_failure_when_signed_options_missing(self):
         provider = SimpleLoginAliasProvider(
             spec=AliasProviderSourceSpec(
                 source_id="simplelogin-primary",
@@ -557,8 +560,18 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
             context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
         )
 
-        with self.assertRaisesRegex(RuntimeError, "signed domain options unavailable"):
-            provider._parse_signed_domain_options("<html><body>no select</body></html>")
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failure.stage_code, "discover_alias_domains")
+        self.assertEqual(result.failure.reason, "signed domain options unavailable")
 
     def test_secureinseconds_maps_forwarding_verification_to_shared_requirement(self):
         provider = SecureInSecondsProvider(
