@@ -1191,6 +1191,53 @@ class AliasGenerationApiTests(unittest.TestCase):
             ),
         )
 
+    def test_alias_generation_test_api_supports_alias_email_stage_codes(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "alias-email-primary",
+                        "type": "alias_email",
+                        "alias_count": 3,
+                        "state_key": "alias-email-primary",
+                        "confirmation_inbox": {"provider": "cloudmail", "match_email": "real@example.com"},
+                        "provider_config": {"login_url": "https://alias.email/users/login/"},
+                    }
+                ],
+            },
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service_cls.return_value.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="alias-email-primary",
+                source_type="alias_email",
+                alias_email="alpha@alias.email",
+                real_mailbox_email="real@example.com",
+                service_email="real@example.com",
+                account={"realMailboxEmail": "real@example.com", "serviceEmail": "real@example.com", "password": ""},
+                aliases=[
+                    {"email": "alpha@alias.email"},
+                    {"email": "beta@alias.email"},
+                    {"email": "gamma@alias.email"},
+                ],
+                current_stage={"code": "consume_magic_link", "label": "消费魔法链接"},
+                stages=[
+                    {"code": "request_magic_link", "label": "请求魔法链接", "status": "completed"},
+                    {"code": "consume_magic_link", "label": "消费魔法链接", "status": "completed"},
+                    {"code": "discover_alias_domains", "label": "发现可用域名", "status": "completed"},
+                ],
+            )
+
+            response = client.post("/api/config/alias-test", json={"sourceId": "alias-email-primary", "useDraftConfig": False})
+
+        body = response.json()
+        self.assertEqual(body["sourceType"], "alias_email")
+        self.assertEqual(body["stages"][0]["code"], "request_magic_link")
+        self.assertEqual(body["stages"][1]["code"], "consume_magic_link")
+
 
 if __name__ == "__main__":
     unittest.main()

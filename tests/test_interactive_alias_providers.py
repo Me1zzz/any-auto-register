@@ -1,6 +1,7 @@
 import unittest
 
 from core.alias_pool.myalias_pro_provider import MyAliasProProvider
+from core.alias_pool.alias_email_provider import AliasEmailProvider
 from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase, InteractiveAliasProviderBase
 from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.interactive_provider_models import (
@@ -763,6 +764,28 @@ class InteractiveStateRepositoryTests(unittest.TestCase):
 
         self.assertEqual(store.loaded_keys, ["interactive-state-key"])
         self.assertEqual(state.state_key, "interactive-state-key")
+
+
+class AliasEmailProviderTests(unittest.TestCase):
+    def test_alias_email_maps_magic_link_login_requirement(self):
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={"match_email": "real@example.com"},
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+
+        requirements = provider.resolve_verification_requirements(provider.ensure_authenticated_context("alias_test"))
+
+        self.assertEqual(
+            requirements,
+            [VerificationRequirement(kind="magic_link_login", label="消费登录魔法链接", inbox_role="confirmation_inbox")],
+        )
 
 
 if __name__ == "__main__":
