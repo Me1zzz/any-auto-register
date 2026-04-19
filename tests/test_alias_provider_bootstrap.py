@@ -185,7 +185,7 @@ class AliasProviderBootstrapTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.source_type, "simplelogin")
         self.assertEqual(result.failure.get("stageCode"), "discover_alias_domains")
-        self.assertIn("signed domain discovery not implemented yet", result.error)
+        self.assertIn("signed domain options unavailable", result.error)
 
     def test_build_alias_provider_source_specs_supports_provider_config_backed_simplelogin_source(self):
         pool_config = {

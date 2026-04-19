@@ -1238,6 +1238,55 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["stages"][0]["code"], "request_magic_link")
         self.assertEqual(body["stages"][1]["code"], "consume_magic_link")
 
+    def test_alias_generation_test_api_keeps_account_identity_compatibility_for_interactive_provider(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "simplelogin-primary",
+                        "type": "simplelogin",
+                        "alias_count": 3,
+                        "state_key": "simplelogin-primary",
+                        "provider_config": {
+                            "site_url": "https://simplelogin.io/",
+                            "accounts": [{"email": "fust@fst.cxwsss.online", "label": "fust"}],
+                        },
+                    }
+                ],
+            },
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service_cls.return_value.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="simplelogin-primary",
+                source_type="simplelogin",
+                alias_email="sisyrun0419a.relearn763@aleeas.com",
+                real_mailbox_email="fust@fst.cxwsss.online",
+                service_email="fust@fst.cxwsss.online",
+                account={
+                    "realMailboxEmail": "fust@fst.cxwsss.online",
+                    "serviceEmail": "fust@fst.cxwsss.online",
+                    "password": "fust@fst.cxwsss.online",
+                    "username": "fust",
+                },
+                aliases=[
+                    {"email": "sisyrun0419a.relearn763@aleeas.com"},
+                    {"email": "sisyrun0419b.onion376@simplelogin.com"},
+                    {"email": "sisyrun0419c.skies135@slmails.com"},
+                ],
+            )
+
+            response = client.post("/api/config/alias-test", json={"sourceId": "simplelogin-primary", "useDraftConfig": False})
+
+        body = response.json()
+        self.assertEqual(body["accountIdentity"]["serviceAccountEmail"], "fust@fst.cxwsss.online")
+        self.assertEqual(body["accountIdentity"]["servicePassword"], "fust@fst.cxwsss.online")
+        self.assertEqual(body["accountIdentity"]["username"], "fust")
+        self.assertEqual(len(body["aliases"]), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
