@@ -1,8 +1,13 @@
 from fastapi import APIRouter, HTTPException
-import json
 import re
 from pydantic import BaseModel, Field
-from core.alias_pool.config import normalize_cloudmail_alias_pool_config
+from core.alias_pool.automation_test import AliasAutomationTestService
+from core.alias_pool.config import (
+    decode_alias_provider_sources,
+    encode_alias_provider_sources,
+    normalize_cloudmail_alias_pool_config,
+)
+from core.alias_pool.provider_contracts import AliasAutomationTestPolicy, AliasProviderBootstrapContext
 from core.alias_pool.probe import AliasSourceProbeService
 from core.config_store import config_store
 from services.mail_imports import MailImportExecuteRequest, MailImportSnapshotRequest, mail_import_registry
@@ -149,111 +154,13 @@ def _decode_config_value(key: str, value):
         return ""
     if key != "sources":
         return value
-    if isinstance(value, list):
-        return value
-    raw = str(value or "").strip()
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return []
-    if isinstance(parsed, list):
-        sanitized = []
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            source_type = str(item.get("type") or "").strip()
-            source_id = str(item.get("id") or "").strip()
-            if source_type == "static_list":
-                sanitized.append(
-                    {
-                        "id": source_id,
-                        "type": "static_list",
-                        "emails": item.get("emails") or [],
-                    }
-                )
-            elif source_type == "simple_generator":
-                sanitized.append(
-                    {
-                        "id": source_id,
-                        "type": "simple_generator",
-                        "prefix": item.get("prefix") or "",
-                        "suffix": item.get("suffix") or "",
-                        "count": item.get("count"),
-                        "middle_length_min": item.get("middle_length_min"),
-                        "middle_length_max": item.get("middle_length_max"),
-                    }
-                )
-            elif source_type == "vend_email":
-                sanitized.append(
-                    {
-                        "id": source_id,
-                        "type": "vend_email",
-                        "alias_count": item.get("alias_count"),
-                        "state_key": item.get("state_key") or source_id,
-                        "alias_domain_id": item.get("alias_domain_id") or "",
-                    }
-                )
-        return sanitized
-    return []
+    return decode_alias_provider_sources(value)
 
 
 def _encode_config_value(key: str, value):
     if key != "sources":
         return value
-    if value in (None, ""):
-        return ""
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return ""
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return ""
-        if isinstance(parsed, list):
-            value = parsed
-        else:
-            return ""
-    if key == "sources" and isinstance(value, list):
-        sanitized = []
-        for item in value:
-            if not isinstance(item, dict):
-                continue
-            source_type = str(item.get("type") or "").strip()
-            source_id = str(item.get("id") or "").strip()
-            if source_type == "static_list":
-                sanitized.append(
-                    {
-                        "id": source_id,
-                        "type": "static_list",
-                        "emails": item.get("emails") or [],
-                    }
-                )
-            elif source_type == "simple_generator":
-                sanitized.append(
-                    {
-                        "id": source_id,
-                        "type": "simple_generator",
-                        "prefix": item.get("prefix") or "",
-                        "suffix": item.get("suffix") or "",
-                        "count": item.get("count"),
-                        "middle_length_min": item.get("middle_length_min"),
-                        "middle_length_max": item.get("middle_length_max"),
-                    }
-                )
-            elif source_type == "vend_email":
-                sanitized.append(
-                    {
-                        "id": source_id,
-                        "type": "vend_email",
-                        "alias_count": item.get("alias_count"),
-                        "state_key": item.get("state_key") or source_id,
-                    }
-                )
-        value = sanitized
-    return json.dumps(value, ensure_ascii=False)
+    return encode_alias_provider_sources(value)
 
 
 _SENSITIVE_QUERY_PATTERNS = [
@@ -279,13 +186,45 @@ def _sanitize_capture_summary(items):
     for item in list(items or []):
         if not isinstance(item, dict):
             continue
-        capture_name = str(item.get("name") or "").strip().lower()
-        request_summary = _redact_sensitive_text(
-            item.get("request_summary") or item.get("request_body_excerpt")
+        capture_name = str(item.get("kind") or item.get("name") or "").strip().lower()
+        raw_request_summary = item.get("requestSummary") or item.get("request_summary")
+        raw_response_summary = item.get("responseSummary") or item.get("response_summary")
+        has_legacy_request_fields = any(
+            key in item for key in ("method", "url", "request_headers_whitelist", "request_body_excerpt")
         )
-        response_summary = _redact_sensitive_text(
-            item.get("response_summary") or item.get("response_body_excerpt")
+        has_legacy_response_fields = any(
+            key in item for key in ("response_status", "response_body_excerpt", "captured_at")
         )
+        if isinstance(raw_request_summary, dict):
+            request_summary = {
+                "method": _redact_sensitive_text(raw_request_summary.get("method")),
+                "url": _redact_sensitive_text(raw_request_summary.get("url")),
+                "request_headers_whitelist": dict(raw_request_summary.get("request_headers_whitelist") or {}),
+                "request_body_excerpt": _redact_sensitive_text(raw_request_summary.get("request_body_excerpt")),
+            }
+        elif has_legacy_request_fields:
+            request_summary = {
+                "method": _redact_sensitive_text(item.get("method")),
+                "url": _redact_sensitive_text(item.get("url")),
+                "request_headers_whitelist": dict(item.get("request_headers_whitelist") or {}),
+                "request_body_excerpt": _redact_sensitive_text(item.get("request_body_excerpt")),
+            }
+        else:
+            request_summary = _redact_sensitive_text(raw_request_summary or item.get("request_body_excerpt"))
+        if isinstance(raw_response_summary, dict):
+            response_summary = {
+                "response_status": int(raw_response_summary.get("response_status") or 0),
+                "response_body_excerpt": _redact_sensitive_text(raw_response_summary.get("response_body_excerpt")),
+                "captured_at": _redact_sensitive_text(raw_response_summary.get("captured_at")),
+            }
+        elif has_legacy_response_fields:
+            response_summary = {
+                "response_status": int(item.get("response_status") or 0),
+                "response_body_excerpt": _redact_sensitive_text(item.get("response_body_excerpt")),
+                "captured_at": _redact_sensitive_text(item.get("captured_at")),
+            }
+        else:
+            response_summary = _redact_sensitive_text(raw_response_summary or item.get("response_body_excerpt"))
         if capture_name == "mailbox_verification":
             request_summary = "mailbox verification request"
             response_summary = "mailbox verification result"
@@ -297,7 +236,12 @@ def _sanitize_capture_summary(items):
         sanitized.append(
             {
                 **item,
+                "kind": capture_name,
+                "name": str(item.get("name") or item.get("kind") or ""),
                 "url": _redact_sensitive_text(item.get("url")),
+                "requestSummary": request_summary,
+                "responseSummary": response_summary,
+                "redactionApplied": bool(item.get("redactionApplied") or item.get("redaction_applied") or capture_name == "mailbox_verification"),
                 "request_body_excerpt": request_body_excerpt,
                 "response_body_excerpt": response_body_excerpt,
                 "request_summary": request_summary,
@@ -363,8 +307,21 @@ def alias_generation_test(body: AliasGenerationTestRequest):
             draft_config["sources"] = []
         merged.update(draft_config)
 
-    result = AliasSourceProbeService().probe(
-        pool_config=normalize_cloudmail_alias_pool_config(merged, task_id="alias-test"),
+    policy = AliasAutomationTestPolicy(
+        fresh_service_account=True,
+        persist_state=False,
+        minimum_alias_count=3,
+        capture_enabled=True,
+    )
+    context = AliasProviderBootstrapContext(
+        task_id="alias-test",
+        purpose="automation_test",
+        test_policy=policy,
+    )
+    pool_config = normalize_cloudmail_alias_pool_config(merged, task_id="alias-test")
+
+    result = AliasAutomationTestService(policy=policy, context=context).run(
+        pool_config=pool_config,
         source_id=body.sourceId,
         task_id="alias-test",
     )
@@ -384,6 +341,13 @@ def alias_generation_test(body: AliasGenerationTestRequest):
         "aliasEmail": compatibility_alias_email,
         "realMailboxEmail": result.real_mailbox_email,
         "serviceEmail": result.service_email,
+        "accountIdentity": {
+            "serviceAccountEmail": str(result.service_email or result.account.get("serviceEmail") or ""),
+            "confirmationInboxEmail": str(result.real_mailbox_email or result.account.get("realMailboxEmail") or ""),
+            "realMailboxEmail": str(result.real_mailbox_email or result.account.get("realMailboxEmail") or ""),
+            "servicePassword": str(result.account.get("password") or result.account.get("servicePassword") or ""),
+            "username": str(result.account.get("username") or result.account.get("userName") or ""),
+        },
         "account": dict(result.account or {}),
         "aliases": aliases,
         "currentStage": result.current_stage,

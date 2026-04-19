@@ -5,12 +5,29 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from main import app
+from api.config import _decode_config_value, _encode_config_value
 from core.alias_pool.config import normalize_cloudmail_alias_pool_config
+from core.alias_pool.provider_contracts import AliasAutomationTestPolicy, AliasProviderBootstrapContext
 from core.alias_pool.probe import AliasProbeResult, AliasSourceProbeService
 from core.alias_pool.vend_email_state import VendEmailCaptureRecord, VendEmailServiceState
 
 
 class AliasGenerationApiTests(unittest.TestCase):
+    def test_config_value_helpers_delegate_source_serialization_to_alias_pool_config(self):
+        payload_sources = [{"id": "vend-1", "type": "vend_email", "alias_count": 2, "state_key": "vend-state", "alias_domain_id": "42"}]
+
+        with patch("api.config.encode_alias_provider_sources", return_value='[{"id":"vend-1"}]') as encode_sources, patch(
+            "api.config.decode_alias_provider_sources",
+            return_value=payload_sources,
+        ) as decode_sources:
+            encoded = _encode_config_value("sources", payload_sources)
+            decoded = _decode_config_value("sources", '[{"id":"vend-1"}]')
+
+        self.assertEqual(encoded, '[{"id":"vend-1"}]')
+        self.assertEqual(decoded, payload_sources)
+        encode_sources.assert_called_once_with(payload_sources)
+        decode_sources.assert_called_once_with('[{"id":"vend-1"}]')
+
     def test_backend_normalize_preserves_explicit_simple_generator_sources(self):
         result = normalize_cloudmail_alias_pool_config(
             {
@@ -81,6 +98,11 @@ class AliasGenerationApiTests(unittest.TestCase):
                     "alias_domain_id": "42",
                     "alias_count": 4,
                     "state_key": "vend-email-primary",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "admin_password": "cloudmail-pass",
+                        "timeout": 30,
+                    },
                 }
             ],
         )
@@ -105,6 +127,47 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["sourceId"], "qa-static")
         self.assertEqual(body["aliasEmail"], "a@example.com")
+
+    def test_alias_generation_test_api_uses_unified_automation_test_service(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={"cloudmail_alias_enabled": True, "sources": []},
+        ), patch(
+            "api.config.normalize_cloudmail_alias_pool_config",
+            return_value={"enabled": True, "task_id": "alias-test", "sources": []},
+        ) as normalize_config, patch("api.config.AliasAutomationTestService") as automation_service_cls:
+            automation_service = automation_service_cls.return_value
+            automation_service.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="qa-static",
+                source_type="static_list",
+                alias_email="a@example.com",
+                real_mailbox_email="real@example.com",
+                account={"realMailboxEmail": "real@example.com", "serviceEmail": "", "password": ""},
+                aliases=[{"email": "a@example.com"}],
+            )
+
+            resp = client.post(
+                "/api/config/alias-test",
+                json={"sourceId": "qa-static", "useDraftConfig": False},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["sourceId"], "qa-static")
+        self.assertEqual(body["aliasEmail"], "a@example.com")
+        normalize_config.assert_called_once_with(
+            {"cloudmail_alias_enabled": True, "sources": []},
+            task_id="alias-test",
+        )
+        automation_service.run.assert_called_once_with(
+            pool_config={"enabled": True, "task_id": "alias-test", "sources": []},
+            source_id="qa-static",
+            task_id="alias-test",
+        )
 
     def test_alias_generation_test_api_supports_legacy_static_fallback_from_draft_config(self):
         client = TestClient(app)
@@ -138,8 +201,11 @@ class AliasGenerationApiTests(unittest.TestCase):
             return_value={
                 "cloudmail_admin_password": "secret-pass",
                 "sources": (
-                    '[{"id":"vend-1","type":"vend_email","mailbox_email":"real@example.com",'
-                    '"mailbox_password":"secret-pass","alias_domain_id":"42","alias_count":2}]'
+                    '[{"id":"vend-1","type":"vend_email","register_url":"https://accounts.example.test/register",'
+                    '"cloudmail_api_base":"https://cloudmail.example/api","cloudmail_admin_email":"admin@example.com",'
+                    '"cloudmail_admin_password":"secret-pass","cloudmail_domain":"mail.example.com",'
+                    '"cloudmail_subdomain":"pool-a","cloudmail_timeout":45,"alias_domain":"serf.me",'
+                    '"alias_domain_id":"42","alias_count":2,"state_key":"vend-state"}]'
                 )
             },
         ):
@@ -153,9 +219,26 @@ class AliasGenerationApiTests(unittest.TestCase):
                 {
                     "id": "vend-1",
                     "type": "vend_email",
-                    "alias_count": 2,
-                    "state_key": "vend-1",
+                    "register_url": "https://accounts.example.test/register",
+                    "cloudmail_api_base": "https://cloudmail.example/api",
+                    "cloudmail_admin_email": "admin@example.com",
+                    "cloudmail_admin_password": "secret-pass",
+                    "cloudmail_domain": "mail.example.com",
+                    "cloudmail_subdomain": "pool-a",
+                    "cloudmail_timeout": 45,
+                    "alias_domain": "serf.me",
                     "alias_domain_id": "42",
+                    "alias_count": 2,
+                    "state_key": "vend-state",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example/api",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "secret-pass",
+                        "domain": "mail.example.com",
+                        "subdomain": "pool-a",
+                        "timeout": 45,
+                    },
                 }
             ],
         )
@@ -190,13 +273,26 @@ class AliasGenerationApiTests(unittest.TestCase):
             {
                 "id": "vend-1",
                 "type": "vend_email",
-                "mailbox_email": "real@example.com",
-                "mailbox_password": "secret-pass",
-                "mailbox_base_url": "https://mailbox.example/base",
-                "register_url": "https://vend.example/register",
+                "register_url": "https://accounts.example.test/register",
+                "cloudmail_api_base": "https://cloudmail.example/api",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret-pass",
+                "cloudmail_domain": "mail.example.com",
+                "cloudmail_subdomain": "pool-a",
+                "cloudmail_timeout": 45,
+                "alias_domain": "serf.me",
                 "alias_count": 2,
                 "state_key": "vend-1-state",
                 "alias_domain_id": "42",
+                "confirmation_inbox": {
+                    "provider": "cloudmail",
+                    "api_base": "https://cloudmail.example/api",
+                    "admin_email": "admin@example.com",
+                    "admin_password": "secret-pass",
+                    "domain": "mail.example.com",
+                    "subdomain": "pool-a",
+                    "timeout": 45,
+                },
             }
         ]
 
@@ -213,7 +309,120 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(stored_payload["mail_provider"], "cloudmail")
         self.assertEqual(
             stored_payload["sources"],
-            '[{"id": "vend-1", "type": "vend_email", "alias_count": 2, "state_key": "vend-1-state"}]',
+            '[{"id": "vend-1", "type": "vend_email", "register_url": "https://accounts.example.test/register", "cloudmail_api_base": "https://cloudmail.example/api", "cloudmail_admin_email": "admin@example.com", "cloudmail_admin_password": "secret-pass", "cloudmail_domain": "mail.example.com", "cloudmail_subdomain": "pool-a", "cloudmail_timeout": 45, "alias_domain": "serf.me", "alias_domain_id": "42", "alias_count": 2, "confirmation_inbox": {"provider": "cloudmail", "api_base": "https://cloudmail.example/api", "admin_email": "admin@example.com", "admin_password": "secret-pass", "domain": "mail.example.com", "subdomain": "pool-a", "timeout": 45}, "state_key": "vend-1-state"}]',
+        )
+
+    def test_alias_generation_test_api_preserves_full_vend_source_from_draft_config(self):
+        client = TestClient(app)
+        draft_source = {
+            "id": "vend-1",
+            "type": "vend_email",
+            "register_url": "https://accounts.example.test/register",
+            "cloudmail_api_base": "https://cloudmail.example/api",
+            "cloudmail_admin_email": "admin@example.com",
+            "cloudmail_admin_password": "secret-pass",
+            "cloudmail_domain": "mail.example.com",
+            "cloudmail_subdomain": "pool-a",
+            "cloudmail_timeout": 45,
+            "alias_domain": "serf.me",
+            "alias_domain_id": "42",
+            "alias_count": 2,
+            "state_key": "vend-state",
+            "confirmation_inbox": {
+                "provider": "cloudmail",
+                "api_base": "https://cloudmail.example/api",
+                "admin_email": "admin@example.com",
+                "admin_password": "secret-pass",
+                "domain": "mail.example.com",
+                "subdomain": "pool-a",
+                "timeout": 45,
+            },
+        }
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={},
+        ), patch(
+            "api.config.AliasAutomationTestService"
+        ) as automation_service_cls:
+            automation_service = automation_service_cls.return_value
+            automation_service.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="vend-1",
+                source_type="vend_email",
+                alias_email="alias@example.com",
+                real_mailbox_email="real@example.com",
+                service_email="service@example.com",
+                account={"realMailboxEmail": "real@example.com", "serviceEmail": "service@example.com", "password": "secret-pass"},
+                aliases=[{"email": "alias@example.com"}],
+            )
+
+            resp = client.post(
+                "/api/config/alias-test",
+                json={
+                    "sourceId": "vend-1",
+                    "useDraftConfig": True,
+                    "config": {
+                        "cloudmail_alias_enabled": True,
+                        "sources": [draft_source],
+                    },
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        automation_service.run.assert_called_once()
+        pool_config = automation_service.run.call_args.kwargs["pool_config"]
+        self.assertEqual(pool_config["sources"], [draft_source])
+
+    def test_alias_generation_test_api_builds_explicit_policy_and_context_for_service(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={"cloudmail_alias_enabled": True, "sources": []},
+        ), patch(
+            "api.config.normalize_cloudmail_alias_pool_config",
+            return_value={"enabled": True, "task_id": "alias-test", "sources": []},
+        ), patch("api.config.AliasAutomationTestService") as automation_service_cls:
+            automation_service = automation_service_cls.return_value
+            automation_service.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="qa-static",
+                source_type="static_list",
+                alias_email="a@example.com",
+                real_mailbox_email="real@example.com",
+                account={"realMailboxEmail": "real@example.com", "serviceEmail": "", "password": ""},
+                aliases=[{"email": "a@example.com"}],
+            )
+
+            resp = client.post(
+                "/api/config/alias-test",
+                json={"sourceId": "qa-static", "useDraftConfig": False},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        _, kwargs = automation_service_cls.call_args
+        self.assertEqual(
+            kwargs["policy"],
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            ),
+        )
+        self.assertEqual(
+            kwargs["context"],
+            AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                test_policy=AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                ),
+            ),
         )
 
     def test_update_config_skips_empty_write_only_cloudmail_admin_password(self):
@@ -250,7 +459,17 @@ class AliasGenerationApiTests(unittest.TestCase):
                 "detail": "已补齐 2 个别名",
             },
         ]
-        vend_capture_summary = [{"entries": 2}]
+        vend_capture_summary = [
+            {
+                "name": "confirmation",
+                "url": "https://www.vend.email/auth/confirmation?confirmation_token=abc123",
+                "method": "GET",
+                "request_body_excerpt": "confirmation_token=abc123",
+                "response_body_excerpt": '{"ok":true}',
+                "response_status": 200,
+                "captured_at": "2026-04-19T12:00:00+08:00",
+            }
+        ]
         vend_aliases = [
             {"email": "alias-001@vend.example"},
             {"email": "alias-002@vend.example"},
@@ -280,26 +499,26 @@ class AliasGenerationApiTests(unittest.TestCase):
                     }
                 ],
             },
-        ), patch("api.config.AliasSourceProbeService") as probe_service_cls:
-            probe_service = probe_service_cls.return_value
-            probe_service.probe.return_value.ok = True
-            probe_service.probe.return_value.source_id = "vend-1"
-            probe_service.probe.return_value.source_type = "vend_email"
-            probe_service.probe.return_value.alias_email = "real@example.com"
-            probe_service.probe.return_value.real_mailbox_email = "real@example.com"
-            probe_service.probe.return_value.service_email = "alias-001@vend.example"
-            probe_service.probe.return_value.capture_summary = vend_capture_summary
-            probe_service.probe.return_value.steps = vend_steps
-            probe_service.probe.return_value.account = vend_account
-            probe_service.probe.return_value.aliases = vend_aliases
-            probe_service.probe.return_value.current_stage = {
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service = service_cls.return_value
+            service.run.return_value.ok = True
+            service.run.return_value.source_id = "vend-1"
+            service.run.return_value.source_type = "vend_email"
+            service.run.return_value.alias_email = "real@example.com"
+            service.run.return_value.real_mailbox_email = "real@example.com"
+            service.run.return_value.service_email = "alias-001@vend.example"
+            service.run.return_value.capture_summary = vend_capture_summary
+            service.run.return_value.steps = vend_steps
+            service.run.return_value.account = vend_account
+            service.run.return_value.aliases = vend_aliases
+            service.run.return_value.current_stage = {
                 "code": "aliases_ready",
                 "label": "别名预览已生成",
             }
-            probe_service.probe.return_value.stages = vend_steps
-            probe_service.probe.return_value.failure = vend_failure
-            probe_service.probe.return_value.logs = []
-            probe_service.probe.return_value.error = ""
+            service.run.return_value.stages = vend_steps
+            service.run.return_value.failure = vend_failure
+            service.run.return_value.logs = []
+            service.run.return_value.error = ""
 
             resp = client.post(
                 "/api/config/alias-test",
@@ -326,6 +545,16 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["sourceId"], "vend-1")
         self.assertEqual(body["sourceType"], "vend_email")
         self.assertEqual(body["serviceEmail"], "alias-001@vend.example")
+        self.assertEqual(
+            body["accountIdentity"],
+            {
+                "serviceAccountEmail": "alias-001@vend.example",
+                "confirmationInboxEmail": "real@example.com",
+                "realMailboxEmail": "real@example.com",
+                "servicePassword": "vend-secret",
+                "username": "vend-demo",
+            },
+        )
         self.assertEqual(body["account"], vend_account)
         self.assertEqual(body["aliases"], vend_aliases)
         self.assertEqual(
@@ -339,6 +568,9 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertIsInstance(body["steps"], list)
         self.assertIn("captureSummary", body)
         self.assertIsInstance(body["captureSummary"], list)
+        self.assertEqual(body["captureSummary"][0]["kind"], "confirmation")
+        self.assertEqual(body["captureSummary"][0]["requestSummary"]["method"], "GET")
+        self.assertEqual(body["captureSummary"][0]["responseSummary"]["response_status"], 200)
 
     def test_alias_generation_test_api_sanitizes_mailbox_verification_capture_summary(self):
         client = TestClient(app)
@@ -358,15 +590,15 @@ class AliasGenerationApiTests(unittest.TestCase):
                     }
                 ],
             },
-        ), patch("api.config.AliasSourceProbeService") as probe_service_cls:
-            probe_service = probe_service_cls.return_value
-            probe_service.probe.return_value.ok = False
-            probe_service.probe.return_value.source_id = "vend-1"
-            probe_service.probe.return_value.source_type = "vend_email"
-            probe_service.probe.return_value.alias_email = ""
-            probe_service.probe.return_value.real_mailbox_email = "real@example.com"
-            probe_service.probe.return_value.service_email = ""
-            probe_service.probe.return_value.capture_summary = [
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service = service_cls.return_value
+            service.run.return_value.ok = False
+            service.run.return_value.source_id = "vend-1"
+            service.run.return_value.source_type = "vend_email"
+            service.run.return_value.alias_email = ""
+            service.run.return_value.real_mailbox_email = "real@example.com"
+            service.run.return_value.service_email = ""
+            service.run.return_value.capture_summary = [
                 {
                     "name": "mailbox_verification",
                     "method": "GET",
@@ -375,9 +607,9 @@ class AliasGenerationApiTests(unittest.TestCase):
                     "response_body_excerpt": "https://vend.example/auth/confirmation?confirmation_token=abc123&code=xyz789",
                 }
             ]
-            probe_service.probe.return_value.steps = []
-            probe_service.probe.return_value.logs = []
-            probe_service.probe.return_value.error = "vend.email session bootstrap failed"
+            service.run.return_value.steps = []
+            service.run.return_value.logs = []
+            service.run.return_value.error = "vend.email session bootstrap failed"
 
             resp = client.post(
                 "/api/config/alias-test",
@@ -398,6 +630,9 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertNotIn("confirmation_token", capture["response_body_excerpt"])
         self.assertNotIn("abc123", capture["response_body_excerpt"])
         self.assertNotIn("xyz789", capture["response_body_excerpt"])
+        self.assertEqual(capture["kind"], "mailbox_verification")
+        self.assertEqual(capture["requestSummary"], "mailbox verification request")
+        self.assertEqual(capture["responseSummary"], "mailbox verification result")
 
     def test_alias_generation_test_api_uses_draft_config_when_requested(self):
         client = TestClient(app)
@@ -421,19 +656,19 @@ class AliasGenerationApiTests(unittest.TestCase):
                 ],
             },
         ) as normalize_config, patch(
-            "api.config.AliasSourceProbeService"
-        ) as probe_service_cls:
-            probe_service = probe_service_cls.return_value
-            probe_service.probe.return_value.ok = True
-            probe_service.probe.return_value.source_id = "simple-1"
-            probe_service.probe.return_value.source_type = "simple_generator"
-            probe_service.probe.return_value.alias_email = "msiabc.123@manyme.com"
-            probe_service.probe.return_value.real_mailbox_email = "real@example.com"
-            probe_service.probe.return_value.service_email = ""
-            probe_service.probe.return_value.capture_summary = []
-            probe_service.probe.return_value.steps = []
-            probe_service.probe.return_value.logs = []
-            probe_service.probe.return_value.error = ""
+            "api.config.AliasAutomationTestService"
+        ) as service_cls:
+            service = service_cls.return_value
+            service.run.return_value.ok = True
+            service.run.return_value.source_id = "simple-1"
+            service.run.return_value.source_type = "simple_generator"
+            service.run.return_value.alias_email = "msiabc.123@manyme.com"
+            service.run.return_value.real_mailbox_email = "real@example.com"
+            service.run.return_value.service_email = ""
+            service.run.return_value.capture_summary = []
+            service.run.return_value.steps = []
+            service.run.return_value.logs = []
+            service.run.return_value.error = ""
 
             resp = client.post(
                 "/api/config/alias-test",
@@ -486,18 +721,18 @@ class AliasGenerationApiTests(unittest.TestCase):
         ), patch(
             "api.config.normalize_cloudmail_alias_pool_config",
             return_value={"enabled": False, "task_id": "alias-test", "sources": []},
-        ), patch("api.config.AliasSourceProbeService") as probe_service_cls:
-            probe_service = probe_service_cls.return_value
-            probe_service.probe.return_value.ok = False
-            probe_service.probe.return_value.source_id = "missing"
-            probe_service.probe.return_value.source_type = ""
-            probe_service.probe.return_value.alias_email = ""
-            probe_service.probe.return_value.real_mailbox_email = ""
-            probe_service.probe.return_value.service_email = ""
-            probe_service.probe.return_value.capture_summary = []
-            probe_service.probe.return_value.steps = []
-            probe_service.probe.return_value.logs = []
-            probe_service.probe.return_value.error = "source 'missing' not found"
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service = service_cls.return_value
+            service.run.return_value.ok = False
+            service.run.return_value.source_id = "missing"
+            service.run.return_value.source_type = ""
+            service.run.return_value.alias_email = ""
+            service.run.return_value.real_mailbox_email = ""
+            service.run.return_value.service_email = ""
+            service.run.return_value.capture_summary = []
+            service.run.return_value.steps = []
+            service.run.return_value.logs = []
+            service.run.return_value.error = "source 'missing' not found"
 
             resp = client.post(
                 "/api/config/alias-test",
@@ -508,6 +743,48 @@ class AliasGenerationApiTests(unittest.TestCase):
         body = resp.json()
         self.assertFalse(body["ok"])
         self.assertEqual(body["error"], "source 'missing' not found")
+
+    def test_alias_generation_test_api_returns_structured_failure_when_provider_raises(self):
+        client = TestClient(app)
+
+        provider = mock.Mock()
+        provider.run_alias_generation_test.side_effect = RuntimeError("alias preview unavailable")
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "broken-source",
+                        "type": "static_list",
+                        "emails": ["a@example.com"],
+                    }
+                ],
+            },
+        ), patch(
+            "core.alias_pool.automation_test.AliasProviderBootstrap.build",
+            return_value=provider,
+        ):
+            resp = client.post(
+                "/api/config/alias-test",
+                json={"sourceId": "broken-source", "useDraftConfig": False},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["sourceId"], "broken-source")
+        self.assertEqual(body["sourceType"], "static_list")
+        self.assertEqual(body["error"], "alias preview unavailable")
+        self.assertEqual(
+            body["failure"],
+            {
+                "stageCode": "run_alias_generation_test",
+                "stageLabel": "",
+                "reason": "alias preview unavailable",
+            },
+        )
 
     def test_alias_generation_test_api_uses_saved_config_when_draft_disabled(self):
         client = TestClient(app)
@@ -533,19 +810,19 @@ class AliasGenerationApiTests(unittest.TestCase):
                 "sources": saved_config["sources"],
             },
         ) as normalize_config, patch(
-            "api.config.AliasSourceProbeService"
-        ) as probe_service_cls:
-            probe_service = probe_service_cls.return_value
-            probe_service.probe.return_value.ok = True
-            probe_service.probe.return_value.source_id = "saved-source"
-            probe_service.probe.return_value.source_type = "static_list"
-            probe_service.probe.return_value.alias_email = "a@example.com"
-            probe_service.probe.return_value.real_mailbox_email = "real@example.com"
-            probe_service.probe.return_value.service_email = ""
-            probe_service.probe.return_value.capture_summary = []
-            probe_service.probe.return_value.steps = []
-            probe_service.probe.return_value.logs = []
-            probe_service.probe.return_value.error = ""
+            "api.config.AliasAutomationTestService"
+        ) as service_cls:
+            service = service_cls.return_value
+            service.run.return_value.ok = True
+            service.run.return_value.source_id = "saved-source"
+            service.run.return_value.source_type = "static_list"
+            service.run.return_value.alias_email = "a@example.com"
+            service.run.return_value.real_mailbox_email = "real@example.com"
+            service.run.return_value.service_email = ""
+            service.run.return_value.capture_summary = []
+            service.run.return_value.steps = []
+            service.run.return_value.logs = []
+            service.run.return_value.error = ""
 
             resp = client.post(
                 "/api/config/alias-test",
@@ -625,8 +902,8 @@ class AliasGenerationApiTests(unittest.TestCase):
             runtime_builder=lambda source: runtime,
         )
 
-        with patch("core.alias_pool.vend_email_service._build_service_email", return_value="fresh-service@example.com"), patch(
-            "core.alias_pool.vend_email_service._build_service_password", return_value="fresh-pass"
+        with patch("core.alias_pool.vend_provider.build_service_email", return_value="fresh-service@example.com"), patch(
+            "core.alias_pool.vend_provider.build_service_password", return_value="fresh-pass"
         ):
             result = service.probe(
                 pool_config={
@@ -659,10 +936,10 @@ class AliasGenerationApiTests(unittest.TestCase):
                 source_id="vend-email-primary",
                 source_type="vend_email",
                 alias_email="fresh-001@serf.me",
-                real_mailbox_email="fresh-service@example.com",
+                real_mailbox_email="real@example.com",
                 service_email="fresh-service@example.com",
                 account={
-                    "realMailboxEmail": "fresh-service@example.com",
+                    "realMailboxEmail": "real@example.com",
                     "serviceEmail": "fresh-service@example.com",
                     "password": "fresh-pass",
                     "username": "fresh-service",
@@ -727,8 +1004,8 @@ class AliasGenerationApiTests(unittest.TestCase):
 
         service = AliasSourceProbeService(runtime_builder=lambda source: runtime)
 
-        with patch("core.alias_pool.vend_email_service._build_service_email", return_value="fresh-service@example.com"), patch(
-            "core.alias_pool.vend_email_service._build_service_password", return_value="fresh-pass"
+        with patch("core.alias_pool.vend_provider.build_service_email", return_value="fresh-service@example.com"), patch(
+            "core.alias_pool.vend_provider.build_service_password", return_value="fresh-pass"
         ):
             result = service.probe(
                 pool_config={
@@ -788,6 +1065,48 @@ class AliasGenerationApiTests(unittest.TestCase):
                 },
                 {"code": "save_state", "label": "保存预览状态", "status": "completed"},
             ],
+        )
+
+    def test_alias_generation_probe_service_no_longer_depends_on_alias_test_task_id(self):
+        service = AliasSourceProbeService(
+            runtime_builder=mock.Mock(),
+            state_store_factory=mock.Mock(),
+        )
+
+        with patch("core.alias_pool.automation_test.AliasAutomationTestService") as automation_cls:
+            automation_cls.return_value.run.side_effect = ValueError("source 'vend-email-primary' not found")
+
+            with self.assertRaisesRegex(ValueError, "source 'vend-email-primary' not found"):
+                service.probe(
+                    pool_config={"enabled": True, "sources": []},
+                    source_id="vend-email-primary",
+                    task_id="manual-debug-run",
+                )
+
+        _, kwargs = automation_cls.call_args
+        self.assertEqual(
+            kwargs["policy"],
+            AliasAutomationTestPolicy(
+                fresh_service_account=True,
+                persist_state=False,
+                minimum_alias_count=3,
+                capture_enabled=True,
+            ),
+        )
+        self.assertEqual(
+            kwargs["context"],
+            AliasProviderBootstrapContext(
+                task_id="manual-debug-run",
+                purpose="automation_test",
+                runtime_builder=service._runtime_builder,
+                state_store_factory=service._state_store_factory,
+                test_policy=AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                ),
+            ),
         )
 
 
