@@ -4,11 +4,51 @@ from pathlib import Path
 from typing import Any
 
 
+def _sanitize_path_component(value: str) -> str:
+    raw = str(value or "").strip()
+    safe = "".join(
+        character if character.isalnum() or character in {"-", "_", "."} else "_"
+        for character in raw
+    )
+    return safe or "default"
+
+
 def _string_field(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
     if isinstance(value, str):
         return value
     return ""
+
+
+def _stage_history_field(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _stage_field(payload: dict[str, Any], key: str) -> dict[str, str]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        return {"code": "", "label": ""}
+    return {
+        "code": str(value.get("code") or ""),
+        "label": str(value.get("label") or ""),
+    }
+
+
+def _failure_field(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        return {"stageCode": "", "stageLabel": "", "reason": ""}
+    failure: dict[str, Any] = {
+        "stageCode": str(value.get("stageCode") or ""),
+        "stageLabel": str(value.get("stageLabel") or ""),
+        "reason": str(value.get("reason") or ""),
+    }
+    if "retryable" in value:
+        failure["retryable"] = bool(value.get("retryable"))
+    return failure
 
 
 @dataclass
@@ -79,6 +119,11 @@ class VendEmailServiceState:
     last_verified_at: str = ""
     known_aliases: list[str] = field(default_factory=list)
     last_capture_summary: list[VendEmailCaptureRecord] = field(default_factory=list)
+    current_stage: dict[str, str] = field(default_factory=lambda: {"code": "", "label": ""})
+    stage_history: list[dict[str, Any]] = field(default_factory=list)
+    last_failure: dict[str, Any] = field(
+        default_factory=lambda: {"stageCode": "", "stageLabel": "", "reason": ""}
+    )
     last_error: str = ""
 
     def to_dict(self) -> dict[str, object]:
@@ -93,6 +138,12 @@ class VendEmailServiceState:
             "last_verified_at": self.last_verified_at,
             "known_aliases": list(self.known_aliases),
             "last_capture_summary": [capture.to_dict() for capture in self.last_capture_summary],
+            "current_stage": {
+                "code": str(self.current_stage.get("code") or ""),
+                "label": str(self.current_stage.get("label") or ""),
+            },
+            "stage_history": [dict(item) for item in self.stage_history],
+            "last_failure": dict(self.last_failure),
             "last_error": self.last_error,
         }
 
@@ -131,6 +182,9 @@ class VendEmailServiceState:
             last_verified_at=_string_field(payload, "last_verified_at"),
             known_aliases=known_aliases,
             last_capture_summary=capture_summary,
+            current_stage=_stage_field(payload, "current_stage"),
+            stage_history=_stage_history_field(payload, "stage_history"),
+            last_failure=_failure_field(payload, "last_failure"),
             last_error=str(payload.get("last_error") or ""),
         )
 
@@ -138,6 +192,16 @@ class VendEmailServiceState:
 class VendEmailFileStateStore:
     def __init__(self, path: Path | str):
         self._path = Path(path)
+
+    @classmethod
+    def for_task(cls, *, task_id: str, source_id: str) -> "VendEmailFileStateStore":
+        state_dir = Path("data") / "alias_pool" / "vend_email" / _sanitize_path_component(task_id)
+        return cls(state_dir / f"{_sanitize_path_component(source_id)}.json")
+
+    @classmethod
+    def for_state_key(cls, *, state_key: str) -> "VendEmailFileStateStore":
+        state_dir = Path("data") / "alias_pool" / "vend_email" / "states"
+        return cls(state_dir / f"{_sanitize_path_component(state_key)}.json")
 
     def load(self) -> VendEmailServiceState:
         payload = json.loads(self._path.read_text(encoding="utf-8"))

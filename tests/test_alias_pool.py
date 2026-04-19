@@ -48,7 +48,6 @@ class AliasPoolConfigTests(unittest.TestCase):
                         "id": "legacy-static",
                         "type": "static_list",
                         "emails": ["alias1@example.com", "alias2@example.com"],
-                        "mailbox_email": "real@example.com",
                     }
                 ],
             },
@@ -109,7 +108,6 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "id": "legacy-static",
                     "type": "static_list",
                     "emails": ["alias1@example.com"],
-                    "mailbox_email": "real@example.com",
                 }
             ],
         )
@@ -142,7 +140,6 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "type": "simple_generator",
                     "prefix": "msiabc.",
                     "suffix": "@manyme.com",
-                    "mailbox_email": "real@example.com",
                     "count": 5,
                     "middle_length_min": 3,
                     "middle_length_max": 6,
@@ -159,10 +156,14 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                         "id": "vend-1",
                         "type": "vend_email",
                         "register_url": " https://vend.example/register ",
-                        "mailbox_base_url": " https://mailbox.example/base ",
-                        "mailbox_email": "Real@Example.COM ",
-                        "mailbox_password": " secret-pass ",
+                        "cloudmail_api_base": " https://cloudmail.example/base ",
+                        "cloudmail_admin_email": " Admin@Example.COM ",
+                        "cloudmail_admin_password": " secret-pass ",
+                        "cloudmail_domain": "mail.example.com",
+                        "cloudmail_subdomain": " pool-a ",
+                        "cloudmail_timeout": "45",
                         "alias_domain": " CxWsss.Online ",
+                        "alias_domain_id": " 42 ",
                         "alias_count": "-5",
                     }
                 ],
@@ -176,14 +177,112 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                 {
                     "id": "vend-1",
                     "type": "vend_email",
-                    "register_url": "https://vend.example/register",
-                    "mailbox_base_url": "https://mailbox.example/base",
-                    "mailbox_email": "real@example.com",
-                    "mailbox_password": "secret-pass",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_api_base": "https://cloudmail.example/base",
+                    "cloudmail_admin_email": "Admin@Example.COM",
+                    "cloudmail_admin_password": "secret-pass",
+                    "cloudmail_domain": "mail.example.com",
+                    "cloudmail_subdomain": "pool-a",
+                    "cloudmail_timeout": 45,
                     "alias_domain": "cxwsss.online",
+                    "alias_domain_id": "42",
                     "alias_count": 0,
                     "state_key": "vend-1",
                 }
+            ],
+        )
+
+    def test_normalize_accepts_sources_from_json_string_for_config_store_round_trip(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": (
+                    '[{"id":"vend-1","type":"vend_email","register_url":"https://vend.example",'
+                    '"cloudmail_api_base":"https://cloudmail.example","cloudmail_admin_email":"Admin@Example.COM",'
+                    '"cloudmail_admin_password":"secret-pass","cloudmail_domain":"mail.example.com",'
+                    '"cloudmail_subdomain":"pool-a","cloudmail_timeout":50,'
+                    '"alias_domain":"Serf.ME","alias_domain_id":"42",'
+                    '"alias_count":2}]'
+                ),
+            },
+            task_id="task-vend-json-string",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "vend-1",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_api_base": "https://cloudmail.example",
+                    "cloudmail_admin_email": "Admin@Example.COM",
+                    "cloudmail_admin_password": "secret-pass",
+                    "cloudmail_domain": "mail.example.com",
+                    "cloudmail_subdomain": "pool-a",
+                    "cloudmail_timeout": 50,
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 2,
+                    "state_key": "vend-1",
+                }
+            ],
+        )
+
+    def test_normalize_builds_sources_from_cloudmail_service_toggles(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "cloudmail_alias_emails": "alias1@example.com\nalias2@example.com",
+                "cloudmail_admin_password": "cloudmail-pass",
+                "cloudmail_alias_service_static_enabled": True,
+                "cloudmail_alias_service_simple_enabled": True,
+                "cloudmail_alias_service_simple_prefix": "msi.",
+                "cloudmail_alias_service_simple_suffix": "@manyme.com",
+                "cloudmail_alias_service_simple_count": 2,
+                "cloudmail_alias_service_simple_middle_length_min": 3,
+                "cloudmail_alias_service_simple_middle_length_max": 6,
+                "cloudmail_alias_service_vend_enabled": True,
+                "cloudmail_alias_service_vend_source_id": "vend-cloudmail",
+                "cloudmail_alias_service_vend_alias_count": 5,
+                "cloudmail_alias_service_vend_state_key": "vend-state",
+            },
+            task_id="task-cloudmail-alias-services",
+        )
+
+        self.assertEqual(result["enabled"], True)
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "legacy-static",
+                    "type": "static_list",
+                    "emails": ["alias1@example.com", "alias2@example.com"],
+                },
+                {
+                    "id": "cloudmail-simple",
+                    "type": "simple_generator",
+                    "prefix": "msi.",
+                    "suffix": "@manyme.com",
+                    "count": 2,
+                    "middle_length_min": 3,
+                    "middle_length_max": 6,
+                },
+                {
+                    "id": "vend-cloudmail",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_api_base": "",
+                    "cloudmail_admin_email": "",
+                    "cloudmail_admin_password": "cloudmail-pass",
+                    "cloudmail_domain": "",
+                    "cloudmail_subdomain": "",
+                    "cloudmail_timeout": 30,
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 5,
+                    "state_key": "vend-state",
+                },
             ],
         )
 
@@ -419,6 +518,23 @@ class VendEmailStateTests(unittest.TestCase):
             last_verified_at="2026-04-16T20:05:00Z",
             known_aliases=["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
             last_capture_summary=[capture_summary_record],
+            current_stage={"code": "aliases_ready", "label": "别名预览已生成"},
+            stage_history=[
+                {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                {
+                    "code": "list_aliases",
+                    "label": "列出现有别名",
+                    "status": "completed",
+                    "detail": "找到 2 个别名",
+                },
+                {
+                    "code": "aliases_ready",
+                    "label": "别名预览已生成",
+                    "status": "completed",
+                    "detail": "预览共 2 个别名",
+                },
+            ],
+            last_failure={"stageCode": "", "stageLabel": "", "reason": ""},
             last_error="",
         )
 
@@ -448,6 +564,23 @@ class VendEmailStateTests(unittest.TestCase):
                         "captured_at": "2026-04-16T10:01:00+08:00",
                     }
                 ],
+                "current_stage": {"code": "aliases_ready", "label": "别名预览已生成"},
+                "stage_history": [
+                    {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                    {
+                        "code": "list_aliases",
+                        "label": "列出现有别名",
+                        "status": "completed",
+                        "detail": "找到 2 个别名",
+                    },
+                    {
+                        "code": "aliases_ready",
+                        "label": "别名预览已生成",
+                        "status": "completed",
+                        "detail": "预览共 2 个别名",
+                    },
+                ],
+                "last_failure": {"stageCode": "", "stageLabel": "", "reason": ""},
                 "last_error": "",
             },
         )
@@ -471,6 +604,9 @@ class VendEmailStateTests(unittest.TestCase):
                         "last_verified_at": None,
                         "known_aliases": "not-a-list",
                         "last_capture_summary": malformed_value,
+                        "current_stage": 123,
+                        "stage_history": "not-a-list",
+                        "last_failure": "not-a-dict",
                         "last_error": 456,
                     }
                 )
@@ -484,6 +620,12 @@ class VendEmailStateTests(unittest.TestCase):
                 self.assertEqual(restored.last_verified_at, "")
                 self.assertEqual(restored.known_aliases, [])
                 self.assertEqual(restored.last_capture_summary, [])
+                self.assertEqual(restored.current_stage, {"code": "", "label": ""})
+                self.assertEqual(restored.stage_history, [])
+                self.assertEqual(
+                    restored.last_failure,
+                    {"stageCode": "", "stageLabel": "", "reason": ""},
+                )
                 self.assertEqual(restored.last_error, "456")
 
     def test_file_state_store_persists_and_restores_spec_state_shape(self):
@@ -516,6 +658,22 @@ class VendEmailStateTests(unittest.TestCase):
                         captured_at="2026-04-16T10:01:00+08:00",
                     )
                 ],
+                current_stage={"code": "create_aliases", "label": "创建别名"},
+                stage_history=[
+                    {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                    {
+                        "code": "create_aliases",
+                        "label": "创建别名",
+                        "status": "failed",
+                        "detail": "bootstrap failed",
+                    },
+                ],
+                last_failure={
+                    "stageCode": "create_aliases",
+                    "stageLabel": "创建别名",
+                    "reason": "bootstrap failed",
+                    "retryable": True,
+                },
                 last_error="bootstrap failed",
             )
 
@@ -583,12 +741,43 @@ class VendEmailStateTests(unittest.TestCase):
                         "captured_at": "2026-04-16T10:02:00+08:00",
                     }
                 ],
+                "current_stage": {"code": "aliases_ready", "label": "别名预览已生成"},
+                "stage_history": [
+                    {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                    {
+                        "code": "aliases_ready",
+                        "label": "别名预览已生成",
+                        "status": "completed",
+                        "detail": "预览共 1 个别名",
+                    },
+                ],
+                "last_failure": {"stageCode": "", "stageLabel": "", "reason": ""},
             }
         )
 
         self.assertEqual(
             [record.name for record in restored.last_capture_summary],
             ["register", "confirmation", "login", "create_forwarder"],
+        )
+        self.assertEqual(
+            restored.current_stage,
+            {"code": "aliases_ready", "label": "别名预览已生成"},
+        )
+        self.assertEqual(
+            restored.stage_history,
+            [
+                {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                {
+                    "code": "aliases_ready",
+                    "label": "别名预览已生成",
+                    "status": "completed",
+                    "detail": "预览共 1 个别名",
+                },
+            ],
+        )
+        self.assertEqual(
+            restored.last_failure,
+            {"stageCode": "", "stageLabel": "", "reason": ""},
         )
 
 
@@ -600,6 +789,8 @@ class _FakeVendEmailRuntime:
         login_ok,
         register_ok,
         resend_confirmation_ok=True,
+        confirmation_link="https://www.vend.email/auth/confirmation?confirmation_token=abc123",
+        confirm_ok=True,
         aliases,
         created_aliases=None,
         captures=None,
@@ -613,6 +804,8 @@ class _FakeVendEmailRuntime:
             self.login_ok = login_ok
         self.register_ok = register_ok
         self.resend_confirmation_ok = resend_confirmation_ok
+        self.confirmation_link = confirmation_link
+        self.confirm_ok = confirm_ok
         self.aliases = list(aliases)
         self.created_aliases = list(created_aliases or [])
         self.captures = list(captures or [])
@@ -637,6 +830,14 @@ class _FakeVendEmailRuntime:
     def resend_confirmation(self, state, source):
         self.calls.append("resend_confirmation")
         return self.resend_confirmation_ok
+
+    def fetch_confirmation_link(self, state, source):
+        self.calls.append("fetch_confirmation_link")
+        return self.confirmation_link
+
+    def confirm(self, confirmation_link, source):
+        self.calls.append("confirm")
+        return self.confirm_ok
 
     def list_aliases(self, state, source):
         self.calls.append("list_aliases")
@@ -668,6 +869,12 @@ class _FakeVendEmailRuntimeWithoutCaptureSummary:
     def resend_confirmation(self, state, source):
         return False
 
+    def fetch_confirmation_link(self, state, source):
+        return ""
+
+    def confirm(self, confirmation_link, source):
+        return False
+
     def list_aliases(self, state, source):
         return list(self.aliases)
 
@@ -694,7 +901,164 @@ class _FakeVendEmailExecutor:
         return self._responses.pop(0)
 
 
+def _html_execution(*, html: str, final_url: str, status: int = 200):
+    return VendEmailRuntimeExecution(
+        ok=200 <= status < 300,
+        response_status=status,
+        response_body_excerpt=html,
+        captured_at="2026-04-16T10:00:00+08:00",
+        payload={
+            "html": html,
+            "final_url": final_url,
+            "content_type": "text/html; charset=utf-8",
+        },
+        final_url=final_url,
+        content_type="text/html; charset=utf-8",
+    )
+
+
+REGISTER_FORM_HTML = '''
+<html><head><meta name="csrf-token" content="register-csrf"></head><body>
+  <form action="/auth" method="post">
+    <input type="hidden" name="authenticity_token" value="register-auth-token" />
+  </form>
+</body></html>
+'''
+
+LOGIN_FORM_HTML = '''
+<html><head><meta name="csrf-token" content="login-csrf"></head><body>
+  <form action="/auth/login" method="post">
+    <input type="hidden" name="authenticity_token" value="login-auth-token" />
+  </form>
+</body></html>
+'''
+
+FORWARDERS_NEW_FORM_HTML = '''
+<html><head><meta name="csrf-token" content="forwarder-csrf"></head><body>
+  <form action="/forwarders" method="post">
+    <input type="hidden" name="authenticity_token" value="forwarder-auth-token" />
+    <select name="forwarder[domain_id]">
+      <option value="42" selected>serf.me</option>
+      <option value="27">berrymail.cc</option>
+    </select>
+  </form>
+</body></html>
+'''
+
+FORWARDERS_LIST_HTML = '''
+<html><body>
+  <a href="/forwarders/vendcapexisting20260417@serf.me">existing</a>
+</body></html>
+'''
+
+FORWARDER_DETAIL_HTML = '''
+<html><body>
+  <h1>vendcap202604170108@serf.me</h1>
+</body></html>
+'''
+
+
+class _FakeVendEmailDefaultExecutor:
+    def __init__(self):
+        self.calls = []
+        self.login_attempts = 0
+
+    def execute(self, operation, state, source):
+        self.calls.append(
+            {
+                "name": operation.name,
+                "method": operation.method,
+                "url": operation.url,
+                "request_body_excerpt": operation.request_body_excerpt,
+            }
+        )
+        if operation.name == "login":
+            self.login_attempts += 1
+            if self.login_attempts == 1:
+                return VendEmailRuntimeExecution(
+                    ok=False,
+                    response_status=401,
+                    response_body_excerpt='{"ok":false}',
+                    captured_at="2026-04-18T12:00:00+08:00",
+                    payload={},
+                )
+        if operation.name == "list_forwarders":
+            return VendEmailRuntimeExecution(
+                ok=True,
+                response_status=200,
+                response_body_excerpt="[]",
+                captured_at="2026-04-18T12:00:01+08:00",
+                payload=[],
+            )
+        if operation.name == "create_forwarder":
+            return VendEmailRuntimeExecution(
+                ok=True,
+                response_status=200,
+                response_body_excerpt='{"email":"vendcapdemo20260417@serf.me","recipient":"admin@cxwsss.online"}',
+                captured_at="2026-04-18T12:00:02+08:00",
+                payload={
+                    "email": "vendcapdemo20260417@serf.me",
+                    "recipient": "admin@cxwsss.online",
+                },
+            )
+        return VendEmailRuntimeExecution(
+            ok=True,
+            response_status=200,
+            response_body_excerpt='{"ok":true}',
+            captured_at="2026-04-18T12:00:00+08:00",
+            payload={},
+        )
+
+    def fetch_confirmation_link(self, state, source) -> str:
+        self.calls.append(
+            {
+                "name": "mailbox_verification",
+                "method": "GET",
+                "url": str(source.get("mailbox_base_url") or ""),
+                "request_body_excerpt": "",
+            }
+        )
+        return "https://www.vend.email/auth/confirmation?confirmation_token=abc123"
+
+
+class _UnsafeConfirmationExecutor(_FakeVendEmailDefaultExecutor):
+    def fetch_confirmation_link(self, state, source) -> str:
+        super().fetch_confirmation_link(state, source)
+        return "http://127.0.0.1/internal/confirm?confirmation_token=abc123"
+
+
 class VendEmailRuntimeContractTests(unittest.TestCase):
+    def test_contract_uses_base_url_when_register_url_points_to_register_page(self):
+        state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-secret",
+            mailbox_email="admin@cxwsss.online",
+        )
+        source = {
+            "register_url": "https://www.vend.email/auth/register",
+            "mailbox_email": "admin@cxwsss.online",
+            "alias_domain": "serf.me",
+            "alias_domain_id": "42",
+        }
+        executor = _FakeVendEmailExecutor(
+            [
+                _html_execution(html=REGISTER_FORM_HTML, final_url="https://www.vend.email/auth/register"),
+                _html_execution(html="<html><body>registered</body></html>", final_url="https://www.vend.email/"),
+                _html_execution(html=LOGIN_FORM_HTML, final_url="https://www.vend.email/auth/login"),
+                _html_execution(html="<html><body>dashboard</body></html>", final_url="https://www.vend.email/forwarders"),
+            ]
+        )
+        runtime = VendEmailContractRuntime(executor=executor)
+
+        self.assertTrue(runtime.register(state, source))
+        self.assertTrue(runtime.login(state, source))
+
+        self.assertEqual(executor.calls[0]["url"], "https://www.vend.email/auth/register")
+        self.assertEqual(executor.calls[1]["url"], "https://www.vend.email/auth")
+        self.assertEqual(executor.calls[2]["url"], "https://www.vend.email/auth/login")
+        self.assertEqual(executor.calls[3]["url"], "https://www.vend.email/auth/login")
+
     def test_contract_register_resend_login_and_create_forwarder_capture_observed_shapes(self):
         state = VendEmailServiceState(
             state_key="vend-email-primary",
@@ -711,40 +1075,20 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         runtime = VendEmailContractRuntime(
             executor=_FakeVendEmailExecutor(
                 [
-                    VendEmailRuntimeExecution(
-                        ok=True,
-                        response_status=200,
-                        response_body_excerpt='{"ok":true}',
-                        captured_at="2026-04-16T10:00:00+08:00",
-                    ),
-                    VendEmailRuntimeExecution(
-                        ok=True,
-                        response_status=200,
-                        response_body_excerpt='{"ok":true}',
-                        captured_at="2026-04-16T10:00:30+08:00",
-                    ),
-                    VendEmailRuntimeExecution(
-                        ok=True,
-                        response_status=200,
-                        response_body_excerpt='{"ok":true}',
-                        captured_at="2026-04-16T10:01:00+08:00",
-                    ),
-                    VendEmailRuntimeExecution(
-                        ok=True,
-                        response_status=200,
-                        response_body_excerpt='{"email":"vendcapdemo20260417@serf.me"}',
-                        captured_at="2026-04-16T10:02:00+08:00",
-                        payload={
-                            "email": "vendcapdemo20260417@serf.me",
-                            "recipient": "admin@cxwsss.online",
-                        },
-                    ),
+                    _html_execution(html=REGISTER_FORM_HTML, final_url="https://www.vend.email/auth/register"),
+                    _html_execution(html="<html><body>registered</body></html>", final_url="https://www.vend.email/"),
+                    _html_execution(html="<html><body>signed in</body></html>", final_url="https://www.vend.email/auth/login"),
+                    _html_execution(html=LOGIN_FORM_HTML, final_url="https://www.vend.email/auth/login"),
+                    _html_execution(html=LOGIN_FORM_HTML, final_url="https://www.vend.email/auth/login"),
+                    _html_execution(html="<html><body>dashboard</body></html>", final_url="https://www.vend.email/forwarders"),
+                    _html_execution(html=FORWARDERS_NEW_FORM_HTML, final_url="https://www.vend.email/forwarders/new"),
+                    _html_execution(html=FORWARDER_DETAIL_HTML, final_url="https://www.vend.email/forwarders/vendcap202604170108@serf.me", status=302),
                 ]
             )
         )
 
         self.assertTrue(runtime.register(state, source))
-        self.assertTrue(runtime.resend_confirmation(state, source))
+        self.assertTrue(runtime.confirm("https://www.vend.email/auth/confirmation?confirmation_token=abc123", source))
         self.assertTrue(runtime.login(state, source))
         created = runtime.create_forwarder(
             state,
@@ -757,64 +1101,21 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             created,
             VendEmailForwarderRecord(
-                alias_email="vendcapdemo20260417@serf.me",
+                alias_email="vendcap202604170108@serf.me",
                 recipient_email="admin@cxwsss.online",
             ),
         )
         self.assertEqual(
-            runtime.capture_summary(),
+            [capture.name for capture in runtime.capture_summary()],
             [
-                VendEmailCaptureRecord(
-                    name="register",
-                    url="https://www.vend.email/auth",
-                    method="POST",
-                    request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
-                    request_body_excerpt=(
-                        "user[name]=vendcap202604170108&"
-                        "user[email]=vendcap202604170108%40cxwsss.online&"
-                        "user[password]=vend-secret"
-                    ),
-                    response_status=200,
-                    response_body_excerpt='{"ok":true}',
-                    captured_at="2026-04-16T10:00:00+08:00",
-                ),
-                VendEmailCaptureRecord(
-                    name="confirmation",
-                    url="https://www.vend.email/auth/confirmation",
-                    method="POST",
-                    request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
-                    request_body_excerpt="user[email]=vendcap202604170108%40cxwsss.online",
-                    response_status=200,
-                    response_body_excerpt='{"ok":true}',
-                    captured_at="2026-04-16T10:00:30+08:00",
-                ),
-                VendEmailCaptureRecord(
-                    name="login",
-                    url="https://www.vend.email/auth/login",
-                    method="POST",
-                    request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
-                    request_body_excerpt=(
-                        "user[email]=vendcap202604170108%40cxwsss.online&"
-                        "user[password]=vend-secret"
-                    ),
-                    response_status=200,
-                    response_body_excerpt='{"ok":true}',
-                    captured_at="2026-04-16T10:01:00+08:00",
-                ),
-                VendEmailCaptureRecord(
-                    name="create_forwarder",
-                    url="https://www.vend.email/forwarders",
-                    method="POST",
-                    request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
-                    request_body_excerpt=(
-                        "forwarder[local_part]=vendcapdemo20260417&"
-                        "forwarder[domain_id]=42&"
-                        "forwarder[recipient]=admin%40cxwsss.online"
-                    ),
-                    response_status=200,
-                    response_body_excerpt='{"email":"vendcapdemo20260417@serf.me"}',
-                    captured_at="2026-04-16T10:02:00+08:00",
-                ),
+                "register_form",
+                "register",
+                "confirmation",
+                "confirmation",
+                "login_form",
+                "login",
+                "new_forwarder_form",
+                "create_forwarder",
             ],
         )
 
@@ -834,28 +1135,9 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         }
         executor = _FakeVendEmailExecutor(
             [
-                VendEmailRuntimeExecution(
-                    ok=True,
-                    response_status=200,
-                    response_body_excerpt='[{"email":"vendcapexisting20260417@serf.me","recipient":"admin@cxwsss.online"}]',
-                    captured_at="2026-04-16T10:03:00+08:00",
-                    payload=[
-                        {
-                            "email": "vendcapexisting20260417@serf.me",
-                            "recipient": "admin@cxwsss.online",
-                        }
-                    ],
-                ),
-                VendEmailRuntimeExecution(
-                    ok=True,
-                    response_status=200,
-                    response_body_excerpt='{"email":"vendcap202604170108@serf.me"}',
-                    captured_at="2026-04-16T10:04:00+08:00",
-                    payload={
-                        "email": "vendcap202604170108@serf.me",
-                        "recipient": "admin@cxwsss.online",
-                    },
-                ),
+                _html_execution(html=FORWARDERS_LIST_HTML, final_url="https://www.vend.email/forwarders"),
+                _html_execution(html=FORWARDERS_NEW_FORM_HTML, final_url="https://www.vend.email/forwarders/new"),
+                _html_execution(html=FORWARDER_DETAIL_HTML, final_url="https://www.vend.email/forwarders/vendcap202604170108@serf.me", status=302),
             ]
         )
         runtime = VendEmailContractRuntime(executor=executor)
@@ -868,7 +1150,7 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
             [
                 VendEmailForwarderRecord(
                     alias_email="vendcapexisting20260417@serf.me",
-                    recipient_email="admin@cxwsss.online",
+                    recipient_email="",
                 )
             ],
         )
@@ -876,14 +1158,86 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertEqual(executor.calls[0]["method"], "GET")
         self.assertEqual(executor.calls[0]["url"], "https://www.vend.email/forwarders")
         self.assertEqual(executor.calls[0]["request_body_excerpt"], "")
-        self.assertEqual(executor.calls[1]["request_body_excerpt"], (
-            "forwarder[local_part]=vendcap202604170108&"
-            "forwarder[domain_id]=42&"
-            "forwarder[recipient]=admin%40cxwsss.online"
-        ))
+        self.assertEqual(executor.calls[1]["url"], "https://www.vend.email/forwarders/new")
+        self.assertIn("authenticity_token=forwarder-auth-token", executor.calls[2]["request_body_excerpt"])
+        self.assertIn("forwarder[local_part]=vendcap202604170108", executor.calls[2]["request_body_excerpt"])
+        self.assertIn("forwarder[domain_id]=42", executor.calls[2]["request_body_excerpt"])
+        self.assertIn("forwarder[recipient]=admin%40cxwsss.online", executor.calls[2]["request_body_excerpt"])
 
 
 class VendEmailAliasServiceProducerTests(unittest.TestCase):
+    def test_default_runtime_bootstrap_fetches_confirmation_link_before_confirming(self):
+        manager = AliasEmailPoolManager(task_id="task-vend-email-default-bootstrap")
+        state_store = mock.Mock()
+        state_store.load.return_value = VendEmailServiceState(
+            state_key="vend-email-state-key",
+        )
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=[False, True],
+            register_ok=True,
+            confirm_ok=True,
+            aliases=["vendcapdemo20260417@serf.me"],
+            captures=[],
+        )
+
+        producer = VendEmailAliasServiceProducer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://www.vend.email/auth/register",
+                "alias_domain": "serf.me",
+                "alias_count": 1,
+                "state_key": "vend-email-state-key",
+            },
+            state_store=state_store,
+            runtime=runtime,
+        )
+
+        with mock.patch(
+            "core.alias_pool.vend_email_service._build_service_email",
+            return_value="vendcap202604170108@cxwsss.online",
+        ):
+            producer.load_into(manager)
+
+        self.assertEqual(
+            runtime.calls[:6],
+            [
+                "restore",
+                "login",
+                "register",
+                "fetch_confirmation_link",
+                "confirm",
+                "login",
+            ],
+        )
+        lease = manager.acquire_alias()
+        self.assertEqual(lease.alias_email, "vendcapdemo20260417@serf.me")
+        saved_state = state_store.save.call_args.args[0]
+        self.assertEqual(lease.real_mailbox_email, saved_state.mailbox_email)
+        self.assertEqual(saved_state.state_key, "vend-email-state-key")
+        self.assertEqual(saved_state.known_aliases, ["vendcapdemo20260417@serf.me"])
+
+    def test_confirm_uses_active_state_and_rejects_local_confirmation_urls(self):
+        state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-secret",
+            mailbox_email="admin@cxwsss.online",
+        )
+        runtime = VendEmailContractRuntime(executor=_UnsafeConfirmationExecutor())
+
+        runtime.restore_session(state)
+
+        with self.assertRaisesRegex(RuntimeError, "must not target private or local addresses"):
+            runtime.confirm(
+                "http://127.0.0.1/internal/confirm?confirmation_token=abc123",
+                {
+                    "register_url": "https://www.vend.email/auth/register",
+                    "mailbox_base_url": "https://mailbox.example/base",
+                },
+            )
+
     def test_producer_falls_back_from_restore_to_login(self):
         manager = AliasEmailPoolManager(task_id="task-vend-email-load")
         state_store = mock.Mock()
@@ -940,7 +1294,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         lease1 = manager.acquire_alias()
         lease2 = manager.acquire_alias()
         self.assertEqual(lease1.source_kind, "vend_email")
-        self.assertEqual(lease1.real_mailbox_email, "admin@cxwsss.online")
+        self.assertEqual(lease1.real_mailbox_email, "vendcap202604170108@cxwsss.online")
         self.assertEqual(
             {lease1.alias_email, lease2.alias_email},
             {"vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"},
@@ -951,7 +1305,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         saved_state = state_store.save.call_args.args[0]
         self.assertIs(saved_state, loaded_state)
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
-        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "vendcap202604170108@cxwsss.online")
         self.assertEqual(saved_state.service_password, "vend-secret")
         self.assertEqual(
             [capture.name for capture in saved_state.last_capture_summary],
@@ -995,10 +1349,10 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
 
         saved_state = state_store.save.call_args.args[0]
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
-        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "vendcap202604170108@cxwsss.online")
         self.assertEqual(saved_state.service_password, "vend-secret")
         lease = manager.acquire_alias()
-        self.assertEqual(lease.real_mailbox_email, "admin@cxwsss.online")
+        self.assertEqual(lease.real_mailbox_email, "vendcap202604170108@cxwsss.online")
         self.assertEqual(lease.alias_email, "vendcapdemo20260417@serf.me")
 
     def test_producer_bootstrap_registers_confirms_then_logs_in_before_alias_loading(self):
@@ -1039,14 +1393,24 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
                 captured_at="2026-04-16T10:02:00+08:00",
             ),
             VendEmailCaptureRecord(
+                name="mailbox_verification",
+                url="",
+                method="GET",
+                request_headers_whitelist={},
+                request_body_excerpt="",
+                response_status=200,
+                response_body_excerpt="confirmation link captured",
+                captured_at="2026-04-16T10:03:00+08:00",
+            ),
+            VendEmailCaptureRecord(
                 name="confirmation",
-                url="https://www.vend.email/auth/confirmation",
-                method="POST",
-                request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
-                request_body_excerpt="user[email]=vendcap202604170108%40cxwsss.online",
+                url="https://www.vend.email/auth/confirmation?confirmation_token=abc123",
+                method="GET",
+                request_headers_whitelist={},
+                request_body_excerpt="",
                 response_status=200,
                 response_body_excerpt='{"ok":true}',
-                captured_at="2026-04-16T10:03:00+08:00",
+                captured_at="2026-04-16T10:03:10+08:00",
             ),
             VendEmailCaptureRecord(
                 name="login",
@@ -1080,7 +1444,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             restore_ok=False,
             login_ok=[False, True],
             register_ok=True,
-            resend_confirmation_ok=True,
+            confirm_ok=True,
             aliases=["vendcapexisting20260417@serf.me"],
             created_aliases=[
                 "vendcapexisting20260417@serf.me",
@@ -1114,11 +1478,12 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
                 "restore",
                 "login",
                 "register",
-                "resend_confirmation",
+                "fetch_confirmation_link",
+                "confirm",
                 "login",
-                "list_aliases",
             ],
         )
+        self.assertIn("list_aliases", runtime.calls)
         self.assertIn("create_aliases:2", runtime.calls)
         leases = [manager.acquire_alias(), manager.acquire_alias(), manager.acquire_alias()]
         self.assertEqual(
@@ -1135,13 +1500,14 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         )
         saved_state = state_store.save.call_args.args[0]
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
-        self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
+        self.assertEqual(saved_state.mailbox_email, "vendcap202604170108@cxwsss.online")
         self.assertEqual(saved_state.service_password, "old-pass")
         self.assertEqual(
             saved_state.last_capture_summary,
             [
                 captures[0],
                 captures[1],
+                captures[2],
                 VendEmailCaptureRecord(
                     name="login",
                     url="https://www.vend.email/auth/login",
@@ -1155,7 +1521,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
                     response_body_excerpt='{"ok":true}',
                     captured_at="2026-04-16T10:03:30+08:00",
                 ),
-                captures[3],
+                captures[4],
             ],
         )
         self.assertEqual(
@@ -1165,6 +1531,50 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
                 "vendcapdemo20260417@serf.me",
                 "vendcapdemo20260418@serf.me",
             ],
+        )
+        self.assertEqual(
+            saved_state.current_stage,
+            {"code": "aliases_ready", "label": "别名预览已生成"},
+        )
+        self.assertEqual(
+            saved_state.stage_history,
+            [
+                {"code": "register_submit", "label": "注册表单提交", "status": "completed"},
+                {
+                    "code": "fetch_confirmation_mail",
+                    "label": "查找确认邮件",
+                    "status": "completed",
+                },
+                {
+                    "code": "open_confirmation_link",
+                    "label": "打开确认链接",
+                    "status": "completed",
+                },
+                {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                {
+                    "code": "list_aliases",
+                    "label": "列出现有别名",
+                    "status": "completed",
+                    "detail": "找到 1 个别名",
+                },
+                {
+                    "code": "create_aliases",
+                    "label": "创建别名",
+                    "status": "completed",
+                    "detail": "已补齐 2 个别名",
+                },
+                {
+                    "code": "aliases_ready",
+                    "label": "别名预览已生成",
+                    "status": "completed",
+                    "detail": "预览共 3 个别名",
+                },
+                {"code": "save_state", "label": "保存预览状态", "status": "completed"},
+            ],
+        )
+        self.assertEqual(
+            saved_state.last_failure,
+            {"stageCode": "", "stageLabel": "", "reason": ""},
         )
 
     def test_producer_fails_when_confirmation_step_fails_after_register(self):
@@ -1179,7 +1589,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             restore_ok=False,
             login_ok=[False, True],
             register_ok=True,
-            resend_confirmation_ok=False,
+            confirm_ok=False,
             aliases=[],
         )
 
@@ -1204,9 +1614,102 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
 
         self.assertEqual(
             runtime.calls,
-            ["restore", "login", "register", "resend_confirmation"],
+            ["restore", "login", "register", "fetch_confirmation_link", "confirm"],
         )
         self.assertEqual(producer.state(), AliasSourceState.FAILED)
+        saved_state = state_store.save.call_args.args[0]
+        self.assertEqual(
+            saved_state.current_stage,
+            {"code": "open_confirmation_link", "label": "打开确认链接"},
+        )
+        self.assertEqual(
+            saved_state.stage_history,
+            [
+                {"code": "register_submit", "label": "注册表单提交", "status": "completed"},
+                {
+                    "code": "fetch_confirmation_mail",
+                    "label": "查找确认邮件",
+                    "status": "completed",
+                },
+                {
+                    "code": "open_confirmation_link",
+                    "label": "打开确认链接",
+                    "status": "failed",
+                    "detail": "vend.email confirmation step returned unsuccessful result",
+                },
+            ],
+        )
+        self.assertEqual(
+            saved_state.last_failure,
+            {
+                "stageCode": "open_confirmation_link",
+                "stageLabel": "打开确认链接",
+                "reason": "vend.email confirmation step returned unsuccessful result",
+                "retryable": True,
+            },
+        )
+
+    def test_producer_persists_concrete_fetch_confirmation_mail_exception(self):
+        manager = AliasEmailPoolManager(task_id="task-vend-email-fetch-failed")
+        state_store = mock.Mock()
+        state_store.load.return_value = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-service-pass",
+        )
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=False,
+            register_ok=True,
+            aliases=[],
+        )
+        runtime.fetch_confirmation_link = mock.Mock(side_effect=RuntimeError("mailbox timeout waiting for confirmation mail"))
+
+        producer = VendEmailAliasServiceProducer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://www.vend.email/auth/register",
+                "mailbox_base_url": "https://cxwsss.online/",
+                "mailbox_email": "admin@cxwsss.online",
+                "mailbox_password": "1103@Icity",
+                "alias_domain": "cxwsss.online",
+                "alias_count": 1,
+                "state_key": "vend-email-primary",
+            },
+            state_store=state_store,
+            runtime=runtime,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "mailbox timeout waiting for confirmation mail"):
+            producer.load_into(manager)
+
+        saved_state = state_store.save.call_args.args[0]
+        self.assertEqual(
+            saved_state.current_stage,
+            {"code": "fetch_confirmation_mail", "label": "查找确认邮件"},
+        )
+        self.assertEqual(
+            saved_state.last_failure,
+            {
+                "stageCode": "fetch_confirmation_mail",
+                "stageLabel": "查找确认邮件",
+                "reason": "mailbox timeout waiting for confirmation mail",
+                "retryable": True,
+            },
+        )
+        self.assertEqual(
+            saved_state.stage_history,
+            [
+                {"code": "register_submit", "label": "注册表单提交", "status": "completed"},
+                {
+                    "code": "fetch_confirmation_mail",
+                    "label": "查找确认邮件",
+                    "status": "failed",
+                    "detail": "mailbox timeout waiting for confirmation mail",
+                },
+            ],
+        )
 
     def test_producer_deduplicates_aliases_before_saving_state_and_leases(self):
         manager = AliasEmailPoolManager(task_id="task-vend-email-dedup")
@@ -1248,8 +1751,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],
         )
         saved_state = state_store.save.call_args.args[0]
-        self.assertNotEqual(saved_state.service_email, saved_state.mailbox_email)
-        self.assertNotEqual(saved_state.service_password, producer.source["mailbox_password"])
+        self.assertEqual(saved_state.service_email, saved_state.mailbox_email)
         self.assertEqual(
             getattr(saved_state, "known_aliases", None),
             ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],
@@ -1286,13 +1788,9 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             runtime=runtime,
         )
 
-        self.assertNotEqual(
+        self.assertEqual(
             state_store.load.return_value.service_email,
-            producer.source["mailbox_email"],
-        )
-        self.assertNotEqual(
-            state_store.load.return_value.service_password,
-            producer.source["mailbox_password"],
+            "vendcap202604170108@cxwsss.online",
         )
 
         with self.assertRaises(RuntimeError):
