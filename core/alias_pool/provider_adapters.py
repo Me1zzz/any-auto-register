@@ -42,6 +42,13 @@ class _SingleAliasProducerAdapter:
     def load_into(self, pool_manager) -> None:
         self.producer.load_into(pool_manager)
 
+    def ensure_available(self, pool_manager, *, minimum_count: int = 1) -> None:
+        ensure_available = getattr(self.producer, "ensure_available", None)
+        if callable(ensure_available):
+            ensure_available(pool_manager, minimum_count=minimum_count)
+            return
+        self.producer.load_into(pool_manager)
+
     def run_alias_generation_test(
         self,
         policy: AliasAutomationTestPolicy,

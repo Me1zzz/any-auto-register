@@ -12,7 +12,7 @@ from core.task_runtime import (
     SkipCurrentAttemptRequested,
     StopTaskRequested,
 )
-import time, json, asyncio, threading, logging
+import time, json, asyncio, threading, logging, traceback
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -127,6 +127,48 @@ def _log(task_id: str, msg: str):
     print(entry)
 
 
+def _format_alias_pool_service_name(source_kind: str) -> str:
+    normalized = str(source_kind or "").strip().lower()
+    if normalized == "vend_email":
+        return "vend"
+    if not normalized:
+        return "unknown"
+    return normalized.replace("_", " ")
+
+
+def _log_alias_pool_snapshot(task_id: str, pool_manager) -> None:
+    aliases_by_kind = pool_manager.snapshot_available_aliases_by_kind()
+    _log(task_id, "[AliasPool] 当前可用别名邮箱快照")
+    for source_kind, aliases in aliases_by_kind.items():
+        _log(
+            task_id,
+            f"[AliasPool] {_format_alias_pool_service_name(source_kind)}: {json.dumps(aliases, ensure_ascii=False)}",
+        )
+
+
+def _start_alias_pool_snapshot_poller(
+    task_id: str,
+    pool_manager,
+    stop_event: threading.Event,
+    *,
+    interval_seconds: float = 3.0,
+) -> threading.Thread:
+    def _poll() -> None:
+        while not stop_event.wait(interval_seconds):
+            try:
+                _log_alias_pool_snapshot(task_id, pool_manager)
+            except Exception as exc:
+                _log(task_id, f"[AliasPool] 快照轮询异常: {exc}")
+
+    thread = threading.Thread(
+        target=_poll,
+        name=f"alias-pool-snapshot-{task_id}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
 def _save_task_log(
     platform: str, email: str, status: str, error: str = "", detail: dict | None = None
 ):
@@ -182,7 +224,10 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
     from core.alias_pool.provider_registry import AliasProviderRegistry
     from core.alias_pool.secureinseconds_provider import build_secureinseconds_alias_provider
     from core.alias_pool.simplelogin_provider import build_simplelogin_alias_provider
-    from core.alias_pool.vend_email_service import build_vend_email_alias_service_producer
+    from core.alias_pool.vend_email_service import (
+        build_vend_email_alias_service_producer,
+        build_vend_email_task_state_store,
+    )
     from core.base_platform import RegisterConfig
     from core.db import save_account
     from core.base_mailbox import create_mailbox
@@ -231,12 +276,15 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 spec: AliasProviderSourceSpec,
                 context: AliasProviderBootstrapContext,
             ) -> AliasProvider:
+                vend_state_store_factory = context.state_store_factory
+                if not callable(vend_state_store_factory):
+                    vend_state_store_factory = build_vend_email_task_state_store
                 return cast(
                     AliasProvider,
                     build_vend_email_alias_service_producer(
                         source=dict(spec.raw_source or {}),
                         task_id=context.task_id,
-                        state_store_factory=context.state_store_factory,
+                        state_store_factory=vend_state_store_factory,
                         runtime_builder=context.runtime_builder,
                     ),
                 )
@@ -247,8 +295,28 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             )
             if not pool_config.get("enabled"):
                 return None
+            _log(
+                task_id,
+                "[AliasPool] configured sources: "
+                + json.dumps(
+                    [
+                        {
+                            "id": str(source.get("id") or ""),
+                            "type": str(source.get("type") or ""),
+                            "alias_count": source.get("alias_count"),
+                            "count": source.get("count"),
+                            "state_key": source.get("state_key"),
+                        }
+                        for source in list(pool_config.get("sources") or [])
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
 
-            manager = AliasEmailPoolManager(task_id=task_id)
+            manager = AliasEmailPoolManager(
+                task_id=task_id,
+                log_fn=lambda message: _log(task_id, message),
+            )
             registry = AliasProviderRegistry()
             registry.register("static_list", build_static_list_alias_provider)
             registry.register("simple_generator", build_simple_generator_alias_provider)
@@ -264,7 +332,6 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             for spec in build_alias_provider_source_specs(pool_config):
                 producer = bootstrap.build(spec=spec, context=bootstrap_context)
                 manager.register_source(producer)
-                producer.load_into(manager)
             return manager
 
         from core.config_store import config_store
@@ -279,6 +346,19 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             if task_alias_pool is not None
             else None
         )
+        alias_pool_snapshot_stop_event = threading.Event()
+        alias_pool_snapshot_thread = None
+        if task_alias_pool is not None:
+            task_alias_pool.start_background_refill(
+                low_watermark=10,
+                interval_seconds=0.5,
+            )
+            alias_pool_snapshot_thread = _start_alias_pool_snapshot_poller(
+                task_id,
+                task_alias_pool,
+                alias_pool_snapshot_stop_event,
+                interval_seconds=3.0,
+            )
 
         def _do_one(i: int):
             nonlocal next_start_time, workspace_success
@@ -422,6 +502,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 if _proxy and proxy_pool is not None:
                     proxy_pool.report_fail(_proxy)
                 _log(task_id, f"[FAIL] 注册失败: {e}")
+                for line in traceback.format_exc().strip().splitlines():
+                    _log(task_id, f"[TRACE] {line}")
                 _save_task_log(
                     req.platform,
                     current_email,
@@ -462,6 +544,10 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                             pending.cancel()
     except Exception as e:
         _log(task_id, f"致命错误: {e}")
+        if 'alias_pool_snapshot_stop_event' in locals():
+            alias_pool_snapshot_stop_event.set()
+        if 'alias_pool_snapshot_thread' in locals() and alias_pool_snapshot_thread is not None:
+            alias_pool_snapshot_thread.join(timeout=1.0)
         _task_store.finish(
             task_id,
             status="failed",
@@ -474,6 +560,10 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
         return
 
     final_status = "stopped" if control.is_stop_requested() or stopped else "done"
+    if 'alias_pool_snapshot_stop_event' in locals():
+        alias_pool_snapshot_stop_event.set()
+    if 'alias_pool_snapshot_thread' in locals() and alias_pool_snapshot_thread is not None:
+        alias_pool_snapshot_thread.join(timeout=1.0)
     if final_status == "stopped":
         summary = (
             f"任务已停止: 成功 {success} 个, 跳过 {skipped} 个, 失败 {len(errors)} 个"

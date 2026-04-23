@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
-from smstome_tool import (
-    PhoneEntry,
-    get_unused_phone,
-    mark_phone_blacklisted,
-    parse_country_slugs,
-    update_global_phone_list,
-    wait_for_otp,
-)
+if TYPE_CHECKING:
+    from smstome_tool import PhoneEntry
+
+
+def _smstome_tool():
+    import smstome_tool
+
+    return smstome_tool
 
 
 def _to_positive_int(value, default: int, *, minimum: int = 1) -> int:
@@ -31,13 +31,30 @@ class SMSToMePhoneService:
         self.config = dict(config or {})
         self.log_fn = log_fn or (lambda _msg: None)
         self.cookie_header = str(self.config.get("smstome_cookie", "") or "").strip() or None
-        self.country_slugs = parse_country_slugs(self.config.get("smstome_country_slugs"))
-        self.global_file = Path(str(self.config.get("smstome_global_file") or "smstome_all_numbers.txt"))
-        self.used_numbers_dir = Path(str(self.config.get("smstome_used_numbers_dir") or "smstome_used"))
-        self.task_name = str(self.config.get("smstome_task_name") or "chatgpt_add_phone").strip() or "chatgpt_add_phone"
+        self.country_slugs = _smstome_tool().parse_country_slugs(
+            self.config.get("smstome_country_slugs")
+        )
+        self.global_file = Path(
+            str(self.config.get("smstome_global_file") or "smstome_all_numbers.txt")
+        )
+        self.used_numbers_dir = Path(
+            str(self.config.get("smstome_used_numbers_dir") or "smstome_used")
+        )
+        self.task_name = (
+            str(self.config.get("smstome_task_name") or "chatgpt_add_phone").strip()
+            or "chatgpt_add_phone"
+        )
         self.max_attempts = _to_positive_int(self.config.get("smstome_phone_attempts"), 3)
-        self.otp_timeout_seconds = _to_positive_int(self.config.get("smstome_otp_timeout_seconds"), 45, minimum=10)
-        self.poll_interval_seconds = _to_positive_int(self.config.get("smstome_poll_interval_seconds"), 5, minimum=1)
+        self.otp_timeout_seconds = _to_positive_int(
+            self.config.get("smstome_otp_timeout_seconds"),
+            45,
+            minimum=10,
+        )
+        self.poll_interval_seconds = _to_positive_int(
+            self.config.get("smstome_poll_interval_seconds"),
+            5,
+            minimum=1,
+        )
         self.sync_max_pages_per_country = _to_positive_int(
             self.config.get("smstome_sync_max_pages_per_country"),
             5,
@@ -63,7 +80,7 @@ class SMSToMePhoneService:
             raise RuntimeError("未找到 SMSToMe 号码池文件，且未配置 smstome_cookie")
 
         self.log_fn("SMSToMe 号码池不存在，开始自动同步...")
-        count = update_global_phone_list(
+        count = _smstome_tool().update_global_phone_list(
             cookie_header=self.cookie_header,
             countries=self.country_slugs or None,
             output_path=self.global_file,
@@ -75,7 +92,7 @@ class SMSToMePhoneService:
 
     def acquire_phone(self, *, exclude_prefixes: Optional[Iterable[str]] = None) -> Optional[PhoneEntry]:
         self.ensure_pool_ready()
-        return get_unused_phone(
+        return _smstome_tool().get_unused_phone(
             self.task_name,
             country_slug=self.country_slugs or None,
             global_file=self.global_file,
@@ -84,11 +101,15 @@ class SMSToMePhoneService:
         )
 
     def mark_blacklisted(self, phone: str) -> None:
-        mark_phone_blacklisted(self.task_name, phone, used_numbers_dir=self.used_numbers_dir)
+        _smstome_tool().mark_phone_blacklisted(
+            self.task_name,
+            phone,
+            used_numbers_dir=self.used_numbers_dir,
+        )
 
     def wait_for_code(self, entry: PhoneEntry, *, timeout: Optional[int] = None) -> Optional[str]:
         wait_seconds = _to_positive_int(timeout, self.otp_timeout_seconds, minimum=10)
-        return wait_for_otp(
+        return _smstome_tool().wait_for_otp(
             entry,
             cookie_header=self.cookie_header,
             timeout=wait_seconds,

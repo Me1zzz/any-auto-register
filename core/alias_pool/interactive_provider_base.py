@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Mapping, Sequence
 
 from core.alias_pool.base import AliasEmailLease
+from core.alias_pool.base import AliasSourceState
 from core.alias_pool.interactive_provider_models import (
     AliasCreatedRecord,
     AliasDomainOption,
@@ -39,36 +40,103 @@ class InteractiveAliasProviderBase:
         self._context = context
         self.source_id = spec.source_id
         self._state_repository = self._build_state_repository()
+        self._state = AliasSourceState.IDLE
 
     @property
     def provider_type(self) -> str:
         return self.source_kind
 
-    def load_into(self, pool_manager) -> None:
-        result = self.run_alias_generation_test(
-            AliasAutomationTestPolicy(
-                fresh_service_account=False,
-                persist_state=True,
-                minimum_alias_count=max(int(self._spec.desired_alias_count or 0), 1),
-                capture_enabled=True,
-            )
-        )
-        if not result.ok:
-            raise RuntimeError(result.error or result.failure.reason or f"{self.provider_type} alias generation failed")
+    def state(self) -> AliasSourceState:
+        return self._state
 
-        for item in list(result.aliases or []):
-            email = str(item.get("email") or "").strip().lower()
-            if not email:
-                continue
-            pool_manager.add_lease(
-                AliasEmailLease(
-                    alias_email=email,
-                    real_mailbox_email=str(result.account_identity.real_mailbox_email or "").strip().lower(),
-                    source_kind=self.provider_type,
-                    source_id=self.source_id,
-                    source_session_id=self._spec.state_key or self.source_id,
-                )
+    def load_into(self, pool_manager) -> None:
+        self.ensure_available(
+            pool_manager,
+            minimum_count=max(int(self._spec.desired_alias_count or 0), 1),
+        )
+
+    def ensure_available(self, pool_manager, *, minimum_count: int = 1) -> None:
+        requested = max(int(minimum_count or 0), 1)
+        state = self._state_repository.load()
+        known_aliases_before = self._dedupe_alias_values(list(state.known_aliases or []))
+        cap = max(int(self._spec.desired_alias_count or 0), 1)
+        if len(known_aliases_before) >= cap:
+            self._state = AliasSourceState.EXHAUSTED
+            return
+
+        self._state = AliasSourceState.ACTIVE
+        target_total = min(cap, len(known_aliases_before) + requested)
+        try:
+            context = self.ensure_authenticated_context("task_pool")
+            context = self._seed_context_from_state(context, state)
+
+            for requirement in self.resolve_verification_requirements(context):
+                context = self.satisfy_verification_requirement(requirement, context)
+
+            domains = list(self.discover_alias_domains(context))
+            context = replace(context, domain_options=domains)
+
+            aliases = self._dedupe_alias_items(
+                [{"email": email} for email in known_aliases_before]
+                + [
+                    dict(item)
+                    for item in list(self.list_existing_aliases(context))
+                    if isinstance(item, dict)
+                ]
             )
+
+            creation_attempt_count = len(aliases)
+            stalled_attempt_count = 0
+            max_stalled_attempts = max(target_total, 1)
+            while len(aliases) < target_total and stalled_attempt_count < max_stalled_attempts:
+                previous_alias_count = len(aliases)
+                creation_attempt_count += 1
+                domain = self.pick_domain_option(domains, creation_attempt_count)
+                created = self.create_alias(
+                    context=context,
+                    domain=domain,
+                    alias_index=creation_attempt_count,
+                )
+                aliases.append({"email": created.email, **dict(created.metadata or {})})
+                aliases = self._dedupe_alias_items(aliases)
+                if len(aliases) == previous_alias_count:
+                    stalled_attempt_count += 1
+                    continue
+                stalled_attempt_count = 0
+
+            self._update_state_snapshot(
+                state,
+                context=context,
+                domains=domains,
+                aliases=aliases,
+                timeline=[],
+                capture_summary=[],
+            )
+            self._state_repository.save(state)
+
+            for email in [
+                item["email"]
+                for item in aliases
+                if str(item.get("email") or "").strip().lower() not in set(known_aliases_before)
+            ]:
+                pool_manager.add_lease(
+                    AliasEmailLease(
+                        alias_email=str(email).strip().lower(),
+                        real_mailbox_email=str(state.real_mailbox_email or context.real_mailbox_email or "").strip().lower(),
+                        source_kind=self.provider_type,
+                        source_id=self.source_id,
+                        source_session_id=self._spec.state_key or self.source_id,
+                    )
+                )
+
+            self._state = (
+                AliasSourceState.EXHAUSTED
+                if len(self._dedupe_alias_values(list(state.known_aliases or []))) >= cap
+                else AliasSourceState.ACTIVE
+            )
+        except Exception:
+            self._state = AliasSourceState.FAILED
+            raise
 
     def run_alias_generation_test(self, policy: AliasAutomationTestPolicy) -> AliasAutomationTestResult:
         timeline: list[AliasProviderStage] = []
@@ -257,6 +325,17 @@ class InteractiveAliasProviderBase:
             normalized = dict(item)
             normalized["email"] = email
             unique_aliases.append(normalized)
+        return unique_aliases
+
+    def _dedupe_alias_values(self, aliases: Sequence[object]) -> list[str]:
+        unique_aliases: list[str] = []
+        seen: set[str] = set()
+        for item in aliases:
+            email = str(item or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            unique_aliases.append(email)
         return unique_aliases
 
     def _update_state_from_context(self, state: InteractiveProviderState, context: AuthenticatedProviderContext) -> None:

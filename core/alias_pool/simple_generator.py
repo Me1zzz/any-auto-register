@@ -27,6 +27,8 @@ class SimpleAliasGeneratorProducer:
         self.count = count
         self.middle_length_min = middle_length_min
         self.middle_length_max = middle_length_max
+        self._remaining_count = max(int(count or 0), 0)
+        self._generated_aliases: set[str] = set()
         self._state = AliasSourceState.IDLE
 
     def state(self) -> AliasSourceState:
@@ -37,15 +39,19 @@ class SimpleAliasGeneratorProducer:
         middle = "".join(random.choices(self._ALPHABET, k=middle_length))
         return f"{self.prefix}{middle}{self.suffix}"
 
-    def load_into(self, manager: AliasEmailPoolManager) -> None:
+    def ensure_available(self, manager: AliasEmailPoolManager, *, minimum_count: int = 1) -> None:
+        requested = max(int(minimum_count or 0), 1)
+        if self._remaining_count <= 0:
+            self._state = AliasSourceState.EXHAUSTED
+            return
         self._state = AliasSourceState.ACTIVE
         try:
-            seen: set[str] = set()
-            while len(seen) < self.count:
+            produced = 0
+            while self._remaining_count > 0 and produced < requested:
                 alias_email = self._generate_alias_email()
-                if alias_email in seen:
+                if alias_email in self._generated_aliases:
                     continue
-                seen.add(alias_email)
+                self._generated_aliases.add(alias_email)
                 manager.add_lease(
                     AliasEmailLease(
                         alias_email=alias_email,
@@ -55,7 +61,13 @@ class SimpleAliasGeneratorProducer:
                         source_session_id="simple-generator",
                     )
                 )
-            self._state = AliasSourceState.EXHAUSTED
+                self._remaining_count -= 1
+                produced += 1
+            if self._remaining_count <= 0:
+                self._state = AliasSourceState.EXHAUSTED
         except Exception:
             self._state = AliasSourceState.FAILED
             raise
+
+    def load_into(self, manager: AliasEmailPoolManager) -> None:
+        self.ensure_available(manager, minimum_count=self._remaining_count)

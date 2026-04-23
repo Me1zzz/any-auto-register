@@ -131,6 +131,16 @@ class _MailboxReceiptMatcher:
 
         return False
 
+    def match_mailbox_target(self, message: dict[str, Any], mailbox_email: str) -> bool:
+        normalized_target = self._normalize_email_value(mailbox_email)
+        if not normalized_target:
+            return False
+
+        recipient_addresses = set()
+        for key in ("recipt", "receipt", "recipient", "recipients", "toEmail"):
+            recipient_addresses.update(self._collect_recipient_addresses(message.get(key)))
+        return normalized_target in recipient_addresses
+
 
 class VerificationExecutor:
     def __init__(self, *, client: VerificationExecutorHTTPClient | None = None, confirmation_reader: Any = None):
@@ -186,16 +196,22 @@ class VerificationExecutor:
 
         deadline = time.monotonic() + 180
         last_error = ""
+        receipt_matcher = _MailboxReceiptMatcher()
         while time.monotonic() < deadline:
             try:
-                messages = mailbox._list_mails("")
+                messages = mailbox._list_mails(target_email)
+                if not messages:
+                    messages = mailbox._list_mails("")
                 last_error = ""
             except Exception as exc:
                 last_error = str(exc).strip()
                 time.sleep(5)
                 continue
             for message in messages:
-                if not mailbox._match_alias_receipt(message, target_email):
+                if not (
+                    receipt_matcher.match_mailbox_target(message, target_email)
+                    or mailbox._match_alias_receipt(message, target_email)
+                ):
                     continue
                 content = " ".join(
                     [

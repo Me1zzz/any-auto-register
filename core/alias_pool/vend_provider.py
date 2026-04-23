@@ -62,26 +62,67 @@ class VendAliasProvider:
     def state(self):
         return self._state
 
-    def load_into(self, pool_manager) -> None:
-        policy = AliasAutomationTestPolicy(
-            fresh_service_account=False,
-            persist_state=True,
-            minimum_alias_count=max(int(self.source.get("alias_count") or self._spec.desired_alias_count or 0), 0),
-            capture_enabled=True,
+    def ensure_available(self, pool_manager, *, minimum_count: int = 1) -> None:
+        requested = max(int(minimum_count or 0), 1)
+        target_cap = max(
+            int(self.source.get("alias_count") or self._spec.desired_alias_count or 0),
+            1,
         )
-        state, alias_items, error = self._execute_policy(policy=policy, raise_on_error=True)
-        for alias in alias_items:
-            pool_manager.add_lease(
-                AliasEmailLease(
-                    alias_email=str(alias.get("email") or ""),
-                    real_mailbox_email=str(getattr(state, "mailbox_email", "") or "").strip().lower(),
-                    source_kind=self.source_kind,
-                    source_id=self.source_id,
-                    source_session_id=str(getattr(state, "state_key", "") or self._spec.state_key),
-                )
+        state = self._state_repository.load()
+        known_aliases_before = list(dict.fromkeys(list(getattr(state, "known_aliases", []) or [])))
+        if len(known_aliases_before) >= target_cap:
+            self._state = AliasSourceState.EXHAUSTED
+            return
+
+        try:
+            self._state = AliasSourceState.ACTIVE
+            self._reset_run_state(state)
+            self._ensure_session(state)
+            target_total = min(target_cap, len(known_aliases_before) + requested)
+            alias_items = self._load_alias_items(state, target_total)
+            state.known_aliases = [
+                str(item.get("email") or "").strip().lower()
+                for item in alias_items
+                if str(item.get("email") or "").strip()
+            ]
+            self._telemetry.record_stage(
+                state,
+                "aliases_ready",
+                status="completed",
+                detail=f"预览共 {len(alias_items)} 个别名",
             )
-        if error:
-            raise RuntimeError(error)
+            state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
+            state.last_error = ""
+            self._telemetry.record_stage(state, "save_state", status="completed")
+            self._state_repository.save(state)
+            known_before_set = set(known_aliases_before)
+            for item in alias_items:
+                email = str(item.get("email") or "").strip().lower()
+                if not email or email in known_before_set:
+                    continue
+                pool_manager.add_lease(
+                    AliasEmailLease(
+                        alias_email=email,
+                        real_mailbox_email=str(getattr(state, "mailbox_email", "") or "").strip().lower(),
+                        source_kind=self.source_kind,
+                        source_id=self.source_id,
+                        source_session_id=str(getattr(state, "state_key", "") or self._spec.state_key),
+                    )
+                )
+            self._state = (
+                AliasSourceState.EXHAUSTED
+                if len(state.known_aliases) >= target_cap
+                else AliasSourceState.ACTIVE
+            )
+        except Exception:
+            self._state = AliasSourceState.FAILED
+            raise
+
+    def load_into(self, pool_manager) -> None:
+        self.ensure_available(
+            pool_manager,
+            minimum_count=max(int(self.source.get("alias_count") or self._spec.desired_alias_count or 0), 1),
+        )
 
     def run_alias_generation_test(self, policy: AliasAutomationTestPolicy):
         _state, alias_items, _error = self._execute_policy(policy=policy, raise_on_error=False)
