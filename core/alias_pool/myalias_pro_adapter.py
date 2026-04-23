@@ -5,12 +5,18 @@ import re
 import secrets
 import time
 from urllib.parse import urlsplit
+import random
+import string
+
 from dataclasses import replace
 
 from .interactive_provider_models import AliasCreatedRecord, AuthenticatedProviderContext
 
 
 class MyAliasProAdapter:
+    _PREFIX_START_ALPHABET = string.ascii_lowercase
+    _PREFIX_ALPHABET = string.ascii_lowercase + string.digits
+
     _BROWSER_SIGNUP_SUCCESS_TEXT = "Account Created Successfully"
     _BROWSER_TEXTBOX_NAMES = {
         "username": "Username",
@@ -408,7 +414,7 @@ class MyAliasProAdapter:
         return result
 
     def submit_alias_creation(self, protocol_runtime, browser_runtime, context, domain_option, alias_index: int) -> AliasCreatedRecord:
-        local_part = f"myalias-{alias_index}"
+        local_part = self._build_random_local_part()
         emails_payload = dict((context.session_state or {}).get("myalias_emails_payload") or {})
         available_emails = emails_payload.get("emails") if isinstance(emails_payload.get("emails"), list) else []
         primary_email = context.service_account_email
@@ -437,3 +443,9 @@ class MyAliasProAdapter:
             email=created_alias,
             metadata={"confirmed": True, "transport_mode": "protocol-http"},
         )
+
+    def _build_random_local_part(self) -> str:
+        length = random.randint(6, 10)
+        start = random.choice(self._PREFIX_START_ALPHABET)
+        remainder = "".join(random.choices(self._PREFIX_ALPHABET, k=length - 1))
+        return f"{start}{remainder}"

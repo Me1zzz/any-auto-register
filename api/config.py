@@ -319,6 +319,15 @@ def alias_generation_test(body: AliasGenerationTestRequest):
             draft_config["sources"] = []
         merged.update(draft_config)
 
+    pool_config = normalize_cloudmail_alias_pool_config(merged, task_id="alias-test")
+    runtime_builder = None
+    for source in list(pool_config.get("sources") or []):
+        if str(source.get("id") or "") != body.sourceId:
+            continue
+        if str(source.get("type") or "").strip().lower() == "myalias_pro":
+            runtime_builder = _default_alias_test_runtime_builder
+        break
+
     policy = AliasAutomationTestPolicy(
         fresh_service_account=True,
         persist_state=False,
@@ -328,10 +337,9 @@ def alias_generation_test(body: AliasGenerationTestRequest):
     context = AliasProviderBootstrapContext(
         task_id="alias-test",
         purpose="automation_test",
-        runtime_builder=_default_alias_test_runtime_builder,
+        runtime_builder=runtime_builder,
         test_policy=policy,
     )
-    pool_config = normalize_cloudmail_alias_pool_config(merged, task_id="alias-test")
 
     result = AliasAutomationTestService(policy=policy, context=context).run(
         pool_config=pool_config,
