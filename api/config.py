@@ -19,7 +19,7 @@ router = APIRouter(prefix="/config", tags=["config"])
 
 def _default_alias_test_runtime_builder(_source: dict):
     source = dict(_source or {})
-    if str(source.get("type") or "").strip().lower() == "myalias_pro":
+    if str(source.get("type") or "").strip().lower() in {"myalias_pro", "emailshield"}:
         return ProtocolSiteRuntime(), None
     return ProtocolSiteRuntime(), BrowserFallbackRuntime(headless=False)
 
@@ -320,11 +320,13 @@ def alias_generation_test(body: AliasGenerationTestRequest):
         merged.update(draft_config)
 
     pool_config = normalize_cloudmail_alias_pool_config(merged, task_id="alias-test")
-    runtime_builder = None
+    runtime_builder = _default_alias_test_runtime_builder
     for source in list(pool_config.get("sources") or []):
         if str(source.get("id") or "") != body.sourceId:
             continue
         if str(source.get("type") or "").strip().lower() == "myalias_pro":
+            runtime_builder = _default_alias_test_runtime_builder
+        elif str(source.get("type") or "").strip().lower() == "emailshield":
             runtime_builder = _default_alias_test_runtime_builder
         break
 

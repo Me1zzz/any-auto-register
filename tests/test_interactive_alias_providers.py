@@ -42,10 +42,11 @@ class _MemoryStore:
 
 
 class _FakeHTTPResponse:
-    def __init__(self, status_code, payload):
+    def __init__(self, status_code, payload, *, url=""):
         self.status_code = status_code
         self._payload = payload
         self.text = payload if isinstance(payload, str) else ""
+        self.url = url or ""
 
     def json(self):
         if isinstance(self._payload, Exception):
@@ -764,16 +765,13 @@ class InteractiveProviderContractTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertIn(
-            (
-                "https://myalias.pro/api/aliases/",
-                {
-                    "aliasEmail": "myalias-2@myalias.pro",
-                    "comment": "automation test",
-                    "forwardToEmails": ["generated@example.com"],
-                },
-            ),
-            fake_runtime.post_json_calls,
+            "https://myalias.pro/api/aliases/",
+            [item[0] for item in fake_runtime.post_json_calls],
         )
+        alias_create_call = next(item for item in fake_runtime.post_json_calls if item[0] == "https://myalias.pro/api/aliases/")
+        self.assertEqual(alias_create_call[1]["comment"], "automation test")
+        self.assertEqual(alias_create_call[1]["forwardToEmails"], ["generated@example.com"])
+        self.assertRegex(str(alias_create_call[1]["aliasEmail"] or ""), r"^[a-z0-9]+@myalias\.pro$")
 
     def test_myalias_pro_reports_protocol_signup_failure_without_browser_fallback(self):
         fake_runtime = _FakeMyAliasProtocolFailureRuntime()
@@ -846,8 +844,8 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
             context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
         )
 
-    def _response(self, status_code, payload):
-        return _FakeHTTPResponse(status_code, payload)
+    def _response(self, status_code, payload, *, url=""):
+        return _FakeHTTPResponse(status_code, payload, url=url)
 
     def _session_for_discovery(self):
         return _FakeHTTPSession(
@@ -899,10 +897,8 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
                 provider_type="emailshield",
                 state_key="emailshield-primary",
                 desired_alias_count=3,
-                confirmation_inbox_config={"account_email": "real@example.com", "match_email": "real@example.com"},
                 provider_config={
-                    "register_url": "https://emailshield.app/accounts/register/",
-                    "login_url": "https://emailshield.app/accounts/login/",
+                    "accounts": [{"email": "loga@fst.cxwsss.online"}],
                 },
             ),
             context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
@@ -910,10 +906,78 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
 
         requirements = provider.resolve_verification_requirements(provider.ensure_authenticated_context("alias_test"))
 
-        self.assertEqual(
-            requirements,
-            [VerificationRequirement(kind="account_email", label="验证 EmailShield 账号邮箱", inbox_role="confirmation_inbox")],
+        self.assertEqual(requirements, [])
+
+    def test_emailshield_uses_existing_account_and_default_password_contract(self):
+        provider = EmailShieldAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="emailshield-primary",
+                provider_type="emailshield",
+                state_key="emailshield-primary",
+                desired_alias_count=2,
+                provider_config={"accounts": [{"email": "loga@fst.cxwsss.online"}]},
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
         )
+
+        context = provider.ensure_authenticated_context("alias_test")
+
+        self.assertEqual(context.service_account_email, "loga@fst.cxwsss.online")
+        self.assertEqual(context.real_mailbox_email, "loga@fst.cxwsss.online")
+        self.assertEqual(context.service_password, "1103@loga")
+
+    def test_emailshield_shared_flow_logs_in_and_confirms_created_alias_from_alias_list(self):
+        provider = EmailShieldAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="emailshield-primary",
+                provider_type="emailshield",
+                state_key="emailshield-primary",
+                desired_alias_count=2,
+                provider_config={"accounts": [{"email": "loga@fst.cxwsss.online"}]},
+            ),
+            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+        )
+        base_url = "https://emailshield.app"
+        session = _FakeHTTPSession(
+            {
+                ("GET", f"{base_url}/accounts/login/"): [
+                    self._response(200, '<form><input type="hidden" name="csrfmiddlewaretoken" value="csrf-login"></form>')
+                ],
+                ("POST", f"{base_url}/accounts/login/"): [
+                    self._response(200, "dashboard", url=f"{base_url}/accounts/dashboard/")
+                ],
+                ("GET", f"{base_url}/aliases/"): [
+                    self._response(200, "existing j93hpkszv5@emailshield.cc"),
+                    self._response(200, "existing j93hpkszv5@emailshield.cc"),
+                    self._response(200, "existing j93hpkszv5@emailshield.cc created z9newalias@emailshield.cc"),
+                ],
+                ("GET", f"{base_url}/aliases/create/"): [
+                    self._response(200, '<form><input type="hidden" name="csrfmiddlewaretoken" value="csrf-create"></form>')
+                ],
+                ("POST", f"{base_url}/aliases/create/"): [
+                    self._response(200, "created", url=f"{base_url}/aliases/")
+                ],
+            }
+        )
+
+        with patch.object(provider, "_build_http_session", return_value=session):
+            result = provider.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=2,
+                    capture_enabled=True,
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual([item["email"] for item in result.aliases], [
+            "j93hpkszv5@emailshield.cc",
+            "z9newalias@emailshield.cc",
+        ])
+        self.assertEqual(result.account_identity.service_password, "1103@loga")
+        self.assertEqual(result.capture_summary[0].kind, "open_login")
+        self.assertEqual(result.capture_summary[-1].kind, "list_aliases")
 
     def test_simplelogin_selects_first_account_and_falls_back_password_to_email(self):
         provider = self._build_simplelogin_provider()

@@ -54,10 +54,10 @@ export default function AliasGenerationSourceCard({
   const baseName = ['sources', index] as (string | number)[]
   const isSimpleGenerator = sourceType === 'simple_generator'
   const isSimpleLogin = sourceType === 'simplelogin'
+  const isEmailShield = sourceType === 'emailshield'
   const showCommonInteractiveFields = INTERACTIVE_SOURCE_TYPES.has(sourceType)
   const showConfirmationInbox = sourceType === 'myalias_pro'
     || sourceType === 'secureinseconds'
-    || sourceType === 'emailshield'
     || sourceType === 'alias_email'
 
   return (
@@ -188,21 +188,29 @@ export default function AliasGenerationSourceCard({
           </div>
         ) : null}
 
-        {sourceType === 'emailshield' ? (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: 12,
-            }}
-          >
-            <Form.Item label="注册地址 URL" name={[...baseName, 'provider_config', 'register_url']} style={{ marginBottom: 0 }}>
-              <Input placeholder="https://emailshield.app/accounts/register/" />
-            </Form.Item>
-            <Form.Item label="登录页 URL" name={[...baseName, 'provider_config', 'login_url']} style={{ marginBottom: 0 }}>
-              <Input placeholder="https://emailshield.app/accounts/login/" />
-            </Form.Item>
-          </div>
+        {isEmailShield ? (
+          <>
+            <div
+              style={{
+                padding: 12,
+                borderRadius: token.borderRadius,
+                border: `1px solid ${token.colorBorder}`,
+                background: token.colorBgElevated,
+              }}
+            >
+              <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                EmailShield 服务账号
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                运行时会直接使用已注册好的 EmailShield 邮箱登录，再访问创建页提交 `email_destination` 与 `note` 表单；这里不再暴露注册页、登录页或确认邮箱字段。
+              </Typography.Text>
+              <SimpleLoginAccountListEditor
+                name={[...baseName, 'provider_config', 'accounts']}
+                providerLabel="EmailShield"
+                passwordHint="后端默认按“1103@邮箱前缀”的约定推导密码；如果账号密码与约定不同，也可以在保存的 source JSON 中显式补 password。"
+              />
+            </div>
+          </>
         ) : null}
 
         {isSimpleLogin ? (
@@ -272,7 +280,7 @@ export default function AliasGenerationSourceCard({
                 </Form.Item>
               )}
 
-              {(sourceType === 'myalias_pro' || sourceType === 'secureinseconds' || sourceType === 'emailshield') ? (
+              {(sourceType === 'myalias_pro' || sourceType === 'secureinseconds') ? (
                 <Form.Item label="确认邮箱密码" name={[...baseName, 'confirmation_inbox', 'account_password']} style={{ marginBottom: 0 }}>
                   <Input.Password placeholder="mail-pass" />
                 </Form.Item>

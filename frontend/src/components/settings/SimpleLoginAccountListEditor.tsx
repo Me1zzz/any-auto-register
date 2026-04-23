@@ -3,9 +3,15 @@ import { Button, Form, Input, Space, Typography } from 'antd'
 
 type Props = {
   name: (string | number)[]
+  providerLabel?: string
+  passwordHint?: string
 }
 
-export default function SimpleLoginAccountListEditor({ name }: Props) {
+export default function SimpleLoginAccountListEditor({
+  name,
+  providerLabel = 'SimpleLogin',
+  passwordHint = '后端会自动按“邮箱 = 密码”的约定执行登录。',
+}: Props) {
   return (
     <Form.List name={name}>
       {(fields, { add, remove }) => (
@@ -39,12 +45,12 @@ export default function SimpleLoginAccountListEditor({ name }: Props) {
 
           {fields.length === 0 ? (
             <Typography.Text type="secondary">
-              还没有配置 SimpleLogin 已注册账号。运行时会直接使用这些邮箱登录，密码默认等于邮箱本身。
+              还没有配置 {providerLabel} 已注册账号。运行时会直接使用这些邮箱登录。
             </Typography.Text>
           ) : null}
 
           <Typography.Text type="secondary">
-            每个邮箱都必须是已经在 SimpleLogin 完成注册和确认的账号；后端会自动按“邮箱 = 密码”的约定执行登录。
+            每个邮箱都必须是已经在 {providerLabel} 完成注册和确认的账号；{passwordHint}
           </Typography.Text>
 
           <Button

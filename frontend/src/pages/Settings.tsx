@@ -833,34 +833,36 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
               form={form}
               fieldKey="cloudmail_alias_emailshield_enabled"
               title="EmailShield"
-              description="启用后会把单实例 EmailShield source 加入 alias 池。"
+              description="启用后会把单实例 EmailShield source 加入 alias 池，并使用已注册邮箱直接登录创建别名。"
             >
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                <Form.Item label="Source ID" name="cloudmail_alias_emailshield_source_id" style={{ marginBottom: 0 }}>
-                  <Input placeholder="emailshield-primary" />
-                </Form.Item>
-                <Form.Item label="State Key" name="cloudmail_alias_emailshield_state_key" style={{ marginBottom: 0 }}>
-                  <Input placeholder="emailshield-primary" />
-                </Form.Item>
-                <Form.Item label="目标别名数" name="cloudmail_alias_emailshield_alias_count" style={{ marginBottom: 0 }}>
-                  <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
-                </Form.Item>
-                <Form.Item label="注册地址 URL" name="cloudmail_alias_emailshield_register_url" style={{ marginBottom: 0 }}>
-                  <Input placeholder="https://emailshield.app/accounts/register/" />
-                </Form.Item>
-                <Form.Item label="登录页 URL" name="cloudmail_alias_emailshield_login_url" style={{ marginBottom: 0 }}>
-                  <Input placeholder="https://emailshield.app/accounts/login/" />
-                </Form.Item>
-                <Form.Item label="确认邮箱账号" name="cloudmail_alias_emailshield_confirmation_email" style={{ marginBottom: 0 }}>
-                  <Input placeholder="real@example.com" />
-                </Form.Item>
-                <Form.Item label="确认邮箱密码" name="cloudmail_alias_emailshield_confirmation_password" style={{ marginBottom: 0 }}>
-                  <Input.Password placeholder="mail-pass" />
-                </Form.Item>
-                <Form.Item label="匹配邮箱" name="cloudmail_alias_emailshield_match_email" style={{ marginBottom: 0 }}>
-                  <Input placeholder="real@example.com" />
-                </Form.Item>
-              </div>
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="EmailShield 不需要注册和邮件确认"
+                  description="这里只维护已注册好的邮箱列表。后端会直接按“1103@邮箱前缀”的默认密码约定执行登录，并在官网登录后创建别名。"
+                />
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 320px)', gap: 12 }}>
+                  <Form.Item label="目标别名数" name="cloudmail_alias_emailshield_alias_count" style={{ marginBottom: 0 }}>
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                  </Form.Item>
+                </div>
+
+                <div style={{ padding: 12, borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa' }}>
+                  <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                    已注册好的邮箱列表
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                    前端只维护邮箱列表本身；运行时默认按“1103@邮箱前缀”推导密码，并直接在 EmailShield 官网页面完成登录与别名创建。
+                  </Typography.Text>
+                  <SimpleLoginAccountListEditor
+                    name={['cloudmail_alias_emailshield_accounts']}
+                    providerLabel="EmailShield"
+                    passwordHint="后端默认按“1103@邮箱前缀”的约定执行登录。"
+                  />
+                </div>
+              </Space>
             </AliasServiceToggleCard>
 
             <AliasServiceToggleCard

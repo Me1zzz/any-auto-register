@@ -1,5 +1,5 @@
 param(
-    [int]$BackendPort = 8000,
+    [int]$BackendPort = 8547,
     [int]$SolverPort = 8889,
     [int]$Grok2ApiPort = 8011,
     [int]$CLIProxyAPIPort = 8317,

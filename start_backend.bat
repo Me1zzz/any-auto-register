@@ -6,7 +6,7 @@ if "%ENV_NAME%"=="" set "ENV_NAME=any-auto-register"
 set "HOST=%HOST%"
 if "%HOST%"=="" set "HOST=0.0.0.0"
 set "PORT=%PORT%"
-if "%PORT%"=="" set "PORT=8000"
+if "%PORT%"=="" set "PORT=8547"
 set "RESTART_EXISTING=%RESTART_EXISTING%"
 if "%RESTART_EXISTING%"=="" set "RESTART_EXISTING=1"
 

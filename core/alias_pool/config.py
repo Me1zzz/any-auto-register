@@ -89,6 +89,29 @@ def _decode_interactive_source(item: dict[str, Any], source_id: str, provider_ty
         "state_key": _parse_string(item.get("state_key")) or source_id,
         "provider_config": _parse_provider_config(item.get("provider_config")),
     }
+    if provider_type == "emailshield":
+        provider_config = dict(normalized["provider_config"])
+        accounts = provider_config.get("accounts")
+        if isinstance(accounts, list):
+            sanitized_accounts: list[dict[str, str]] = []
+            seen_emails: set[str] = set()
+            for item in accounts:
+                if not isinstance(item, dict):
+                    continue
+                email = _parse_string(item.get("email")).lower()
+                if not email or email in seen_emails:
+                    continue
+                seen_emails.add(email)
+                sanitized_item = {"email": email}
+                password = _parse_string(item.get("password"))
+                if password:
+                    sanitized_item["password"] = password
+                label = _parse_string(item.get("label"))
+                if label:
+                    sanitized_item["label"] = label
+                sanitized_accounts.append(sanitized_item)
+            provider_config["accounts"] = sanitized_accounts
+        normalized["provider_config"] = provider_config
     confirmation_inbox = item.get("confirmation_inbox")
     if isinstance(confirmation_inbox, dict):
         normalized["confirmation_inbox"] = dict(confirmation_inbox)

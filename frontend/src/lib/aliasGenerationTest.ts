@@ -117,12 +117,8 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
-        confirmation_inbox: {
-          provider: 'cloudmail',
-        },
         provider_config: {
-          register_url: 'https://emailshield.app/accounts/register/',
-          login_url: 'https://emailshield.app/accounts/login/',
+          accounts: [{ email: '' }],
         },
       }
     case 'simplelogin':
@@ -215,11 +211,7 @@ export interface AliasGenerationTestDraftConfig {
   cloudmail_alias_emailshield_source_id?: unknown
   cloudmail_alias_emailshield_state_key?: unknown
   cloudmail_alias_emailshield_alias_count?: unknown
-  cloudmail_alias_emailshield_register_url?: unknown
-  cloudmail_alias_emailshield_login_url?: unknown
-  cloudmail_alias_emailshield_confirmation_email?: unknown
-  cloudmail_alias_emailshield_confirmation_password?: unknown
-  cloudmail_alias_emailshield_match_email?: unknown
+  cloudmail_alias_emailshield_accounts?: unknown
   cloudmail_alias_simplelogin_enabled?: unknown
   cloudmail_alias_simplelogin_source_id?: unknown
   cloudmail_alias_simplelogin_state_key?: unknown
@@ -1061,6 +1053,8 @@ function buildEmailShieldDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
 ): AliasGenerationTestDraftSource | null {
+  const preservedConfig = asRecord(preservedSource?.provider_config)
+
   return buildProviderSourceFromFixedFields({
     type: 'emailshield',
     enabled: draftConfig.cloudmail_alias_emailshield_enabled,
@@ -1069,25 +1063,10 @@ function buildEmailShieldDraftSource(
     aliasCount: draftConfig.cloudmail_alias_emailshield_alias_count,
     preservedSource,
     providerConfig: {
-      register_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_emailshield_register_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.register_url),
-      login_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_emailshield_login_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
+      accounts:
+        sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_emailshield_accounts)
+        ?? sanitizeSimpleLoginAccounts(preservedConfig?.accounts),
     },
-    confirmationInbox: buildConfirmationInboxConfig({
-      provider: 'cloudmail',
-      accountEmail:
-        draftConfig.cloudmail_alias_emailshield_confirmation_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.account_email,
-      accountPassword:
-        draftConfig.cloudmail_alias_emailshield_confirmation_password
-        ?? asRecord(preservedSource?.confirmation_inbox)?.account_password,
-      matchEmail:
-        draftConfig.cloudmail_alias_emailshield_match_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
-    }),
   })
 }
 
@@ -1237,11 +1216,7 @@ export function deriveCloudmailAliasServiceFormValues(
   | 'cloudmail_alias_emailshield_source_id'
   | 'cloudmail_alias_emailshield_state_key'
   | 'cloudmail_alias_emailshield_alias_count'
-  | 'cloudmail_alias_emailshield_register_url'
-  | 'cloudmail_alias_emailshield_login_url'
-  | 'cloudmail_alias_emailshield_confirmation_email'
-  | 'cloudmail_alias_emailshield_confirmation_password'
-  | 'cloudmail_alias_emailshield_match_email'
+  | 'cloudmail_alias_emailshield_accounts'
   | 'cloudmail_alias_simplelogin_enabled'
   | 'cloudmail_alias_simplelogin_source_id'
   | 'cloudmail_alias_simplelogin_state_key'
@@ -1268,7 +1243,6 @@ export function deriveCloudmailAliasServiceFormValues(
     typeof draftConfig.cloudmail_alias_enabled !== 'undefined'
       && String(draftConfig.cloudmail_alias_enabled).trim() !== ''
   const secureInSecondsConfirmation = asRecord(secureInSecondsSource?.confirmation_inbox)
-  const emailShieldConfirmation = asRecord(emailShieldSource?.confirmation_inbox)
   const aliasEmailConfirmation = asRecord(aliasEmailSource?.confirmation_inbox)
   const secureInSecondsConfig = asRecord(secureInSecondsSource?.provider_config)
   const emailShieldConfig = asRecord(emailShieldSource?.provider_config)
@@ -1310,11 +1284,10 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_emailshield_source_id: stringifyFieldValue(emailShieldSource?.id),
     cloudmail_alias_emailshield_state_key: stringifyFieldValue(emailShieldSource?.state_key),
     cloudmail_alias_emailshield_alias_count: normalizeNumericFieldValue(emailShieldSource?.alias_count),
-    cloudmail_alias_emailshield_register_url: stringifyFieldValue(emailShieldConfig?.register_url),
-    cloudmail_alias_emailshield_login_url: stringifyFieldValue(emailShieldConfig?.login_url),
-    cloudmail_alias_emailshield_confirmation_email: stringifyFieldValue(emailShieldConfirmation?.account_email),
-    cloudmail_alias_emailshield_confirmation_password: stringifyFieldValue(emailShieldConfirmation?.account_password),
-    cloudmail_alias_emailshield_match_email: stringifyFieldValue(emailShieldConfirmation?.match_email),
+    cloudmail_alias_emailshield_accounts:
+      sanitizeSimpleLoginAccounts(emailShieldConfig?.accounts)
+      ?? sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_emailshield_accounts)
+      ?? [],
     cloudmail_alias_simplelogin_enabled: Boolean(simpleLoginSource),
     cloudmail_alias_simplelogin_source_id: stringifyFieldValue(simpleLoginSource?.id),
     cloudmail_alias_simplelogin_state_key: stringifyFieldValue(simpleLoginSource?.state_key),
@@ -1379,11 +1352,7 @@ export function createAliasGenerationTestDraftConfig(
     cloudmail_alias_emailshield_source_id: formValues.cloudmail_alias_emailshield_source_id,
     cloudmail_alias_emailshield_state_key: formValues.cloudmail_alias_emailshield_state_key,
     cloudmail_alias_emailshield_alias_count: formValues.cloudmail_alias_emailshield_alias_count,
-    cloudmail_alias_emailshield_register_url: formValues.cloudmail_alias_emailshield_register_url,
-    cloudmail_alias_emailshield_login_url: formValues.cloudmail_alias_emailshield_login_url,
-    cloudmail_alias_emailshield_confirmation_email: formValues.cloudmail_alias_emailshield_confirmation_email,
-    cloudmail_alias_emailshield_confirmation_password: formValues.cloudmail_alias_emailshield_confirmation_password,
-    cloudmail_alias_emailshield_match_email: formValues.cloudmail_alias_emailshield_match_email,
+    cloudmail_alias_emailshield_accounts: formValues.cloudmail_alias_emailshield_accounts,
     cloudmail_alias_simplelogin_enabled: formValues.cloudmail_alias_simplelogin_enabled,
     cloudmail_alias_simplelogin_source_id: formValues.cloudmail_alias_simplelogin_source_id,
     cloudmail_alias_simplelogin_state_key: formValues.cloudmail_alias_simplelogin_state_key,

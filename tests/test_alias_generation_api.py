@@ -253,6 +253,46 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(len(body["aliases"]), 3)
         self.assertEqual(body["stages"][1]["code"], "verify_account_email")
 
+    def test_backend_normalize_preserves_emailshield_existing_account_source_shape(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "emailshield-primary",
+                        "type": "emailshield",
+                        "alias_count": 3,
+                        "state_key": "emailshield-primary",
+                        "provider_config": {
+                            "accounts": [
+                                {"email": "loga@fst.cxwsss.online"},
+                                {"email": "juso@fst.cxwsss.online"},
+                            ],
+                        },
+                    }
+                ],
+            },
+            task_id="alias-test",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "emailshield-primary",
+                    "type": "emailshield",
+                    "alias_count": 3,
+                    "state_key": "emailshield-primary",
+                    "provider_config": {
+                        "accounts": [
+                            {"email": "loga@fst.cxwsss.online"},
+                            {"email": "juso@fst.cxwsss.online"},
+                        ],
+                    },
+                }
+            ],
+        )
+
     def test_backend_normalize_builds_myalias_source_from_fixed_cloudmail_fields(self):
         result = normalize_cloudmail_alias_pool_config(
             {

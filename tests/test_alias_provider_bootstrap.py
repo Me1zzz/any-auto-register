@@ -130,11 +130,10 @@ class AliasProviderBootstrapTests(unittest.TestCase):
                         "type": "emailshield",
                         "alias_count": 2,
                         "state_key": "emailshield-primary",
-                        "confirmation_inbox": {
-                            "provider": "cloudmail",
-                            "account_email": "real@example.com",
-                            "account_password": "mail-pass",
-                            "match_email": "real@example.com",
+                        "provider_config": {
+                            "accounts": [
+                                {"email": "loga@fst.cxwsss.online"},
+                            ],
                         },
                     },
                     {
