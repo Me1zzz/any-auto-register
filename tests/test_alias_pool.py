@@ -308,8 +308,8 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "cloudmail_domain": "",
                     "cloudmail_subdomain": "",
                     "cloudmail_timeout": 30,
-                    "alias_domain": "serf.me",
-                    "alias_domain_id": "42",
+                    "alias_domain": "",
+                    "alias_domain_id": "",
                     "alias_count": 5,
                     "state_key": "vend-state",
                     "confirmation_inbox": {
@@ -1859,13 +1859,14 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertTrue(runtime.register(state, source))
         self.assertTrue(runtime.confirm("https://www.vend.email/auth/confirmation?confirmation_token=abc123", source))
         self.assertTrue(runtime.login(state, source))
-        created = runtime.create_forwarder(
-            state,
-            source,
-            local_part="vendcapdemo20260417",
-            domain_id="42",
-            recipient="admin@cxwsss.online",
-        )
+        with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("42", "serf.me")):
+            created = runtime.create_forwarder(
+                state,
+                source,
+                local_part="vendcapdemo20260417",
+                domain_id="42",
+                recipient="admin@cxwsss.online",
+            )
 
         self.assertEqual(
             created,
@@ -1912,7 +1913,8 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         runtime = VendEmailContractRuntime(executor=executor)
 
         listed = runtime.list_forwarders(state, source)
-        aliases = runtime.create_aliases(state, source, 1)
+        with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("42", "serf.me")):
+            aliases = runtime.create_aliases(state, source, 1)
 
         self.assertEqual(
             listed,
@@ -1932,6 +1934,65 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertIn("forwarder[local_part]=vendcap202604170108", executor.calls[2]["request_body_excerpt"])
         self.assertIn("forwarder[domain_id]=42", executor.calls[2]["request_body_excerpt"])
         self.assertIn("forwarder[recipient]=admin%40cxwsss.online", executor.calls[2]["request_body_excerpt"])
+
+    def test_parse_forwarder_domain_options_reads_live_domain_selector_from_html(self):
+        runtime = VendEmailContractRuntime(executor=_FakeVendEmailExecutor([]))
+
+        parsed = runtime._parse_forwarder_domain_options(FORWARDERS_NEW_FORM_HTML)
+
+        self.assertEqual(parsed, [("42", "serf.me"), ("27", "berrymail.cc")])
+
+    def test_resolve_forwarder_domain_id_randomly_selects_from_multiple_live_domains(self):
+        runtime = VendEmailContractRuntime(executor=_FakeVendEmailExecutor([]))
+
+        with mock.patch(
+            "core.alias_pool.vend_email_service.random.choice",
+            return_value=("27", "berrymail.cc"),
+        ) as random_choice:
+            resolved = runtime._resolve_forwarder_domain_id(
+                html=FORWARDERS_NEW_FORM_HTML,
+                source={"alias_domain": "serf.me", "alias_domain_id": "42"},
+                fallback_domain_id="42",
+            )
+
+        self.assertEqual(resolved, "27")
+        random_choice.assert_called_once_with([("42", "serf.me"), ("27", "berrymail.cc")])
+
+    def test_create_forwarder_submits_randomly_selected_live_domain_id(self):
+        state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-secret",
+            mailbox_email="admin@cxwsss.online",
+        )
+        source = {
+            "register_url": "https://www.vend.email",
+            "mailbox_email": "admin@cxwsss.online",
+            "alias_domain": "serf.me",
+            "alias_domain_id": "42",
+        }
+        executor = _FakeVendEmailExecutor(
+            [
+                _html_execution(html=FORWARDERS_NEW_FORM_HTML, final_url="https://www.vend.email/forwarders/new"),
+                _html_execution(
+                    html=FORWARDER_DETAIL_HTML,
+                    final_url="https://www.vend.email/forwarders/vendcap202604170108@serf.me",
+                    status=302,
+                ),
+            ]
+        )
+        runtime = VendEmailContractRuntime(executor=executor)
+
+        with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("27", "berrymail.cc")):
+            runtime.create_forwarder(
+                state,
+                source,
+                local_part="vendcapdemo20260417",
+                domain_id="42",
+                recipient="admin@cxwsss.online",
+            )
+
+        self.assertIn("forwarder[domain_id]=27", executor.calls[1]["request_body_excerpt"])
 
 
 class VendAliasProviderAutomationTestTests(unittest.TestCase):

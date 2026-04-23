@@ -7,8 +7,8 @@ from .provider_contracts import AliasProviderSourceSpec
 VEND_EMAIL_DEFAULT_CONFIG = {
     "source_id": "vend-email-primary",
     "register_url": "https://www.vend.email/auth/register",
-    "alias_domain": "serf.me",
-    "alias_domain_id": "42",
+    "alias_domain": "",
+    "alias_domain_id": "",
 }
 
 INTERACTIVE_PROVIDER_TYPES = {

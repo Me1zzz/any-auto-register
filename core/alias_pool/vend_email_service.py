@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from html import unescape
 import inspect
 import ipaddress
+import random
 import re
 import secrets
 import socket
@@ -996,35 +997,32 @@ class VendEmailContractRuntime:
         source: dict,
         fallback_domain_id: str,
     ) -> str:
-        alias_domain = str(source.get("alias_domain") or "").strip().lower()
         configured_domain_id = str(source.get("alias_domain_id") or fallback_domain_id or "").strip()
+        parsed_options = self._parse_forwarder_domain_options(html)
+        if parsed_options:
+            if len(parsed_options) == 1:
+                return parsed_options[0][0]
+            return str(random.choice(parsed_options)[0] or configured_domain_id)
+        return configured_domain_id
+
+    def _parse_forwarder_domain_options(self, html: str) -> list[tuple[str, str]]:
         select_match = re.search(
             r'<select[^>]+name=["\']forwarder\[domain_id\]["\'][^>]*>(.*?)</select>',
             html,
             re.IGNORECASE | re.DOTALL,
         )
         if not select_match:
-            return configured_domain_id
+            return []
         options_html = select_match.group(1)
-        parsed_options: list[tuple[str, str, bool]] = []
+        parsed_options: list[tuple[str, str]] = []
         for option_match in re.finditer(r'<option\b([^>]*)>(.*?)</option>', options_html, re.IGNORECASE | re.DOTALL):
             attrs = self._parse_html_attributes(option_match.group(1))
-            value = attrs.get("value", "")
+            value = str(attrs.get("value", "") or "").strip()
+            if not value:
+                continue
             label = unescape(re.sub(r'<[^>]+>', '', option_match.group(2))).strip().lower()
-            is_selected = 'selected' in option_match.group(1).lower()
-            parsed_options.append((value, label, is_selected))
-        if alias_domain:
-            for value, label, _ in parsed_options:
-                if alias_domain in label:
-                    return value or configured_domain_id
-        if configured_domain_id:
-            for value, _, _ in parsed_options:
-                if value == configured_domain_id:
-                    return configured_domain_id
-        for value, _, is_selected in parsed_options:
-            if is_selected and value:
-                return value
-        return parsed_options[0][0] if parsed_options else configured_domain_id
+            parsed_options.append((value, label))
+        return parsed_options
 
     def _forwarder_from_payload(
         self,

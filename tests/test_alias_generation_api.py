@@ -94,8 +94,8 @@ class AliasGenerationApiTests(unittest.TestCase):
                     "cloudmail_domain": "",
                     "cloudmail_subdomain": "",
                     "cloudmail_timeout": 30,
-                    "alias_domain": "serf.me",
-                    "alias_domain_id": "42",
+                    "alias_domain": "",
+                    "alias_domain_id": "",
                     "alias_count": 4,
                     "state_key": "vend-email-primary",
                     "confirmation_inbox": {
