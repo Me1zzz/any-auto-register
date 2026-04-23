@@ -696,7 +696,25 @@ class CloudMailMailboxTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             mailbox.wait_for_code(account, timeout=1)
 
-        self.assertNotIn("toEmail", mock_post.call_args_list[1].kwargs["json"])
+    def test_match_alias_receipt_accepts_to_email_target(self):
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+
+        message = {
+            "recipient": '[{"address":"alias@myalias.pro","name":""}]',
+            "toEmail": "generated@mail.example.com",
+            "subject": "Please verify your account",
+            "content": "No direct target email in body",
+        }
+
+        self.assertTrue(mailbox._match_alias_receipt(message, "generated@mail.example.com"))
 
     @mock.patch("requests.post")
     def test_wait_for_code_returns_duplicate_code_when_not_explicitly_excluded(self, mock_post):

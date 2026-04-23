@@ -11,6 +11,13 @@ VEND_EMAIL_DEFAULT_CONFIG = {
     "alias_domain_id": "42",
 }
 
+MYALIAS_PRO_DEFAULT_CONFIG = {
+    "source_id": "myalias-pro-primary",
+    "signup_url": "https://myalias.pro/signup/",
+    "login_url": "https://myalias.pro/login/",
+    "alias_url": "https://myalias.pro/aliases/",
+}
+
 INTERACTIVE_PROVIDER_TYPES = {
     "myalias_pro",
     "secureinseconds",
@@ -85,6 +92,53 @@ def _decode_interactive_source(item: dict[str, Any], source_id: str, provider_ty
     confirmation_inbox = item.get("confirmation_inbox")
     if isinstance(confirmation_inbox, dict):
         normalized["confirmation_inbox"] = dict(confirmation_inbox)
+    return normalized
+
+
+def _build_interactive_cloudmail_confirmation_inbox_config(
+    item: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(payload or {})
+    raw_confirmation_inbox = item.get("confirmation_inbox")
+    confirmation_inbox = raw_confirmation_inbox if isinstance(raw_confirmation_inbox, dict) else {}
+
+    provider = _parse_string(confirmation_inbox.get("provider")) or "cloudmail"
+    api_base = _parse_string(confirmation_inbox.get("api_base") or confirmation_inbox.get("base_url")) or _parse_string(
+        payload.get("cloudmail_api_base")
+    )
+    admin_email = _parse_string(confirmation_inbox.get("admin_email") or confirmation_inbox.get("account_email")) or _parse_string(
+        payload.get("cloudmail_admin_email")
+    )
+    admin_password = _parse_string(confirmation_inbox.get("admin_password") or confirmation_inbox.get("account_password")) or _parse_string(
+        payload.get("cloudmail_admin_password")
+    )
+    domain = confirmation_inbox.get("domain") or payload.get("cloudmail_domain") or ""
+    subdomain = _parse_string(confirmation_inbox.get("subdomain")) or _parse_string(payload.get("cloudmail_subdomain"))
+    timeout = _parse_int(
+        confirmation_inbox.get("timeout")
+        if confirmation_inbox.get("timeout") not in (None, "")
+        else payload.get("cloudmail_timeout"),
+        30,
+    )
+    match_email = _parse_string(confirmation_inbox.get("match_email"))
+
+    normalized: dict[str, Any] = {"provider": provider}
+    if api_base:
+        normalized["api_base"] = api_base
+    if admin_email:
+        normalized["admin_email"] = admin_email
+        normalized["account_email"] = admin_email
+    if admin_password:
+        normalized["admin_password"] = admin_password
+        normalized["account_password"] = admin_password
+    if domain:
+        normalized["domain"] = domain
+    if subdomain:
+        normalized["subdomain"] = subdomain
+    normalized["timeout"] = timeout
+    if match_email:
+        normalized["match_email"] = match_email
     return normalized
 
 
@@ -381,6 +435,23 @@ def _build_cloudmail_alias_sources(payload: dict[str, Any]) -> list[dict[str, An
                     0,
                 ),
                 "state_key": vend_state_key,
+            }
+        )
+
+    if _parse_bool(payload.get("cloudmail_alias_myalias_pro_enabled")):
+        myalias_source_id = str(MYALIAS_PRO_DEFAULT_CONFIG["source_id"])
+        sources.append(
+            {
+                "id": myalias_source_id,
+                "type": "myalias_pro",
+                "alias_count": max(_parse_int(payload.get("cloudmail_alias_myalias_pro_alias_count"), 0), 0),
+                "state_key": myalias_source_id,
+                "confirmation_inbox": _build_interactive_cloudmail_confirmation_inbox_config({}, payload),
+                "provider_config": {
+                    "signup_url": str(MYALIAS_PRO_DEFAULT_CONFIG["signup_url"]),
+                    "login_url": str(MYALIAS_PRO_DEFAULT_CONFIG["login_url"]),
+                    "alias_url": str(MYALIAS_PRO_DEFAULT_CONFIG["alias_url"]),
+                },
             }
         )
 

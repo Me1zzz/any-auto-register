@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from core.alias_pool.myalias_pro_provider import MyAliasProProvider
 from core.alias_pool.alias_email_provider import AliasEmailProvider
@@ -120,6 +121,137 @@ class _ExistingAccountProvider(ExistingAccountAliasProviderBase):
 
     def create_alias(self, *, context, domain, alias_index):
         return AliasCreatedRecord(email=f"existing-{alias_index}@example.com")
+
+
+class _FakeProtocolResponse:
+    def __init__(self, *, text: str, status_code: int = 200, url: str = "https://myalias.pro/"):
+        self.text = text
+        self.status_code = status_code
+        self.url = url
+        self.headers = {}
+
+
+class _FakeMyAliasRuntime:
+    def __init__(self):
+        self.cookies = [{"name": "sessionid", "value": "cookie-1"}]
+        self.alias_html = "myalias-existing@myalias.pro myalias-created-2@myalias.pro myalias-created-3@myalias.pro"
+        self.post_json_calls = []
+
+    def get(self, url, **kwargs):
+        if "verify-registration" in url or "verify" in url:
+            return _FakeProtocolResponse(text="verified", url=url)
+        if url.rstrip("/") == "https://myalias.pro/api/auth/me":
+            return _FakeProtocolResponse(
+                text='{"success":true,"user":{"username":"generated-user","email":"generated@example.com","verified":true}}',
+                url=url,
+            )
+        if url.rstrip("/") == "https://myalias.pro/api/emails":
+            return _FakeProtocolResponse(
+                text='{"success":true,"emails":[{"id":1,"email":"generated@example.com","type":"ACCOUNT","primary":true,"verified":true}]}',
+                url=url,
+            )
+        if url.rstrip("/") == "https://myalias.pro/api/aliases/random":
+            return _FakeProtocolResponse(
+                text='{"success":true,"alias":"bay.black","fullEmail":"bay.black@myalias.pro"}',
+                url=url,
+            )
+        if url.rstrip("/") == "https://myalias.pro/api/aliases":
+            return _FakeProtocolResponse(
+                text='{"success":true,"aliases":[{"aliasEmail":"myalias-existing@myalias.pro"}],"stats":{"totalAliases":1}}',
+                url=url,
+            )
+        return _FakeProtocolResponse(text="ok", url=url)
+
+    def post_form(self, url, data, **kwargs):
+        if "signup" in url:
+            return _FakeProtocolResponse(text="Check your email! Account Created Successfully!", url=url)
+        if "login" in url:
+            return _FakeProtocolResponse(text="logged-in", url="https://myalias.pro/aliases/")
+        if "aliases" in url:
+            local_part = str(data.get("local_part") or "myalias-created").strip()
+            email = f"{local_part}@myalias.pro"
+            self.alias_html = f"myalias-existing@myalias.pro {email}"
+            return _FakeProtocolResponse(text=email, url=url)
+        return _FakeProtocolResponse(text="posted", url=url)
+
+    def post_json(self, url, payload, **kwargs):
+        self.post_json_calls.append((url, dict(payload or {})))
+        if url.rstrip("/") == "https://myalias.pro/api/auth/signup":
+            return _FakeProtocolResponse(
+                text='{"success":true,"message":"Account created successfully! Please check your email to verify your account before logging in.","verificationRequired":true,"user":{"id":1,"username":"generated-user","email":"generated@example.com","plan":"FREE"}}',
+                url=url,
+            )
+        if url.rstrip("/") == "https://myalias.pro/api/auth/login":
+            return _FakeProtocolResponse(
+                text='{"success":true,"requiresTwoFactor":false,"user":{"username":"generated-user","email":"generated@example.com","verified":true}}',
+                url=url,
+            )
+        if url.rstrip("/") == "https://myalias.pro/api/aliases":
+            alias_email = str(payload.get("aliasEmail") or "myalias-created@myalias.pro").strip().lower()
+            return _FakeProtocolResponse(
+                text='{"success":true,"alias":{"aliasEmail":"' + alias_email + '"}}',
+                url=url,
+                status_code=201,
+            )
+        return _FakeProtocolResponse(text='{"success":true}', url=url)
+
+    def extract_hidden_inputs(self, html, *, names):
+        return {"csrfmiddlewaretoken": "csrf-1"}
+
+    def export_cookies(self):
+        return list(self.cookies)
+
+
+class _FakeMyAliasProtocolFailureRuntime(_FakeMyAliasRuntime):
+    def post_json(self, url, payload, **kwargs):
+        if url.rstrip("/") == "https://myalias.pro/api/auth/signup":
+            return _FakeProtocolResponse(text='{"success":false,"message":"signup failed"}', url=url, status_code=400)
+        return super().post_json(url, payload, **kwargs)
+
+    def post_form(self, url, data, **kwargs):
+        if "signup" in url:
+            return _FakeProtocolResponse(text="signup failed", url=url)
+        return super().post_form(url, data, **kwargs)
+
+
+class _FakeBrowserRuntime:
+    def __init__(self):
+        self.opened = []
+        self.fills = []
+        self.clicks = []
+        self.role_clicks = []
+        self._url = "https://myalias.pro/signup/"
+
+    def open(self, url):
+        self.opened.append(url)
+        self._url = url
+
+    def fill(self, selector, value):
+        self.fills.append((selector, value))
+
+    def click(self, selector):
+        self.clicks.append(selector)
+
+    def click_role(self, role, name):
+        self.role_clicks.append((role, name))
+        if role == "button" and name == "Create Account":
+            self._url = "https://myalias.pro/signup/complete"
+        if role == "button" and name == "Sign In":
+            self._url = "https://myalias.pro/aliases/"
+
+    def current_url(self):
+        return self._url
+
+    def content(self):
+        return "Check your email! Account Created Successfully!"
+
+    def wait_for_text(self, text):
+        if text != "Account Created Successfully":
+            raise AssertionError(text)
+
+    def wait_for_url(self, pattern):
+        if "aliases" in pattern:
+            self._url = "https://myalias.pro/aliases/"
 
 
 class InteractiveAliasProviderBaseTests(unittest.TestCase):
@@ -404,6 +536,7 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
 
 class InteractiveProviderContractTests(unittest.TestCase):
     def test_myalias_pro_maps_account_email_verification_to_shared_requirement(self):
+        fake_runtime = _FakeMyAliasRuntime()
         provider = MyAliasProProvider(
             spec=AliasProviderSourceSpec(
                 source_id="myalias-primary",
@@ -411,16 +544,30 @@ class InteractiveProviderContractTests(unittest.TestCase):
                 state_key="myalias-primary",
                 desired_alias_count=3,
                 confirmation_inbox_config={
+                    "api_base": "https://mailbox.example",
+                    "admin_email": "admin@example.com",
+                    "admin_password": "mail-pass",
                     "account_email": "real@example.com",
                     "account_password": "mail-pass",
                     "match_email": "real@example.com",
+                    "domain": "example.com",
                 },
                 provider_config={
                     "signup_url": "https://myalias.pro/signup/",
                     "login_url": "https://myalias.pro/login/",
+                    "alias_url": "https://myalias.pro/aliases/",
                 },
             ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda source: (fake_runtime, None),
+                confirmation_reader=mock.Mock(
+                    fetch_confirmation=mock.Mock(
+                        return_value=type("_Result", (), {"confirm_url": "https://myalias.pro/verify/token-1", "error": ""})()
+                    )
+                ),
+            ),
         )
 
         requirements = provider.resolve_verification_requirements(provider.ensure_authenticated_context("alias_test"))
@@ -430,34 +577,98 @@ class InteractiveProviderContractTests(unittest.TestCase):
             [VerificationRequirement(kind="account_email", label="验证服务账号邮箱", inbox_role="confirmation_inbox")],
         )
 
-    def test_myalias_pro_shared_loop_maps_requirement_to_verify_account_email_stage(self):
-        provider = MyAliasProProvider(
-            spec=AliasProviderSourceSpec(
-                source_id="myalias-primary",
-                provider_type="myalias_pro",
-                state_key="myalias-primary",
-                desired_alias_count=3,
-                confirmation_inbox_config={
-                    "account_email": "real@example.com",
-                    "account_password": "mail-pass",
-                    "match_email": "real@example.com",
-                },
-                provider_config={
-                    "signup_url": "https://myalias.pro/signup/",
-                    "login_url": "https://myalias.pro/login/",
-                },
-            ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
-        )
+    def test_myalias_pro_generates_separate_service_account_email_from_cloudmail(self):
+        fake_runtime = _FakeMyAliasRuntime()
 
-        result = provider.run_alias_generation_test(
-            AliasAutomationTestPolicy(
-                fresh_service_account=True,
-                persist_state=False,
-                minimum_alias_count=3,
-                capture_enabled=True,
+        class _GeneratedMailbox:
+            email = "generated@example.com"
+
+        mailbox_mock = mock.Mock()
+        mailbox_mock.get_email.return_value = _GeneratedMailbox()
+
+        with mock.patch("core.alias_pool.myalias_pro_provider.CloudMailMailbox", return_value=mailbox_mock):
+            provider = MyAliasProProvider(
+                spec=AliasProviderSourceSpec(
+                    source_id="myalias-primary",
+                    provider_type="myalias_pro",
+                    state_key="myalias-primary",
+                    desired_alias_count=1,
+                    confirmation_inbox_config={
+                        "api_base": "https://mailbox.example",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "mail-pass",
+                        "account_email": "real@example.com",
+                        "account_password": "mail-pass",
+                        "match_email": "real@example.com",
+                        "domain": "example.com",
+                    },
+                    provider_config={
+                        "signup_url": "https://myalias.pro/signup/",
+                        "login_url": "https://myalias.pro/login/",
+                        "alias_url": "https://myalias.pro/aliases/",
+                    },
+                ),
+                context=AliasProviderBootstrapContext(
+                    task_id="alias-test",
+                    purpose="automation_test",
+                    runtime_builder=lambda source: (fake_runtime, None),
+                ),
             )
-        )
+
+            context = provider.ensure_authenticated_context("alias_test")
+
+        self.assertEqual(context.service_account_email, "generated@example.com")
+        self.assertEqual(context.confirmation_inbox_email, "real@example.com")
+        self.assertEqual(context.real_mailbox_email, "real@example.com")
+        self.assertNotEqual(context.service_account_email, context.confirmation_inbox_email)
+
+    def test_myalias_pro_shared_loop_maps_requirement_to_verify_account_email_stage(self):
+        fake_runtime = _FakeMyAliasRuntime()
+        mailbox_mock = mock.Mock()
+        mailbox_mock.get_email.return_value = type("_MailboxAccount", (), {"email": "generated@example.com"})()
+
+        with mock.patch("core.alias_pool.myalias_pro_provider.CloudMailMailbox", return_value=mailbox_mock):
+            provider = MyAliasProProvider(
+                spec=AliasProviderSourceSpec(
+                    source_id="myalias-primary",
+                    provider_type="myalias_pro",
+                    state_key="myalias-primary",
+                    desired_alias_count=3,
+                    confirmation_inbox_config={
+                        "api_base": "https://mailbox.example",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "mail-pass",
+                        "account_email": "real@example.com",
+                        "account_password": "mail-pass",
+                        "match_email": "real@example.com",
+                        "domain": "example.com",
+                    },
+                    provider_config={
+                        "signup_url": "https://myalias.pro/signup/",
+                        "login_url": "https://myalias.pro/login/",
+                        "alias_url": "https://myalias.pro/aliases/",
+                    },
+                ),
+                context=AliasProviderBootstrapContext(
+                    task_id="alias-test",
+                    purpose="automation_test",
+                    runtime_builder=lambda source: (fake_runtime, None),
+                    confirmation_reader=mock.Mock(
+                        fetch_confirmation=mock.Mock(
+                            return_value=type("_Result", (), {"confirm_url": "https://myalias.pro/verify/token-1", "error": ""})()
+                        )
+                    ),
+                ),
+            )
+
+            result = provider.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                )
+            )
 
         self.assertTrue(result.ok)
         self.assertEqual(
@@ -471,6 +682,107 @@ class InteractiveProviderContractTests(unittest.TestCase):
                 "aliases_ready",
             ],
         )
+
+    def test_myalias_pro_http_create_alias_uses_real_payload_shape(self):
+        fake_runtime = _FakeMyAliasRuntime()
+        mailbox_mock = mock.Mock()
+        mailbox_mock.get_email.return_value = type("_MailboxAccount", (), {"email": "generated@example.com"})()
+
+        with mock.patch("core.alias_pool.myalias_pro_provider.CloudMailMailbox", return_value=mailbox_mock):
+            provider = MyAliasProProvider(
+                spec=AliasProviderSourceSpec(
+                    source_id="myalias-primary",
+                    provider_type="myalias_pro",
+                    state_key="myalias-primary",
+                    desired_alias_count=2,
+                    confirmation_inbox_config={
+                        "api_base": "https://mailbox.example",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "mail-pass",
+                        "account_email": "real@example.com",
+                        "account_password": "mail-pass",
+                        "match_email": "real@example.com",
+                        "domain": "example.com",
+                    },
+                    provider_config={
+                        "signup_url": "https://myalias.pro/signup/",
+                        "login_url": "https://myalias.pro/login/",
+                        "alias_url": "https://myalias.pro/dashboard/",
+                    },
+                ),
+                context=AliasProviderBootstrapContext(
+                    task_id="alias-test",
+                    purpose="automation_test",
+                    runtime_builder=lambda source: (fake_runtime, None),
+                    confirmation_reader=mock.Mock(
+                        fetch_confirmation=mock.Mock(
+                            return_value=type("_Result", (), {"confirm_url": "https://myalias.pro/api/auth/verify-registration?token=abc", "error": ""})()
+                        )
+                    ),
+                ),
+            )
+
+            result = provider.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=2,
+                    capture_enabled=True,
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn(
+            (
+                "https://myalias.pro/api/aliases/",
+                {
+                    "aliasEmail": "myalias-2@myalias.pro",
+                    "comment": "automation test",
+                    "forwardToEmails": ["generated@example.com"],
+                },
+            ),
+            fake_runtime.post_json_calls,
+        )
+
+    def test_myalias_pro_reports_protocol_signup_failure_without_browser_fallback(self):
+        fake_runtime = _FakeMyAliasProtocolFailureRuntime()
+        fake_browser = _FakeBrowserRuntime()
+        mailbox_mock = mock.Mock()
+        mailbox_mock.get_email.return_value = type("_MailboxAccount", (), {"email": "generated@example.com"})()
+
+        with mock.patch("core.alias_pool.myalias_pro_provider.CloudMailMailbox", return_value=mailbox_mock):
+            provider = MyAliasProProvider(
+                spec=AliasProviderSourceSpec(
+                    source_id="myalias-primary",
+                    provider_type="myalias_pro",
+                    state_key="myalias-primary",
+                    desired_alias_count=1,
+                    confirmation_inbox_config={
+                        "api_base": "https://mailbox.example",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "mail-pass",
+                        "account_email": "real@example.com",
+                        "account_password": "mail-pass",
+                        "match_email": "real@example.com",
+                        "domain": "example.com",
+                    },
+                    provider_config={
+                        "signup_url": "https://myalias.pro/signup/",
+                        "login_url": "https://myalias.pro/login/",
+                        "alias_url": "https://myalias.pro/aliases/",
+                    },
+                ),
+                context=AliasProviderBootstrapContext(
+                    task_id="alias-test",
+                    purpose="automation_test",
+                    runtime_builder=lambda source: (fake_runtime, fake_browser),
+                ),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "signup failed"):
+                provider.ensure_authenticated_context("alias_test")
+
+        self.assertEqual(fake_browser.opened, [])
 
 
 class EmailShieldAndSimpleLoginTests(unittest.TestCase):

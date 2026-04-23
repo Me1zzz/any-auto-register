@@ -27,6 +27,15 @@ from .probe import AliasProbeResult
 from .vend_email_service import build_vend_email_alias_service_producer
 
 
+def classify_probe_result_level(*, source_type: str, ok: bool, alias_email: str, failure_stage_code: str, runtime_evidence: dict) -> str:
+    evidence = dict(runtime_evidence or {})
+    if evidence.get("live_flow") and evidence.get("live_alias_creation") and evidence.get("confirmed_alias_creation") and ok:
+        return "real_flow_complete"
+    if evidence.get("live_flow"):
+        return "real_flow_partial"
+    return "contract_ok"
+
+
 class _VendEmailAliasProviderAdapter:
     source_kind = "vend_email"
 

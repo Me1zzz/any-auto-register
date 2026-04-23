@@ -1368,6 +1368,8 @@ class CloudMailMailbox(BaseMailbox):
             return True
 
         for key in (
+            "toEmail",
+            "toName",
             "sendEmail",
             "sendName",
             "from",

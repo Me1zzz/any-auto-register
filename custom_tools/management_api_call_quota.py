@@ -641,6 +641,42 @@ def decode_management_result_body(result: Dict[str, Any]) -> Any:
     return body
 
 
+def extract_upstream_error_from_result(result: Dict[str, Any]) -> Optional[str]:
+    body = result.get("body")
+    if body is None:
+        return None
+
+    if isinstance(body, str):
+        text = body.strip()
+        if not text:
+            return None
+        try:
+            parsed_body = json.loads(text)
+        except json.JSONDecodeError:
+            return compact_text(text)
+    else:
+        parsed_body = body
+
+    if isinstance(parsed_body, dict):
+        prioritized_parts: List[str] = []
+        for key in ("error", "message", "detail", "msg", "code", "type"):
+            value = parsed_body.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    prioritized_parts.append(text)
+                continue
+            prioritized_parts.append(json.dumps(value, ensure_ascii=False))
+        if prioritized_parts:
+            return compact_text(" | ".join(prioritized_parts))
+
+    if isinstance(parsed_body, (dict, list)):
+        return compact_text(json.dumps(parsed_body, ensure_ascii=False))
+    return compact_text(parsed_body)
+
+
 def extract_used_percent_from_parsed_body(parsed_body: Any) -> float:
     if not isinstance(parsed_body, dict):
         raise RuntimeError("upstream body JSON is not an object")
@@ -890,12 +926,23 @@ def build_batch_row(
             auth_index=auth_index,
             recipe=recipe,
         )
+        upstream_status_code = coerce_optional_int(result.get("status_code"))
+        if upstream_status_code is not None and upstream_status_code >= 400:
+            upstream_error = extract_upstream_error_from_result(result)
+            return QuotaTableRow(
+                auth_index=auth_index,
+                name=name,
+                upstream_status_code=upstream_status_code,
+                used_percent=None,
+                quota_refresh_time=None,
+                error=upstream_error or f"upstream returned status_code {upstream_status_code}",
+            )
         used_percent, extraction_error = extract_used_percent_from_result(result)
         quota_refresh_time, refresh_error = extract_quota_refresh_time_from_result(result)
         return QuotaTableRow(
             auth_index=auth_index,
             name=name,
-            upstream_status_code=coerce_optional_int(result.get("status_code")),
+            upstream_status_code=upstream_status_code,
             used_percent=used_percent,
             quota_refresh_time=quota_refresh_time,
             error=combine_error_messages(extraction_error, refresh_error),

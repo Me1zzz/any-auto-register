@@ -177,6 +177,12 @@ export interface AliasGenerationTestDraftSource extends Record<string, unknown> 
 }
 
 export interface AliasGenerationTestDraftConfig {
+  cloudmail_api_base?: unknown
+  cloudmail_admin_email?: unknown
+  cloudmail_admin_password?: unknown
+  cloudmail_domain?: unknown
+  cloudmail_subdomain?: unknown
+  cloudmail_timeout?: unknown
   cloudmail_alias_enabled?: unknown
   cloudmail_alias_emails?: unknown
   cloudmail_alias_service_static_enabled?: unknown
@@ -195,14 +201,7 @@ export interface AliasGenerationTestDraftConfig {
   cloudmail_alias_vend_source_id?: unknown
   cloudmail_alias_vend_state_key?: unknown
   cloudmail_alias_myalias_pro_enabled?: unknown
-  cloudmail_alias_myalias_pro_source_id?: unknown
-  cloudmail_alias_myalias_pro_state_key?: unknown
   cloudmail_alias_myalias_pro_alias_count?: unknown
-  cloudmail_alias_myalias_pro_signup_url?: unknown
-  cloudmail_alias_myalias_pro_login_url?: unknown
-  cloudmail_alias_myalias_pro_confirmation_email?: unknown
-  cloudmail_alias_myalias_pro_confirmation_password?: unknown
-  cloudmail_alias_myalias_pro_match_email?: unknown
   cloudmail_alias_secureinseconds_enabled?: unknown
   cloudmail_alias_secureinseconds_source_id?: unknown
   cloudmail_alias_secureinseconds_state_key?: unknown
@@ -942,33 +941,89 @@ function buildMyAliasProDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
 ): AliasGenerationTestDraftSource | null {
+  const preservedConfirmation = asRecord(preservedSource?.confirmation_inbox)
   return buildProviderSourceFromFixedFields({
     type: 'myalias_pro',
     enabled: draftConfig.cloudmail_alias_myalias_pro_enabled,
-    sourceId: draftConfig.cloudmail_alias_myalias_pro_source_id,
-    stateKey: draftConfig.cloudmail_alias_myalias_pro_state_key,
+    sourceId: undefined,
+    stateKey: undefined,
     aliasCount: draftConfig.cloudmail_alias_myalias_pro_alias_count,
     preservedSource,
     providerConfig: {
       signup_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_myalias_pro_signup_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.signup_url),
+        stringifyFieldValue(asRecord(preservedSource?.provider_config)?.signup_url)
+        || 'https://myalias.pro/signup/',
       login_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_myalias_pro_login_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
+        stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url)
+        || 'https://myalias.pro/login/',
+      alias_url:
+        stringifyFieldValue(asRecord(preservedSource?.provider_config)?.alias_url)
+        || 'https://myalias.pro/aliases/',
     },
-    confirmationInbox: buildConfirmationInboxConfig({
+    confirmationInbox: {
       provider: 'cloudmail',
-      accountEmail:
-        draftConfig.cloudmail_alias_myalias_pro_confirmation_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.account_email,
-      accountPassword:
-        draftConfig.cloudmail_alias_myalias_pro_confirmation_password
-        ?? asRecord(preservedSource?.confirmation_inbox)?.account_password,
-      matchEmail:
-        draftConfig.cloudmail_alias_myalias_pro_match_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
-    }),
+      ...(stringifyFieldValue(draftConfig.cloudmail_api_base) || stringifyFieldValue(preservedConfirmation?.api_base)
+        ? {
+            api_base:
+              stringifyFieldValue(draftConfig.cloudmail_api_base)
+              || stringifyFieldValue(preservedConfirmation?.api_base),
+          }
+        : {}),
+      ...(stringifyFieldValue(draftConfig.cloudmail_admin_email)
+        || stringifyFieldValue(preservedConfirmation?.admin_email)
+        || stringifyFieldValue(preservedConfirmation?.account_email)
+        ? {
+            admin_email:
+              stringifyFieldValue(draftConfig.cloudmail_admin_email)
+              || stringifyFieldValue(preservedConfirmation?.admin_email)
+              || stringifyFieldValue(preservedConfirmation?.account_email),
+            account_email:
+              stringifyFieldValue(draftConfig.cloudmail_admin_email)
+              || stringifyFieldValue(preservedConfirmation?.account_email)
+              || stringifyFieldValue(preservedConfirmation?.admin_email),
+          }
+        : {}),
+      ...(stringifyFieldValue(draftConfig.cloudmail_admin_password)
+        || stringifyFieldValue(preservedConfirmation?.admin_password)
+        || stringifyFieldValue(preservedConfirmation?.account_password)
+        ? {
+            admin_password:
+              stringifyFieldValue(draftConfig.cloudmail_admin_password)
+              || stringifyFieldValue(preservedConfirmation?.admin_password)
+              || stringifyFieldValue(preservedConfirmation?.account_password),
+            account_password:
+              stringifyFieldValue(draftConfig.cloudmail_admin_password)
+              || stringifyFieldValue(preservedConfirmation?.account_password)
+              || stringifyFieldValue(preservedConfirmation?.admin_password),
+          }
+        : {}),
+      ...(stringifyFieldValue(draftConfig.cloudmail_domain) || stringifyFieldValue(preservedConfirmation?.domain)
+        ? {
+            domain:
+              stringifyFieldValue(draftConfig.cloudmail_domain)
+              || stringifyFieldValue(preservedConfirmation?.domain),
+          }
+        : {}),
+      ...(stringifyFieldValue(draftConfig.cloudmail_subdomain) || stringifyFieldValue(preservedConfirmation?.subdomain)
+        ? {
+            subdomain:
+              stringifyFieldValue(draftConfig.cloudmail_subdomain)
+              || stringifyFieldValue(preservedConfirmation?.subdomain),
+          }
+        : {}),
+      timeout:
+        normalizeNumericFieldValue(draftConfig.cloudmail_timeout)
+        ?? normalizeNumericFieldValue(preservedConfirmation?.timeout)
+        ?? 30,
+      ...(stringifyFieldValue(preservedConfirmation?.match_email)
+        || stringifyFieldValue(draftConfig.cloudmail_admin_email)
+        ? {
+            match_email:
+              stringifyFieldValue(preservedConfirmation?.match_email)
+              || stringifyFieldValue(draftConfig.cloudmail_admin_email),
+          }
+        : {}),
+    },
   })
 }
 
@@ -1169,14 +1224,7 @@ export function deriveCloudmailAliasServiceFormValues(
   | 'cloudmail_alias_vend_source_id'
   | 'cloudmail_alias_vend_state_key'
   | 'cloudmail_alias_myalias_pro_enabled'
-  | 'cloudmail_alias_myalias_pro_source_id'
-  | 'cloudmail_alias_myalias_pro_state_key'
   | 'cloudmail_alias_myalias_pro_alias_count'
-  | 'cloudmail_alias_myalias_pro_signup_url'
-  | 'cloudmail_alias_myalias_pro_login_url'
-  | 'cloudmail_alias_myalias_pro_confirmation_email'
-  | 'cloudmail_alias_myalias_pro_confirmation_password'
-  | 'cloudmail_alias_myalias_pro_match_email'
   | 'cloudmail_alias_secureinseconds_enabled'
   | 'cloudmail_alias_secureinseconds_source_id'
   | 'cloudmail_alias_secureinseconds_state_key'
@@ -1220,11 +1268,9 @@ export function deriveCloudmailAliasServiceFormValues(
   const hasExistingAliasEnabledValue =
     typeof draftConfig.cloudmail_alias_enabled !== 'undefined'
       && String(draftConfig.cloudmail_alias_enabled).trim() !== ''
-  const myaliasConfirmation = asRecord(myaliasProSource?.confirmation_inbox)
   const secureInSecondsConfirmation = asRecord(secureInSecondsSource?.confirmation_inbox)
   const emailShieldConfirmation = asRecord(emailShieldSource?.confirmation_inbox)
   const aliasEmailConfirmation = asRecord(aliasEmailSource?.confirmation_inbox)
-  const myaliasConfig = asRecord(myaliasProSource?.provider_config)
   const secureInSecondsConfig = asRecord(secureInSecondsSource?.provider_config)
   const emailShieldConfig = asRecord(emailShieldSource?.provider_config)
   const simpleLoginConfig = asRecord(simpleLoginSource?.provider_config)
@@ -1251,14 +1297,7 @@ export function deriveCloudmailAliasServiceFormValues(
       stringifyFieldValue(draftConfig.cloudmail_alias_service_vend_state_key)
       || stringifyFieldValue(vendSource?.state_key),
     cloudmail_alias_myalias_pro_enabled: Boolean(myaliasProSource),
-    cloudmail_alias_myalias_pro_source_id: stringifyFieldValue(myaliasProSource?.id),
-    cloudmail_alias_myalias_pro_state_key: stringifyFieldValue(myaliasProSource?.state_key),
     cloudmail_alias_myalias_pro_alias_count: normalizeNumericFieldValue(myaliasProSource?.alias_count),
-    cloudmail_alias_myalias_pro_signup_url: stringifyFieldValue(myaliasConfig?.signup_url),
-    cloudmail_alias_myalias_pro_login_url: stringifyFieldValue(myaliasConfig?.login_url),
-    cloudmail_alias_myalias_pro_confirmation_email: stringifyFieldValue(myaliasConfirmation?.account_email),
-    cloudmail_alias_myalias_pro_confirmation_password: stringifyFieldValue(myaliasConfirmation?.account_password),
-    cloudmail_alias_myalias_pro_match_email: stringifyFieldValue(myaliasConfirmation?.match_email),
     cloudmail_alias_secureinseconds_enabled: Boolean(secureInSecondsSource),
     cloudmail_alias_secureinseconds_source_id: stringifyFieldValue(secureInSecondsSource?.id),
     cloudmail_alias_secureinseconds_state_key: stringifyFieldValue(secureInSecondsSource?.state_key),
@@ -1304,6 +1343,12 @@ export function createAliasGenerationTestDraftConfig(
   const vendStateKey = formValues.cloudmail_alias_vend_state_key
 
   return {
+    cloudmail_api_base: formValues.cloudmail_api_base,
+    cloudmail_admin_email: formValues.cloudmail_admin_email,
+    cloudmail_admin_password: formValues.cloudmail_admin_password,
+    cloudmail_domain: formValues.cloudmail_domain,
+    cloudmail_subdomain: formValues.cloudmail_subdomain,
+    cloudmail_timeout: formValues.cloudmail_timeout,
     cloudmail_alias_enabled: formValues.cloudmail_alias_enabled,
     cloudmail_alias_emails: formValues.cloudmail_alias_emails,
     cloudmail_alias_service_static_enabled:
@@ -1321,14 +1366,7 @@ export function createAliasGenerationTestDraftConfig(
     cloudmail_alias_vend_source_id: vendSourceId,
     cloudmail_alias_vend_state_key: vendStateKey,
     cloudmail_alias_myalias_pro_enabled: formValues.cloudmail_alias_myalias_pro_enabled,
-    cloudmail_alias_myalias_pro_source_id: formValues.cloudmail_alias_myalias_pro_source_id,
-    cloudmail_alias_myalias_pro_state_key: formValues.cloudmail_alias_myalias_pro_state_key,
     cloudmail_alias_myalias_pro_alias_count: formValues.cloudmail_alias_myalias_pro_alias_count,
-    cloudmail_alias_myalias_pro_signup_url: formValues.cloudmail_alias_myalias_pro_signup_url,
-    cloudmail_alias_myalias_pro_login_url: formValues.cloudmail_alias_myalias_pro_login_url,
-    cloudmail_alias_myalias_pro_confirmation_email: formValues.cloudmail_alias_myalias_pro_confirmation_email,
-    cloudmail_alias_myalias_pro_confirmation_password: formValues.cloudmail_alias_myalias_pro_confirmation_password,
-    cloudmail_alias_myalias_pro_match_email: formValues.cloudmail_alias_myalias_pro_match_email,
     cloudmail_alias_secureinseconds_enabled: formValues.cloudmail_alias_secureinseconds_enabled,
     cloudmail_alias_secureinseconds_source_id: formValues.cloudmail_alias_secureinseconds_source_id,
     cloudmail_alias_secureinseconds_state_key: formValues.cloudmail_alias_secureinseconds_state_key,

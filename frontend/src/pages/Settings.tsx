@@ -784,29 +784,13 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
               description="启用后会把单实例 MyAlias Pro source 加入 alias 池。"
             >
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                <Form.Item label="Source ID" name="cloudmail_alias_myalias_pro_source_id" style={{ marginBottom: 0 }}>
-                  <Input placeholder="myalias-primary" />
-                </Form.Item>
-                <Form.Item label="State Key" name="cloudmail_alias_myalias_pro_state_key" style={{ marginBottom: 0 }}>
-                  <Input placeholder="myalias-primary" />
-                </Form.Item>
-                <Form.Item label="目标别名数" name="cloudmail_alias_myalias_pro_alias_count" style={{ marginBottom: 0 }}>
+                <Form.Item label="单 CloudMail 最多可注册多少个 MyAlias Pro 账号" name="cloudmail_alias_myalias_pro_alias_count" style={{ marginBottom: 0 }}>
                   <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
                 </Form.Item>
-                <Form.Item label="注册页 URL" name="cloudmail_alias_myalias_pro_signup_url" style={{ marginBottom: 0 }}>
-                  <Input placeholder="https://myalias.pro/signup/" />
-                </Form.Item>
-                <Form.Item label="登录页 URL" name="cloudmail_alias_myalias_pro_login_url" style={{ marginBottom: 0 }}>
-                  <Input placeholder="https://myalias.pro/login/" />
-                </Form.Item>
-                <Form.Item label="确认邮箱账号" name="cloudmail_alias_myalias_pro_confirmation_email" style={{ marginBottom: 0 }}>
-                  <Input placeholder="real@example.com" />
-                </Form.Item>
-                <Form.Item label="确认邮箱密码" name="cloudmail_alias_myalias_pro_confirmation_password" style={{ marginBottom: 0 }}>
-                  <Input.Password placeholder="mail-pass" />
-                </Form.Item>
-                <Form.Item label="匹配邮箱" name="cloudmail_alias_myalias_pro_match_email" style={{ marginBottom: 0 }}>
-                  <Input placeholder="real@example.com" />
+                <Form.Item style={{ marginBottom: 0 }}>
+                  <Typography.Text type="secondary">
+                    MyAlias Pro 默认复用当前 CloudMail 管理员配置作为注册邮箱来源与确认邮件读取入口，前端不再单独暴露 URL、账号或状态键配置。
+                  </Typography.Text>
                 </Form.Item>
               </div>
             </AliasServiceToggleCard>

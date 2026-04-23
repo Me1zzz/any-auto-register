@@ -2,17 +2,26 @@ from fastapi import APIRouter, HTTPException
 import re
 from pydantic import BaseModel, Field
 from core.alias_pool.automation_test import AliasAutomationTestService
+from core.alias_pool.browser_fallback_runtime import BrowserFallbackRuntime
 from core.alias_pool.config import (
     decode_alias_provider_sources,
     encode_alias_provider_sources,
     normalize_cloudmail_alias_pool_config,
 )
+from core.alias_pool.protocol_site_runtime import ProtocolSiteRuntime
 from core.alias_pool.provider_contracts import AliasAutomationTestPolicy, AliasProviderBootstrapContext
 from core.alias_pool.probe import AliasSourceProbeService
 from core.config_store import config_store
 from services.mail_imports import MailImportExecuteRequest, MailImportSnapshotRequest, mail_import_registry
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+def _default_alias_test_runtime_builder(_source: dict):
+    source = dict(_source or {})
+    if str(source.get("type") or "").strip().lower() == "myalias_pro":
+        return ProtocolSiteRuntime(), None
+    return ProtocolSiteRuntime(), BrowserFallbackRuntime(headless=False)
 
 CONFIG_KEYS = [
     "laoudo_auth",
@@ -319,6 +328,7 @@ def alias_generation_test(body: AliasGenerationTestRequest):
     context = AliasProviderBootstrapContext(
         task_id="alias-test",
         purpose="automation_test",
+        runtime_builder=_default_alias_test_runtime_builder,
         test_policy=policy,
     )
     pool_config = normalize_cloudmail_alias_pool_config(merged, task_id="alias-test")

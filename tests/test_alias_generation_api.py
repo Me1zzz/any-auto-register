@@ -5,7 +5,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from main import app
-from api.config import _decode_config_value, _encode_config_value
+from api.config import _decode_config_value, _default_alias_test_runtime_builder, _encode_config_value
 from core.alias_pool.config import normalize_cloudmail_alias_pool_config
 from core.alias_pool.provider_contracts import AliasAutomationTestPolicy, AliasProviderBootstrapContext
 from core.alias_pool.probe import AliasProbeResult, AliasSourceProbeService
@@ -252,6 +252,47 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["sourceType"], "myalias_pro")
         self.assertEqual(len(body["aliases"]), 3)
         self.assertEqual(body["stages"][1]["code"], "verify_account_email")
+
+    def test_backend_normalize_builds_myalias_source_from_fixed_cloudmail_fields(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "cloudmail_alias_myalias_pro_enabled": True,
+                "cloudmail_alias_myalias_pro_alias_count": 2,
+                "cloudmail_api_base": "https://cxwsss.online/",
+                "cloudmail_admin_email": "admin@cxwsss.online",
+                "cloudmail_admin_password": "1103@Icity",
+                "cloudmail_domain": "cxwsss.online",
+            },
+            task_id="alias-test",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "myalias-pro-primary",
+                    "type": "myalias_pro",
+                    "alias_count": 2,
+                    "state_key": "myalias-pro-primary",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cxwsss.online/",
+                        "admin_email": "admin@cxwsss.online",
+                        "account_email": "admin@cxwsss.online",
+                        "admin_password": "1103@Icity",
+                        "account_password": "1103@Icity",
+                        "domain": "cxwsss.online",
+                        "timeout": 30,
+                    },
+                    "provider_config": {
+                        "signup_url": "https://myalias.pro/signup/",
+                        "login_url": "https://myalias.pro/login/",
+                        "alias_url": "https://myalias.pro/aliases/",
+                    },
+                }
+            ],
+        )
 
     def test_get_config_decodes_sources_json_string(self):
         client = TestClient(app)
@@ -538,6 +579,7 @@ class AliasGenerationApiTests(unittest.TestCase):
             AliasProviderBootstrapContext(
                 task_id="alias-test",
                 purpose="automation_test",
+                runtime_builder=_default_alias_test_runtime_builder,
                 test_policy=AliasAutomationTestPolicy(
                     fresh_service_account=True,
                     persist_state=False,
