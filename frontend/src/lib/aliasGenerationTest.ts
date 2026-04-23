@@ -132,8 +132,8 @@ export function createAliasGenerationDraftSourceTemplate(
         alias_count: 3,
         state_key: resolvedSourceId,
         provider_config: {
-          site_url: 'https://simplelogin.io/',
-          accounts: [{ email: '', label: '', password: '' }],
+          site_url: 'https://app.simplelogin.io/',
+          accounts: [{ email: '' }],
         },
       }
     case 'alias_email':
@@ -812,21 +812,17 @@ function sanitizeSimpleLoginAccounts(value: unknown): Array<Record<string, strin
         return null
       }
 
-      const email = stringifyFieldValue(record.email)
-      const label = stringifyFieldValue(record.label)
-      const password = stringifyFieldValue(record.password)
+      const email = stringifyFieldValue(record.email).toLowerCase()
 
-      if (!email && !label && !password) {
+      if (!email) {
         return null
       }
 
       return {
         email,
-        label,
-        password,
       }
     })
-    .filter((item): item is { email: string; label: string; password: string } => item !== null)
+    .filter((item): item is { email: string } => item !== null)
 
   return accounts.length > 0 ? accounts : undefined
 }
@@ -1099,6 +1095,8 @@ function buildSimpleLoginDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
 ): AliasGenerationTestDraftSource | null {
+  const preservedConfig = asRecord(preservedSource?.provider_config)
+
   return buildProviderSourceFromFixedFields({
     type: 'simplelogin',
     enabled: draftConfig.cloudmail_alias_simplelogin_enabled,
@@ -1109,10 +1107,11 @@ function buildSimpleLoginDraftSource(
     providerConfig: {
       site_url:
         stringifyFieldValue(draftConfig.cloudmail_alias_simplelogin_site_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.site_url),
+        || stringifyFieldValue(preservedConfig?.site_url)
+        || 'https://app.simplelogin.io/',
       accounts:
         sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_simplelogin_accounts)
-        ?? sanitizeSimpleLoginAccounts(asRecord(preservedSource?.provider_config)?.accounts),
+        ?? sanitizeSimpleLoginAccounts(preservedConfig?.accounts),
     },
   })
 }

@@ -1,11 +1,12 @@
 import unittest
+from unittest.mock import patch
 
 from core.alias_pool.alias_email_provider import build_alias_email_alias_provider
 from core.alias_pool.emailshield_provider import build_emailshield_alias_provider
 from core.alias_pool.myalias_pro_provider import build_myalias_pro_alias_provider
 from core.alias_pool.interactive_provider_registry import register_interactive_alias_providers
 from core.alias_pool.secureinseconds_provider import build_secureinseconds_alias_provider
-from core.alias_pool.simplelogin_provider import build_simplelogin_alias_provider
+from core.alias_pool.simplelogin_provider import SimpleLoginProvider, build_simplelogin_alias_provider
 from core.alias_pool.config import build_alias_provider_source_specs
 from core.alias_pool.provider_adapters import build_simple_generator_alias_provider, build_static_list_alias_provider
 from core.alias_pool.provider_bootstrap import AliasProviderBootstrap
@@ -38,6 +39,32 @@ class _DummyAliasProvider:
             provider_type="vend_email",
             source_id=self.source_id,
         )
+
+
+class _FakeHTTPResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = payload if isinstance(payload, str) else ""
+
+    def json(self):
+        if isinstance(self._payload, str):
+            raise ValueError("response is not json")
+        return self._payload
+
+
+class _FakeHTTPSession:
+    def __init__(self, responses):
+        self._responses = {key: list(value) for key, value in responses.items()}
+
+    def request(self, method, url, **kwargs):
+        key = (method.upper(), url)
+        queue = self._responses.get(key) or []
+        if not queue:
+            raise AssertionError(f"unexpected request: {method} {url}")
+        response = queue.pop(0)
+        self._responses[key] = queue
+        return response
 
 
 class AliasProviderBootstrapTests(unittest.TestCase):
@@ -150,42 +177,92 @@ class AliasProviderBootstrapTests(unittest.TestCase):
             self.assertIsInstance(provider, AliasProvider)
             self.assertEqual(provider.provider_type, spec.provider_type)
 
-    def test_simplelogin_provider_returns_clear_not_implemented_domain_discovery_failure(self):
+    def test_simplelogin_provider_runs_live_http_contract_flow_in_automation_service(self):
         service = AliasAutomationTestService()
 
-        result = service.run(
-            pool_config={
-                "enabled": True,
-                "task_id": "alias-test",
-                "sources": [
-                    {
-                        "id": "simplelogin-primary",
-                        "type": "simplelogin",
-                        "alias_count": 2,
-                        "state_key": "simplelogin-primary",
-                        "provider_config": {
-                            "site_url": "https://simplelogin.io/",
-                            "accounts": [
-                                {"email": "fust@fst.cxwsss.online", "label": "fust"},
-                            ],
-                        },
-                        "confirmation_inbox": {
-                            "provider": "cloudmail",
-                            "account_email": "real@example.com",
-                            "account_password": "mail-pass",
-                            "match_email": "real@example.com",
-                        },
-                    }
+        fake_session = _FakeHTTPSession(
+            {
+                ("POST", "https://app.simplelogin.io/api/auth/login"): [_FakeHTTPResponse(200, {"ok": True})],
+                ("GET", "https://app.simplelogin.io/api/setting"): [
+                    _FakeHTTPResponse(200, {"random_alias_default_domain": "simplelogin.com"})
                 ],
-            },
-            source_id="simplelogin-primary",
-            task_id="alias-test-run",
+                ("GET", "https://app.simplelogin.io/api/v2/setting/domains"): [
+                    _FakeHTTPResponse(200, {"domains": [{"domain": "simplelogin.com", "enabled": True}]})
+                ],
+                ("GET", "https://app.simplelogin.io/api/v5/alias/options"): [
+                    _FakeHTTPResponse(
+                        200,
+                        {"suffixes": [{"signed_suffix": ".onion376@simplelogin.com.aeSMmw.token123"}]},
+                    )
+                ],
+                ("GET", "https://app.simplelogin.io/api/v2/aliases"): [_FakeHTTPResponse(404, {"error": "missing"})],
+                ("GET", "https://app.simplelogin.io/api/v3/aliases"): [_FakeHTTPResponse(404, {"error": "missing"})],
+                ("GET", "https://app.simplelogin.io/api/aliases"): [
+                    _FakeHTTPResponse(200, {"aliases": [{"email": "existing@simplelogin.com"}]})
+                ],
+                ("POST", "https://app.simplelogin.io/api/v5/alias/random/new"): [
+                    _FakeHTTPResponse(200, {"alias": {"email": "created@simplelogin.com"}}),
+                    _FakeHTTPResponse(200, {"alias": {"email": "created-2@simplelogin.com"}}),
+                ],
+            }
         )
 
-        self.assertFalse(result.ok)
+        with patch.object(SimpleLoginProvider, "_build_http_session", return_value=fake_session), patch.object(
+            SimpleLoginProvider,
+            "pick_domain_option",
+            new=lambda self, domains, alias_index: domains[-1],
+        ):
+            result = service.run(
+                pool_config={
+                    "enabled": True,
+                    "task_id": "alias-test",
+                    "sources": [
+                        {
+                            "id": "simplelogin-primary",
+                            "type": "simplelogin",
+                            "alias_count": 3,
+                            "state_key": "simplelogin-primary",
+                            "provider_config": {
+                                "site_url": "https://app.simplelogin.io/",
+                                "accounts": [
+                                    {"email": "fust@fst.cxwsss.online", "label": "fust"},
+                                ],
+                            },
+                            "confirmation_inbox": {
+                                "provider": "cloudmail",
+                                "account_email": "real@example.com",
+                                "account_password": "mail-pass",
+                                "match_email": "real@example.com",
+                            },
+                        }
+                    ],
+                },
+                source_id="simplelogin-primary",
+                task_id="alias-test-run",
+            )
+
+        self.assertTrue(result.ok)
         self.assertEqual(result.source_type, "simplelogin")
-        self.assertEqual(result.failure.get("stageCode"), "discover_alias_domains")
-        self.assertIn("signed domain options unavailable", result.error)
+        self.assertEqual(result.alias_email, "existing@simplelogin.com")
+        self.assertEqual(
+            result.aliases,
+            [
+                {"email": "existing@simplelogin.com"},
+                {
+                    "email": "created@simplelogin.com",
+                    "signed_suffix": ".onion376@simplelogin.com.aeSMmw.token123",
+                    "domain": "simplelogin.com",
+                    "creation_endpoint": "/api/v5/alias/random/new",
+                },
+                {
+                    "email": "created-2@simplelogin.com",
+                    "signed_suffix": ".onion376@simplelogin.com.aeSMmw.token123",
+                    "domain": "simplelogin.com",
+                    "creation_endpoint": "/api/v5/alias/random/new",
+                },
+            ],
+        )
+        self.assertEqual(result.current_stage, {"code": "aliases_ready", "label": "别名预览已生成"})
 
     def test_build_alias_provider_source_specs_supports_provider_config_backed_simplelogin_source(self):
         pool_config = {
