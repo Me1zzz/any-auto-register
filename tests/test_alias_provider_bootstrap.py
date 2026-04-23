@@ -6,7 +6,7 @@ from core.alias_pool.myalias_pro_provider import build_myalias_pro_alias_provide
 from core.alias_pool.interactive_provider_registry import register_interactive_alias_providers
 from core.alias_pool.secureinseconds_provider import build_secureinseconds_alias_provider
 from core.alias_pool.simplelogin_provider import build_simplelogin_alias_provider
-from core.alias_pool.config import build_alias_provider_source_specs
+from core.alias_pool.config import build_alias_provider_source_specs, normalize_cloudmail_alias_pool_config
 from core.alias_pool.provider_adapters import build_simple_generator_alias_provider, build_static_list_alias_provider
 from core.alias_pool.provider_bootstrap import AliasProviderBootstrap
 from core.alias_pool.provider_contracts import (
@@ -238,6 +238,94 @@ class AliasProviderBootstrapTests(unittest.TestCase):
                 "match_email": "real@example.com",
             },
         )
+
+    def test_build_alias_provider_source_specs_hydrates_alias_email_confirmation_inbox_from_global_cloudmail_settings(self):
+        pool_config = {
+            "enabled": True,
+            "task_id": "alias-test",
+            "sources": [
+                {
+                    "id": "alias-email-primary",
+                    "type": "alias_email",
+                    "alias_count": 3,
+                    "state_key": "alias-email-primary",
+                    "confirmation_inbox": {
+                        "match_email": "real@example.com",
+                    },
+                    "provider_config": {
+                        "login_url": "https://alias.email/users/login/",
+                    },
+                }
+            ],
+        }
+
+        normalized = build_alias_provider_source_specs(
+            {
+                **pool_config,
+                "sources": normalize_cloudmail_alias_pool_config(
+                    {
+                        "cloudmail_alias_enabled": True,
+                        "cloudmail_api_base": "https://cloudmail.example/api",
+                        "cloudmail_admin_email": "admin@example.com",
+                        "cloudmail_admin_password": "secret-pass",
+                        "cloudmail_domain": "cxwsss.online",
+                        "cloudmail_subdomain": "mx",
+                        "cloudmail_timeout": 41,
+                        "sources": pool_config["sources"],
+                    },
+                    task_id="alias-test",
+                )["sources"],
+            }
+        )
+
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(
+            normalized[0].confirmation_inbox_config,
+            {
+                "match_email": "real@example.com",
+                "provider": "cloudmail",
+                "api_base": "https://cloudmail.example/api",
+                "base_url": "https://cloudmail.example/api",
+                "admin_email": "admin@example.com",
+                "admin_password": "secret-pass",
+                "domain": "cxwsss.online",
+                "subdomain": "mx",
+                "timeout": 41,
+            },
+        )
+
+    def test_build_alias_provider_source_specs_supports_backend_managed_alias_email_source(self):
+        normalized = build_alias_provider_source_specs(
+            {
+                "enabled": True,
+                "task_id": "alias-test",
+                "sources": normalize_cloudmail_alias_pool_config(
+                    {
+                        "cloudmail_alias_enabled": True,
+                        "cloudmail_api_base": "https://cloudmail.example/api",
+                        "cloudmail_admin_email": "admin@example.com",
+                        "cloudmail_admin_password": "secret-pass",
+                        "cloudmail_domain": "cxwsss.online",
+                        "cloudmail_subdomain": "mx",
+                        "cloudmail_timeout": 41,
+                        "cloudmail_alias_alias_email_enabled": True,
+                        "cloudmail_alias_alias_email_alias_count": 5,
+                    },
+                    task_id="alias-test",
+                )["sources"],
+            }
+        )
+
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(normalized[0].source_id, "alias-email-primary")
+        self.assertEqual(normalized[0].provider_type, "alias_email")
+        self.assertEqual(normalized[0].state_key, "alias-email-primary")
+        self.assertEqual(normalized[0].desired_alias_count, 5)
+        self.assertEqual(
+            normalized[0].provider_config,
+            {"login_url": "https://alias.email/users/login/"},
+        )
+        self.assertEqual(normalized[0].confirmation_inbox_config["admin_password"], "secret-pass")
 
     def test_build_alias_provider_source_specs_populates_vend_provider_config_for_migration(self):
         pool_config = {

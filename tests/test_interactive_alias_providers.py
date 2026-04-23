@@ -1,7 +1,9 @@
 import unittest
+from unittest import mock
 
 from core.alias_pool.myalias_pro_provider import MyAliasProProvider
 from core.alias_pool.alias_email_provider import AliasEmailProvider
+from core.alias_pool.alias_email_runtime import AliasEmailRuntimeResult
 from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase, InteractiveAliasProviderBase
 from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.interactive_provider_models import (
@@ -767,7 +769,7 @@ class InteractiveStateRepositoryTests(unittest.TestCase):
 
 
 class AliasEmailProviderTests(unittest.TestCase):
-    def test_alias_email_maps_magic_link_login_requirement(self):
+    def test_alias_email_maps_request_and_consume_magic_link_requirements(self):
         provider = AliasEmailProvider(
             spec=AliasProviderSourceSpec(
                 source_id="alias-email-primary",
@@ -777,17 +779,76 @@ class AliasEmailProviderTests(unittest.TestCase):
                 confirmation_inbox_config={"match_email": "real@example.com"},
                 provider_config={"login_url": "https://alias.email/users/login/"},
             ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: mock.Mock(generate_service_account_email=mock.Mock(return_value="fresh@mx.cxwsss.online")),
+            ),
         )
 
         requirements = provider.resolve_verification_requirements(provider.ensure_authenticated_context("alias_test"))
 
         self.assertEqual(
             requirements,
-            [VerificationRequirement(kind="magic_link_login", label="消费登录魔法链接", inbox_role="confirmation_inbox")],
+            [
+                VerificationRequirement(kind="request_magic_link", label="请求登录魔法链接", inbox_role="confirmation_inbox"),
+                VerificationRequirement(kind="magic_link_login", label="消费登录魔法链接", inbox_role="confirmation_inbox"),
+            ],
         )
 
-    def test_alias_email_discovers_fixed_alias_email_domain(self):
+    def test_alias_email_ensure_authenticated_context_uses_fresh_cloudmail_service_account_when_policy_requires(self):
+        runtime = mock.Mock()
+        runtime.generate_service_account_email.return_value = "freshadmin@mx.cxwsss.online"
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={
+                    "provider": "cloudmail",
+                    "match_email": "real@example.com",
+                    "api_base": "https://cloudmail.example/api",
+                    "admin_password": "secret-pass",
+                    "domain": "cxwsss.online",
+                    "subdomain": "mx",
+                },
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: runtime,
+                test_policy=AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                ),
+            ),
+        )
+
+        context = provider.ensure_authenticated_context("alias_test")
+
+        self.assertEqual(context.service_account_email, "freshadmin@mx.cxwsss.online")
+        self.assertEqual(context.confirmation_inbox_email, "freshadmin@mx.cxwsss.online")
+        self.assertEqual(context.real_mailbox_email, "freshadmin@mx.cxwsss.online")
+        runtime.generate_service_account_email.assert_called_once_with()
+
+    def test_alias_email_ensure_authenticated_context_reuses_persisted_state_when_not_fresh(self):
+        runtime = mock.Mock()
+        runtime.generate_service_account_email.return_value = "should-not-be-used@mx.cxwsss.online"
+        store = _MemoryStore(
+            state=InteractiveProviderState(
+                state_key="alias-email-primary",
+                service_account_email="persisted@mx.cxwsss.online",
+                confirmation_inbox_email="real@example.com",
+                real_mailbox_email="real@example.com",
+                service_password="persisted-pass",
+                username="persisted-user",
+                session_state={"authenticated": True, "csrf_token": "persisted-csrf"},
+            )
+        )
         provider = AliasEmailProvider(
             spec=AliasProviderSourceSpec(
                 source_id="alias-email-primary",
@@ -797,13 +858,247 @@ class AliasEmailProviderTests(unittest.TestCase):
                 confirmation_inbox_config={"match_email": "real@example.com"},
                 provider_config={"login_url": "https://alias.email/users/login/"},
             ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: runtime,
+                state_store_factory=lambda _state_key: store,
+                test_policy=AliasAutomationTestPolicy(
+                    fresh_service_account=False,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                ),
+            ),
         )
 
         context = provider.ensure_authenticated_context("alias_test")
+
+        self.assertEqual(context.service_account_email, "persisted@mx.cxwsss.online")
+        self.assertEqual(context.confirmation_inbox_email, "real@example.com")
+        self.assertEqual(context.real_mailbox_email, "real@example.com")
+        self.assertEqual(context.service_password, "persisted-pass")
+        self.assertEqual(context.username, "persisted-user")
+        self.assertEqual(context.session_state["authenticated"], True)
+        runtime.generate_service_account_email.assert_not_called()
+
+    def test_alias_email_discovers_domains_from_runtime_payloads(self):
+        runtime = mock.Mock()
+        runtime.generate_service_account_email.return_value = "freshadmin@mx.cxwsss.online"
+        runtime.get_settings.return_value = AliasEmailRuntimeResult(
+            session_state={"csrf_token": "csrf-1", "authenticated": True},
+            payload={
+                "result": {
+                    "domain": "bumpmail.io",
+                    "forward_email": "real@example.com",
+                    "available_emails": ["real@example.com"],
+                }
+            },
+            response_status=200,
+        )
+        runtime.list_domains.return_value = AliasEmailRuntimeResult(
+            session_state={"csrf_token": "csrf-1", "authenticated": True},
+            payload={
+                "result": {
+                    "domains": [
+                        {"domain": "bumpmail.io", "kind": "public", "is_default": True, "state": "active"},
+                        {"domain": "clouddomain.net", "kind": "public", "is_default": False, "state": "active"},
+                    ]
+                }
+            },
+            response_status=200,
+        )
+        runtime.discover_domains_from_payloads.return_value = [
+            AliasDomainOption(
+                key="bumpmail.io",
+                domain="bumpmail.io",
+                label="@bumpmail.io (default)",
+                raw={"domain": "bumpmail.io", "is_default": True, "state": "active"},
+            ),
+            AliasDomainOption(
+                key="clouddomain.net",
+                domain="clouddomain.net",
+                label="@clouddomain.net",
+                raw={"domain": "clouddomain.net", "state": "active"},
+            ),
+        ]
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={"match_email": "real@example.com"},
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: runtime,
+            ),
+        )
+
+        context = AuthenticatedProviderContext(
+            service_account_email="freshadmin@mx.cxwsss.online",
+            confirmation_inbox_email="real@example.com",
+            real_mailbox_email="real@example.com",
+            session_state={"csrf_token": "csrf-0", "authenticated": True},
+        )
         options = provider.discover_alias_domains(context)
 
-        self.assertEqual(options, [AliasDomainOption(key="alias.email", domain="alias.email", label="@alias.email")])
+        self.assertEqual([item.domain for item in options], ["bumpmail.io", "clouddomain.net"])
+        runtime.get_settings.assert_called_once_with(session_state={"csrf_token": "csrf-0", "authenticated": True})
+        runtime.list_domains.assert_called_once()
+
+    def test_alias_email_create_alias_uses_runtime_response_email(self):
+        runtime = mock.Mock()
+        runtime.generate_service_account_email.return_value = "freshadmin@mx.cxwsss.online"
+        runtime.create_rule.return_value = AliasEmailRuntimeResult(
+            session_state={"authenticated": True},
+            payload={
+                "result": {
+                    "email": "alpha.random@bumpmail.io",
+                    "forward_emails": ["real@example.com"],
+                    "id": 101,
+                }
+            },
+            response_status=200,
+        )
+        runtime.alias_from_create_payload.return_value = {
+            "email": "alpha.random@bumpmail.io",
+            "forward_emails": ["real@example.com"],
+            "id": 101,
+        }
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=3,
+                confirmation_inbox_config={"match_email": "real@example.com"},
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: runtime,
+            ),
+        )
+
+        context = AuthenticatedProviderContext(
+            service_account_email="freshadmin@mx.cxwsss.online",
+            confirmation_inbox_email="real@example.com",
+            real_mailbox_email="real@example.com",
+            session_state={"authenticated": True},
+        )
+
+        created = provider.create_alias(
+            context=context,
+            domain=AliasDomainOption(key="bumpmail.io", domain="bumpmail.io", label="@bumpmail.io"),
+            alias_index=1,
+        )
+
+        self.assertEqual(created.email, "alpha.random@bumpmail.io")
+        self.assertEqual(created.metadata["id"], 101)
+        self.assertEqual(created.metadata["forward_emails"], ["real@example.com"])
+
+    def test_alias_email_shared_flow_uses_magic_link_stages_and_reuses_existing_state(self):
+        runtime = mock.Mock()
+        runtime.generate_service_account_email.return_value = "fresh-ignored@mx.cxwsss.online"
+        runtime.bootstrap_public_session.return_value = AliasEmailRuntimeResult(
+            session_state={"csrf_token": "csrf-1", "cookies": [{"name": "csrftoken", "value": "csrf-1"}]},
+            payload={"result": {"exists": True}},
+            response_status=200,
+        )
+        runtime.account_exists_from_basic_info.return_value = True
+        runtime.request_magic_link.return_value = AliasEmailRuntimeResult(
+            session_state={"csrf_token": "csrf-1", "cookies": [{"name": "csrftoken", "value": "csrf-1"}]},
+            payload={"ok": True},
+            response_status=200,
+        )
+        runtime.consume_magic_link.return_value = AliasEmailRuntimeResult(
+            session_state={"authenticated": True, "csrf_token": "csrf-2"},
+            payload={"ok": True},
+            response_status=200,
+        )
+        runtime.get_settings.return_value = AliasEmailRuntimeResult(
+            session_state={"authenticated": True, "csrf_token": "csrf-2"},
+            payload={"result": {"domain": "bumpmail.io", "forward_email": "real@example.com"}},
+            response_status=200,
+        )
+        runtime.list_domains.return_value = AliasEmailRuntimeResult(
+            session_state={"authenticated": True, "csrf_token": "csrf-2"},
+            payload={"result": {"domains": [{"domain": "bumpmail.io", "kind": "public", "is_default": True, "state": "active"}]}},
+            response_status=200,
+        )
+        runtime.discover_domains_from_payloads.return_value = [
+            AliasDomainOption(key="bumpmail.io", domain="bumpmail.io", label="@bumpmail.io (default)")
+        ]
+        runtime.list_rules.return_value = AliasEmailRuntimeResult(
+            session_state={"authenticated": True, "csrf_token": "csrf-2"},
+            payload={"result": {"rules": [{"email": "existing@bumpmail.io"}], "pages": 1}},
+            response_status=200,
+        )
+        runtime.aliases_from_rules_payload.return_value = [{"email": "existing@bumpmail.io"}]
+        runtime.create_rule.return_value = AliasEmailRuntimeResult(
+            session_state={"authenticated": True, "csrf_token": "csrf-2"},
+            payload={"result": {"email": "created@bumpmail.io", "id": 11}},
+            response_status=200,
+        )
+        runtime.alias_from_create_payload.return_value = {"email": "created@bumpmail.io", "id": 11}
+        runtime.build_capture_summary.return_value = []
+        store = _MemoryStore(
+            state=InteractiveProviderState(
+                state_key="alias-email-primary",
+                service_account_email="persisted@mx.cxwsss.online",
+                confirmation_inbox_email="real@example.com",
+                real_mailbox_email="real@example.com",
+                session_state={"authenticated": True, "csrf_token": "persisted"},
+            )
+        )
+        provider = AliasEmailProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="alias-email-primary",
+                provider_type="alias_email",
+                state_key="alias-email-primary",
+                desired_alias_count=2,
+                confirmation_inbox_config={"match_email": "real@example.com"},
+                provider_config={"login_url": "https://alias.email/users/login/"},
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: runtime,
+                state_store_factory=lambda _state_key: store,
+            ),
+        )
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=False,
+                persist_state=True,
+                minimum_alias_count=2,
+                capture_enabled=True,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.account_identity.service_account_email, "persisted@mx.cxwsss.online")
+        self.assertEqual(
+            [item.code for item in result.stage_timeline],
+            [
+                "session_ready",
+                "request_magic_link",
+                "consume_magic_link",
+                "discover_alias_domains",
+                "list_aliases",
+                "create_aliases",
+                "aliases_ready",
+                "save_state",
+            ],
+        )
+        self.assertEqual([item["email"] for item in result.aliases], ["existing@bumpmail.io", "created@bumpmail.io"])
+        runtime.generate_service_account_email.assert_not_called()
 
     def test_alias_email_create_alias_requires_discovered_domain(self):
         provider = AliasEmailProvider(
@@ -815,7 +1110,11 @@ class AliasEmailProviderTests(unittest.TestCase):
                 confirmation_inbox_config={"match_email": "real@example.com"},
                 provider_config={"login_url": "https://alias.email/users/login/"},
             ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda **_kwargs: mock.Mock(generate_service_account_email=mock.Mock(return_value="fresh@mx.cxwsss.online")),
+            ),
         )
 
         context = provider.ensure_authenticated_context("alias_test")

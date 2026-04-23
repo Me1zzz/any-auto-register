@@ -27,6 +27,7 @@ from core.alias_pool.provider_contracts import (
 _REQUIREMENT_STAGE_CODES = {
     "account_email": "verify_account_email",
     "forwarding_email": "verify_forwarding_email",
+    "request_magic_link": "request_magic_link",
     "magic_link_login": "consume_magic_link",
 }
 

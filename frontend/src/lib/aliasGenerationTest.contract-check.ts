@@ -129,6 +129,12 @@ const legacyDisplay = buildAliasGenerationTestDisplay(legacyResponse)
 const interactiveDisplay = buildAliasGenerationTestDisplay(interactiveResponse)
 
 const fixedServiceDraftConfig = createAliasGenerationTestDraftConfig({
+  cloudmail_api_base: 'https://cxwsss.online',
+  cloudmail_admin_email: 'admin@cxwsss.online',
+  cloudmail_admin_password: '1103@Icity',
+  cloudmail_domain: 'cxwsss.online',
+  cloudmail_subdomain: 'mx',
+  cloudmail_timeout: 41,
   cloudmail_alias_enabled: true,
   cloudmail_alias_emails: 'legacy@example.com',
   cloudmail_alias_vend_enabled: true,
@@ -170,11 +176,7 @@ const fixedServiceDraftConfig = createAliasGenerationTestDraftConfig({
     { email: 'logon@fst.cxwsss.online', label: 'logon', password: 'logon-pass' },
   ],
   cloudmail_alias_alias_email_enabled: true,
-  cloudmail_alias_alias_email_source_id: 'alias-email-primary',
-  cloudmail_alias_alias_email_state_key: 'alias-email-state',
   cloudmail_alias_alias_email_alias_count: 3,
-  cloudmail_alias_alias_email_login_url: 'https://alias.email/users/login/',
-  cloudmail_alias_alias_email_match_email: 'real@example.com',
 })
 
 const fixedServiceRoundTrip = deriveCloudmailAliasServiceFormValues({
@@ -218,6 +220,12 @@ void [
   fixedServiceRoundTrip.cloudmail_alias_emailshield_enabled,
   fixedServiceRoundTrip.cloudmail_alias_simplelogin_enabled,
   fixedServiceRoundTrip.cloudmail_alias_alias_email_enabled,
+  fixedServiceDraftConfig.cloudmail_api_base,
+  fixedServiceDraftConfig.cloudmail_admin_email,
+  fixedServiceDraftConfig.cloudmail_admin_password,
+  fixedServiceDraftConfig.cloudmail_domain,
+  fixedServiceDraftConfig.cloudmail_subdomain,
+  fixedServiceDraftConfig.cloudmail_timeout,
   hiddenSimpleGeneratorDraftConfig.sources,
   hiddenSimpleGeneratorRejected,
   hiddenSimpleGeneratorRoundTrip.cloudmail_alias_simplelogin_enabled,

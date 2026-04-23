@@ -231,15 +231,9 @@ export default function AliasGenerationSourceCard({
         ) : null}
 
         {sourceType === 'alias_email' ? (
-          <>
-            <Form.Item label="登录页 URL" name={[...baseName, 'provider_config', 'login_url']} style={{ marginBottom: 0 }}>
-              <Input placeholder="https://alias.email/users/login/" />
-            </Form.Item>
-
-            <Typography.Text type="secondary">
-              alias.email 通过确认邮箱中的 magic link 完成登录；下方匹配邮箱会用于定位那封登录邮件。
-            </Typography.Text>
-          </>
+          <Typography.Text type="secondary">
+            alias.email 的登录页与 CloudMail 匹配策略由后端固定配置管理；这里只保留别名数量和内部 source 标识。
+          </Typography.Text>
         ) : null}
 
         {showConfirmationInbox ? (
@@ -278,9 +272,11 @@ export default function AliasGenerationSourceCard({
                 </Form.Item>
               ) : null}
 
-              <Form.Item label="匹配邮箱" name={[...baseName, 'confirmation_inbox', 'match_email']} style={{ marginBottom: 0 }}>
-                <Input placeholder="real@example.com" />
-              </Form.Item>
+              {sourceType === 'alias_email' ? null : (
+                <Form.Item label="匹配邮箱" name={[...baseName, 'confirmation_inbox', 'match_email']} style={{ marginBottom: 0 }}>
+                  <Input placeholder="real@example.com" />
+                </Form.Item>
+              )}
             </div>
           </div>
         ) : null}

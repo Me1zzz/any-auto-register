@@ -300,6 +300,9 @@ def alias_generation_test(body: AliasGenerationTestRequest):
     merged = config_store.get_all().copy()
     if body.useDraftConfig:
         draft_config = dict(body.config or {})
+        for key in list(draft_config.keys()):
+            if key in WRITE_ONLY_CONFIG_KEYS and str(draft_config.get(key) or "") == "":
+                draft_config.pop(key, None)
         if "sources" not in draft_config and any(
             key in draft_config
             for key in (

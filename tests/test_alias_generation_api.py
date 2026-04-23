@@ -193,6 +193,52 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["sourceId"], "legacy-static")
         self.assertEqual(body["aliasEmail"], "a@example.com")
 
+    def test_alias_generation_test_api_preserves_saved_write_only_cloudmail_secret_for_draft_config(self):
+        client = TestClient(app)
+
+        saved_config = {
+            "cloudmail_api_base": "https://cxwsss.online",
+            "cloudmail_admin_email": "admin@cxwsss.online",
+            "cloudmail_admin_password": "1103@Icity",
+            "cloudmail_domain": "cxwsss.online",
+        }
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value=saved_config,
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service = service_cls.return_value
+            service.run.return_value = AliasProbeResult(ok=False, source_id="alias-email-primary", source_type="alias_email")
+
+            response = client.post(
+                "/api/config/alias-test",
+                json={
+                    "sourceId": "alias-email-primary",
+                    "useDraftConfig": True,
+                    "config": {
+                        "cloudmail_api_base": "https://cxwsss.online",
+                        "cloudmail_admin_email": "admin@cxwsss.online",
+                        "cloudmail_admin_password": "",
+                        "cloudmail_domain": "cxwsss.online",
+                        "cloudmail_alias_enabled": True,
+                        "sources": [
+                            {
+                                "id": "alias-email-primary",
+                                "type": "alias_email",
+                                "alias_count": 1,
+                                "state_key": "alias-email-primary",
+                                "confirmation_inbox": {"provider": "cloudmail", "match_email": "engq4fx2nu@cxwsss.online"},
+                                "provider_config": {"login_url": "https://alias.email/users/login/"},
+                            }
+                        ],
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        pool_config = service.run.call_args.kwargs["pool_config"]
+        self.assertEqual(pool_config["sources"][0]["confirmation_inbox"]["admin_password"], "1103@Icity")
+
     def test_alias_generation_test_api_supports_myalias_source_shape(self):
         client = TestClient(app)
         expected_source = {
@@ -1277,6 +1323,75 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["sourceType"], "alias_email")
         self.assertEqual(body["stages"][0]["code"], "request_magic_link")
         self.assertEqual(body["stages"][1]["code"], "consume_magic_link")
+
+    def test_alias_generation_test_api_supports_backend_managed_alias_email_draft_shape(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_api_base": "https://cxwsss.online",
+                "cloudmail_admin_email": "admin@cxwsss.online",
+                "cloudmail_admin_password": "1103@Icity",
+                "cloudmail_domain": "cxwsss.online",
+            },
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service_cls.return_value.run.return_value = AliasProbeResult(
+                ok=False,
+                source_id="alias-email-primary",
+                source_type="alias_email",
+                failure={
+                    "stageCode": "request_magic_link",
+                    "stageLabel": "请求登录魔法链接",
+                    "reason": "alias.email signup failed: Unknown error. Please try again later",
+                    "retryable": True,
+                },
+                current_stage={"code": "request_magic_link", "label": "请求登录魔法链接"},
+                stages=[
+                    {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                    {
+                        "code": "request_magic_link",
+                        "label": "请求登录魔法链接",
+                        "status": "failed",
+                        "detail": "alias.email signup failed: Unknown error. Please try again later",
+                    },
+                ],
+                error="alias.email signup failed: Unknown error. Please try again later",
+            )
+
+            response = client.post(
+                "/api/config/alias-test",
+                json={
+                    "sourceId": "alias-email-primary",
+                    "useDraftConfig": True,
+                    "config": {
+                        "cloudmail_alias_enabled": True,
+                        "cloudmail_api_base": "https://cxwsss.online",
+                        "cloudmail_admin_email": "admin@cxwsss.online",
+                        "cloudmail_admin_password": "",
+                        "cloudmail_domain": "cxwsss.online",
+                        "cloudmail_alias_alias_email_enabled": True,
+                        "cloudmail_alias_alias_email_alias_count": 1,
+                        "sources": [
+                            {
+                                "id": "alias-email-primary",
+                                "type": "alias_email",
+                                "alias_count": 1,
+                                "state_key": "alias-email-primary",
+                            }
+                        ],
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        pool_config = service_cls.return_value.run.call_args.kwargs["pool_config"]
+        self.assertEqual(pool_config["sources"][0]["type"], "alias_email")
+        self.assertEqual(pool_config["sources"][0]["alias_count"], 1)
+        self.assertEqual(pool_config["sources"][0]["state_key"], "alias-email-primary")
+        body = response.json()
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["failure"]["stageCode"], "request_magic_link")
 
     def test_alias_generation_test_api_keeps_account_identity_compatibility_for_interactive_provider(self):
         client = TestClient(app)

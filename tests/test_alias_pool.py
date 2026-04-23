@@ -462,6 +462,101 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
             ],
         )
 
+    def test_normalize_hydrates_alias_email_confirmation_inbox_from_global_cloudmail_settings(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "cloudmail_api_base": "https://cloudmail.example/api",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret-pass",
+                "cloudmail_domain": "cxwsss.online",
+                "cloudmail_subdomain": "mx",
+                "cloudmail_timeout": 41,
+                "sources": [
+                    {
+                        "id": "alias-email-primary",
+                        "type": "alias_email",
+                        "alias_count": 3,
+                        "state_key": "alias-email-primary",
+                        "confirmation_inbox": {
+                            "match_email": "real@example.com",
+                        },
+                        "provider_config": {
+                            "login_url": "https://alias.email/users/login/",
+                        },
+                    }
+                ],
+            },
+            task_id="task-alias-email-hydrate",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "alias-email-primary",
+                    "type": "alias_email",
+                    "alias_count": 3,
+                    "state_key": "alias-email-primary",
+                    "provider_config": {
+                        "login_url": "https://alias.email/users/login/",
+                    },
+                    "confirmation_inbox": {
+                        "match_email": "real@example.com",
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example/api",
+                        "base_url": "https://cloudmail.example/api",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "secret-pass",
+                        "domain": "cxwsss.online",
+                        "subdomain": "mx",
+                        "timeout": 41,
+                    },
+                }
+            ],
+        )
+
+    def test_normalize_builds_backend_managed_alias_email_source_from_minimal_flags(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "cloudmail_api_base": "https://cloudmail.example/api",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret-pass",
+                "cloudmail_domain": "cxwsss.online",
+                "cloudmail_subdomain": "mx",
+                "cloudmail_timeout": 41,
+                "cloudmail_alias_alias_email_enabled": True,
+                "cloudmail_alias_alias_email_alias_count": 5,
+            },
+            task_id="task-alias-email-minimal",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "alias-email-primary",
+                    "type": "alias_email",
+                    "alias_count": 5,
+                    "state_key": "alias-email-primary",
+                    "provider_config": {
+                        "login_url": "https://alias.email/users/login/",
+                    },
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example/api",
+                        "base_url": "https://cloudmail.example/api",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "secret-pass",
+                        "domain": "cxwsss.online",
+                        "subdomain": "mx",
+                        "timeout": 41,
+                    },
+                }
+            ],
+        )
+
 
 class AliasProviderConfigEncodingTests(unittest.TestCase):
     def test_encode_and_decode_alias_provider_sources_round_trip_supported_types(self):

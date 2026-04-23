@@ -11,6 +11,11 @@ VEND_EMAIL_DEFAULT_CONFIG = {
     "alias_domain_id": "42",
 }
 
+ALIAS_EMAIL_DEFAULT_CONFIG = {
+    "source_id": "alias-email-primary",
+    "login_url": "https://alias.email/users/login/",
+}
+
 INTERACTIVE_PROVIDER_TYPES = {
     "myalias_pro",
     "secureinseconds",
@@ -86,6 +91,115 @@ def _decode_interactive_source(item: dict[str, Any], source_id: str, provider_ty
     if isinstance(confirmation_inbox, dict):
         normalized["confirmation_inbox"] = dict(confirmation_inbox)
     return normalized
+
+
+def _build_interactive_confirmation_inbox_config(
+    item: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(payload or {})
+    raw_confirmation_inbox = item.get("confirmation_inbox")
+    confirmation_inbox = raw_confirmation_inbox if isinstance(raw_confirmation_inbox, dict) else {}
+
+    normalized = dict(confirmation_inbox)
+
+    def _set_if_missing(key: str, value: Any) -> None:
+        if normalized.get(key) not in (None, ""):
+            return
+        if value in (None, ""):
+            return
+        normalized[key] = value
+
+    if str(item.get("type") or "").strip() == "alias_email":
+        _set_if_missing("provider", "cloudmail")
+        _set_if_missing(
+            "api_base",
+            _parse_string(confirmation_inbox.get("api_base") or confirmation_inbox.get("base_url"))
+            or _parse_string(item.get("cloudmail_api_base"))
+            or _parse_string(payload.get("cloudmail_api_base")),
+        )
+        _set_if_missing(
+            "base_url",
+            _parse_string(confirmation_inbox.get("base_url") or confirmation_inbox.get("api_base"))
+            or _parse_string(item.get("cloudmail_api_base"))
+            or _parse_string(payload.get("cloudmail_api_base")),
+        )
+        _set_if_missing(
+            "admin_email",
+            _parse_string(confirmation_inbox.get("admin_email"))
+            or _parse_string(item.get("cloudmail_admin_email"))
+            or _parse_string(payload.get("cloudmail_admin_email")),
+        )
+        _set_if_missing(
+            "admin_password",
+            _parse_string(confirmation_inbox.get("admin_password"))
+            or _parse_string(item.get("cloudmail_admin_password"))
+            or _parse_string(payload.get("cloudmail_admin_password")),
+        )
+        _set_if_missing(
+            "domain",
+            confirmation_inbox.get("domain")
+            or item.get("cloudmail_domain")
+            or payload.get("cloudmail_domain")
+            or "",
+        )
+        _set_if_missing(
+            "subdomain",
+            _parse_string(confirmation_inbox.get("subdomain"))
+            or _parse_string(item.get("cloudmail_subdomain"))
+            or _parse_string(payload.get("cloudmail_subdomain")),
+        )
+        if normalized.get("timeout") in (None, ""):
+            normalized["timeout"] = _parse_int(
+                confirmation_inbox.get("timeout")
+                if confirmation_inbox.get("timeout") not in (None, "")
+                else item.get("cloudmail_timeout")
+                if item.get("cloudmail_timeout") not in (None, "")
+                else payload.get("cloudmail_timeout"),
+                30,
+            )
+    return normalized
+
+
+def _build_alias_email_source(
+    payload: dict[str, Any],
+    existing_source: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not _parse_bool(payload.get("cloudmail_alias_alias_email_enabled")):
+        return None
+
+    existing_source = dict(existing_source or {})
+    source_id = _parse_string(existing_source.get("id")) or str(ALIAS_EMAIL_DEFAULT_CONFIG["source_id"])
+    state_key = _parse_string(existing_source.get("state_key")) or source_id
+    alias_count = max(
+        _parse_int(
+            payload.get("cloudmail_alias_alias_email_alias_count"),
+            _parse_int(existing_source.get("alias_count"), 0),
+        ),
+        0,
+    )
+
+    provider_config = dict(existing_source.get("provider_config") or {})
+    provider_config["login_url"] = str(ALIAS_EMAIL_DEFAULT_CONFIG["login_url"])
+
+    source: dict[str, Any] = {
+        "id": source_id,
+        "type": "alias_email",
+        "alias_count": alias_count,
+        "state_key": state_key,
+        "provider_config": provider_config,
+    }
+
+    confirmation_inbox = _build_interactive_confirmation_inbox_config(
+        {
+            **existing_source,
+            "type": "alias_email",
+        },
+        payload,
+    )
+    if confirmation_inbox:
+        source["confirmation_inbox"] = confirmation_inbox
+    return source
 
 
 def _build_vend_confirmation_inbox_config(
@@ -260,6 +374,24 @@ def _hydrate_explicit_vend_sources(
     return hydrated
 
 
+def _hydrate_explicit_interactive_sources(
+    explicit_sources: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    hydrated: list[dict[str, Any]] = []
+    for source in explicit_sources:
+        source_type = str(source.get("type") or "").strip()
+        if source_type not in INTERACTIVE_PROVIDER_TYPES:
+            hydrated.append(source)
+            continue
+        hydrated_source = dict(source)
+        confirmation_inbox = _build_interactive_confirmation_inbox_config(source, payload)
+        if confirmation_inbox:
+            hydrated_source["confirmation_inbox"] = confirmation_inbox
+        hydrated.append(hydrated_source)
+    return hydrated
+
+
 def _merge_sources(
     explicit_sources: list[dict[str, Any]],
     synthesized_sources: list[dict[str, Any]],
@@ -383,6 +515,10 @@ def _build_cloudmail_alias_sources(payload: dict[str, Any]) -> list[dict[str, An
                 "state_key": vend_state_key,
             }
         )
+
+    alias_email_source = _build_alias_email_source(payload)
+    if alias_email_source is not None:
+        sources.append(alias_email_source)
 
     normalized_sources: list[dict[str, Any]] = []
     for source in sources:
@@ -552,6 +688,7 @@ def normalize_cloudmail_alias_pool_config(
         _normalize_sources(payload.get("sources")),
         payload,
     )
+    explicit_sources = _hydrate_explicit_interactive_sources(explicit_sources, payload)
     synthesized_sources = _normalize_sources(_build_cloudmail_alias_sources(payload))
     resolved_sources = _merge_sources(explicit_sources, synthesized_sources)
     emails = _parse_alias_emails(payload.get("cloudmail_alias_emails"))
