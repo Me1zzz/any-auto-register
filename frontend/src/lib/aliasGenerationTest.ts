@@ -118,7 +118,7 @@ export function createAliasGenerationDraftSourceTemplate(
         alias_count: 3,
         state_key: resolvedSourceId,
         provider_config: {
-          accounts: [{ email: '' }],
+          accounts: '',
         },
       }
     case 'simplelogin':
@@ -129,7 +129,7 @@ export function createAliasGenerationDraftSourceTemplate(
         state_key: resolvedSourceId,
         provider_config: {
           site_url: 'https://app.simplelogin.io/',
-          accounts: [{ email: '' }],
+          accounts: '',
         },
       }
     case 'alias_email':
@@ -703,13 +703,27 @@ function normalizeAliasGenerationDraftSource(
     || sourceType === 'simplelogin'
     || sourceType === 'alias_email'
   ) {
+    const providerConfig = asRecord(source.provider_config)
+    const normalizedProviderConfig = providerConfig
+      ? {
+          ...providerConfig,
+          ...(
+            sourceType === 'emailshield' || sourceType === 'simplelogin'
+              ? {
+                  accounts: sanitizeSimpleLoginAccounts(providerConfig.accounts) ?? [],
+                }
+              : {}
+          ),
+        }
+      : undefined
+
     return {
       id: sourceId,
       type: sourceType,
       alias_count: normalizeNumericFieldValue(source.alias_count),
       state_key: stringifyFieldValue(source.state_key),
       confirmation_inbox: asRecord(source.confirmation_inbox) ?? undefined,
-      provider_config: asRecord(source.provider_config) ?? undefined,
+      provider_config: normalizedProviderConfig,
     }
   }
 
@@ -779,6 +793,30 @@ export function serializeAliasGenerationDraftSources(value: unknown): string {
   return JSON.stringify(normalizeAliasGenerationDraftSources(value))
 }
 
+export function toFormEditableAliasGenerationDraftSources(
+  value: unknown,
+): AliasGenerationTestDraftSource[] {
+  return normalizeAliasGenerationDraftSources(value).map((source) => {
+    const sourceType = stringifyFieldValue(source.type)
+    if (sourceType !== 'emailshield' && sourceType !== 'simplelogin') {
+      return source
+    }
+
+    const providerConfig = asRecord(source.provider_config)
+    if (!providerConfig) {
+      return source
+    }
+
+    return {
+      ...source,
+      provider_config: {
+        ...providerConfig,
+        accounts: normalizeSimpleLoginAccountsFieldValue(providerConfig.accounts),
+      },
+    }
+  })
+}
+
 function isAliasGenerationDraftSource(
   value: unknown,
 ): value is AliasGenerationTestDraftSource {
@@ -792,31 +830,36 @@ function findDraftSourceByType(
   return sources.find((source) => source.type === type) ?? null
 }
 
-function sanitizeSimpleLoginAccounts(value: unknown): Array<Record<string, string>> | undefined {
-  if (!Array.isArray(value)) {
-    return undefined
+function parseSimpleLoginAccountLines(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
   }
 
-  const accounts = value
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
     .map((item) => {
       const record = asRecord(item)
       if (!record) {
-        return null
+        return ''
       }
-
-      const email = stringifyFieldValue(record.email).toLowerCase()
-
-      if (!email) {
-        return null
-      }
-
-      return {
-        email,
-      }
+      return stringifyFieldValue(record.email).toLowerCase()
     })
-    .filter((item): item is { email: string } => item !== null)
+    .filter(Boolean)
+}
 
+function sanitizeSimpleLoginAccounts(value: unknown): Array<Record<string, string>> | undefined {
+  const accounts = parseSimpleLoginAccountLines(value).map((email) => ({ email }))
   return accounts.length > 0 ? accounts : undefined
+}
+
+function normalizeSimpleLoginAccountsFieldValue(value: unknown): string {
+  return parseSimpleLoginAccountLines(value).join('\n')
 }
 
 function buildConfirmationInboxConfig(params: {
@@ -1285,18 +1328,16 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_emailshield_state_key: stringifyFieldValue(emailShieldSource?.state_key),
     cloudmail_alias_emailshield_alias_count: normalizeNumericFieldValue(emailShieldSource?.alias_count),
     cloudmail_alias_emailshield_accounts:
-      sanitizeSimpleLoginAccounts(emailShieldConfig?.accounts)
-      ?? sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_emailshield_accounts)
-      ?? [],
+      normalizeSimpleLoginAccountsFieldValue(emailShieldConfig?.accounts)
+      || normalizeSimpleLoginAccountsFieldValue(draftConfig.cloudmail_alias_emailshield_accounts),
     cloudmail_alias_simplelogin_enabled: Boolean(simpleLoginSource),
     cloudmail_alias_simplelogin_source_id: stringifyFieldValue(simpleLoginSource?.id),
     cloudmail_alias_simplelogin_state_key: stringifyFieldValue(simpleLoginSource?.state_key),
     cloudmail_alias_simplelogin_alias_count: normalizeNumericFieldValue(simpleLoginSource?.alias_count),
     cloudmail_alias_simplelogin_site_url: stringifyFieldValue(simpleLoginConfig?.site_url),
     cloudmail_alias_simplelogin_accounts:
-      sanitizeSimpleLoginAccounts(simpleLoginConfig?.accounts)
-      ?? sanitizeSimpleLoginAccounts(draftConfig.cloudmail_alias_simplelogin_accounts)
-      ?? [],
+      normalizeSimpleLoginAccountsFieldValue(simpleLoginConfig?.accounts)
+      || normalizeSimpleLoginAccountsFieldValue(draftConfig.cloudmail_alias_simplelogin_accounts),
     cloudmail_alias_alias_email_enabled: Boolean(aliasEmailSource),
     cloudmail_alias_alias_email_source_id: stringifyFieldValue(aliasEmailSource?.id),
     cloudmail_alias_alias_email_state_key: stringifyFieldValue(aliasEmailSource?.state_key),

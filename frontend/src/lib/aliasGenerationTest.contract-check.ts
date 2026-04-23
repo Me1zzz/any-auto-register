@@ -148,19 +148,13 @@ const fixedServiceDraftConfig = createAliasGenerationTestDraftConfig({
   cloudmail_alias_emailshield_source_id: 'emailshield-primary',
   cloudmail_alias_emailshield_state_key: 'emailshield-state',
   cloudmail_alias_emailshield_alias_count: 5,
-  cloudmail_alias_emailshield_accounts: [
-    { email: 'loga@fst.cxwsss.online' },
-    { email: 'juso@fst.cxwsss.online' },
-  ],
+  cloudmail_alias_emailshield_accounts: 'loga@fst.cxwsss.online\njuso@fst.cxwsss.online',
   cloudmail_alias_simplelogin_enabled: true,
   cloudmail_alias_simplelogin_source_id: 'simplelogin-primary',
   cloudmail_alias_simplelogin_state_key: 'simplelogin-state',
   cloudmail_alias_simplelogin_alias_count: 3,
   cloudmail_alias_simplelogin_site_url: 'https://simplelogin.io/',
-  cloudmail_alias_simplelogin_accounts: [
-    { email: 'fust@fst.cxwsss.online', label: 'fust' },
-    { email: 'logon@fst.cxwsss.online', label: 'logon', password: 'logon-pass' },
-  ],
+  cloudmail_alias_simplelogin_accounts: 'fust@fst.cxwsss.online\nlogon@fst.cxwsss.online',
   cloudmail_alias_alias_email_enabled: true,
   cloudmail_alias_alias_email_source_id: 'alias-email-primary',
   cloudmail_alias_alias_email_state_key: 'alias-email-state',
@@ -201,6 +195,16 @@ const hiddenSimpleGeneratorSourceCount = Array.isArray(hiddenSimpleGeneratorDraf
 
 const hiddenSimpleGeneratorRejected = hiddenSimpleGeneratorSourceCount === 0
 
+const noStaticAliasDraftConfig = createAliasGenerationTestDraftConfig({
+  cloudmail_alias_enabled: true,
+  cloudmail_alias_emails: '',
+  cloudmail_alias_vend_enabled: true,
+})
+
+const noStaticAliasSourceTypes = Array.isArray(noStaticAliasDraftConfig.sources)
+  ? noStaticAliasDraftConfig.sources.map((source) => String(source?.type || ''))
+  : []
+
 void [
   providerTypes,
   simpleLoginSource,
@@ -211,9 +215,12 @@ void [
   fixedServiceRoundTrip.cloudmail_alias_emailshield_enabled,
   fixedServiceRoundTrip.cloudmail_alias_simplelogin_enabled,
   fixedServiceRoundTrip.cloudmail_alias_alias_email_enabled,
+  fixedServiceRoundTrip.cloudmail_alias_emailshield_accounts,
+  fixedServiceRoundTrip.cloudmail_alias_simplelogin_accounts,
   hiddenSimpleGeneratorDraftConfig.sources,
   hiddenSimpleGeneratorRejected,
   hiddenSimpleGeneratorRoundTrip.cloudmail_alias_simplelogin_enabled,
+  noStaticAliasSourceTypes,
   modernDisplay.summaryAliasEmail,
   modernDisplay.account.realMailboxEmail,
   modernDisplay.account.serviceEmail,

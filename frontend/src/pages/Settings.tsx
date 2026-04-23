@@ -22,6 +22,7 @@ import {
   deriveAliasGenerationSourceOptions,
   parseStoredAliasGenerationSources,
   serializeAliasGenerationDraftSources,
+  toFormEditableAliasGenerationDraftSources,
   type AliasGenerationTestDraftConfig,
 } from '@/lib/aliasGenerationTest'
 import MailImportPanel from '@/components/settings/MailImportPanel'
@@ -188,7 +189,7 @@ const TAB_ITEMS = [
         fields: [
           { key: 'cloudmail_api_base', label: 'API Base', placeholder: 'https://cloudmail.example.com' },
           { key: 'cloudmail_admin_email', label: '管理员邮箱（可选）', placeholder: 'admin@example.com' },
-          { key: 'cloudmail_admin_password', label: '管理员密码', secret: true },
+          { key: 'cloudmail_admin_password', label: '管理员密码' },
           { key: 'cloudmail_domain', label: '邮箱域名（可选）', placeholder: 'mail.example.com,mail2.example.com' },
           { key: 'cloudmail_subdomain', label: '子域名（可选）', placeholder: 'pool-a' },
           { key: 'cloudmail_timeout', label: '请求超时秒数', placeholder: '30' },
@@ -737,7 +738,6 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
               label="别名邮箱列表"
               name="cloudmail_alias_emails"
               extra="每行一个 alias 邮箱。即使启用了 vend 等自动注册服务，这些邮箱仍然会作为 alias 池来源之一保留。"
-              rules={[{ required: true, whitespace: true, message: '请输入至少一个 alias 邮箱' }]}
               style={{ marginBottom: 0 }}
             >
               <Input.TextArea rows={5} placeholder={'alias1@example.com\nalias2@example.com'} />
@@ -1928,10 +1928,10 @@ export default function Settings() {
 
   useEffect(() => {
     apiFetch('/config').then((data) => {
-      const configMailProvider = String(data.mail_provider || 'luckmail')
+      const configMailProvider = String(data.mail_provider || 'cloudmail')
       const isMailImportProvider = configMailProvider === 'microsoft' || configMailProvider === 'outlook' || configMailProvider === 'applemail'
       if (!data.mail_provider) {
-        data.mail_provider = 'luckmail'
+        data.mail_provider = 'cloudmail'
       }
       if (!data.applemail_base_url) {
         data.applemail_base_url = 'https://www.appleemail.top'
@@ -1966,7 +1966,7 @@ export default function Settings() {
       if (!data.cloudmail_timeout) {
         data.cloudmail_timeout = 30
       }
-      data.sources = parseStoredAliasGenerationSources(data.sources)
+      data.sources = toFormEditableAliasGenerationDraftSources(parseStoredAliasGenerationSources(data.sources))
       Object.assign(data, deriveCloudmailAliasServiceFormValues(data))
       const normalizedSavedAliasConfig = createAliasGenerationTestDraftConfig(data)
       setSavedAliasGenerationConfig(normalizedSavedAliasConfig)
@@ -2058,7 +2058,7 @@ export default function Settings() {
       await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
       const savedAliasServiceFields = deriveCloudmailAliasServiceFormValues({
         ...values,
-        sources: aliasGenerationDraftConfig.sources,
+        sources: toFormEditableAliasGenerationDraftSources(aliasGenerationDraftConfig.sources),
       })
       form.setFieldsValue({
         mail_provider: values.mail_provider === 'microsoft' || values.mail_provider === 'applemail' ? 'mail_import' : values.mail_provider,
@@ -2072,7 +2072,7 @@ export default function Settings() {
         cfworker_random_name_subdomain: values.cfworker_random_name_subdomain,
         contribution_enabled: values.contribution_enabled,
         ...savedAliasServiceFields,
-        sources: aliasGenerationDraftConfig.sources,
+        sources: toFormEditableAliasGenerationDraftSources(aliasGenerationDraftConfig.sources),
       })
       setSavedAliasGenerationConfig(createAliasGenerationTestDraftConfig({
         ...values,
@@ -2168,16 +2168,8 @@ export default function Settings() {
                       {mailboxSections.defaultSection ? (
                         <ConfigSection key={mailboxSections.defaultSection.title} section={mailboxSections.defaultSection} />
                       ) : null}
-                      {mailboxSections.selectedSection && currentMailProvider !== 'cloudmail' ? (
-                        <ConfigSection key={`${mailboxSections.selectedSection.title}-selected`} section={mailboxSections.selectedSection} />
-                      ) : null}
-                      <MailImportPanel form={form} />
-                      {currentMailProviderRaw === 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
-                       {mailboxSections.remainingSections.map((section) => (
-                         <ConfigSection key={section.title} section={section} />
-                       ))}
-                       {currentMailProviderRaw !== 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
-                        {currentMailProvider === 'cloudmail' && mailboxSections.selectedSection ? (
+                      {currentMailProvider === 'cloudmail' && mailboxSections.selectedSection ? (
+                        <>
                           <Card
                             title={mailboxSections.selectedSection.title}
                             extra={mailboxSections.selectedSection.desc ? <span style={{ fontSize: 12, color: '#7a8ba3' }}>{mailboxSections.selectedSection.desc}</span> : null}
@@ -2188,14 +2180,24 @@ export default function Settings() {
                             ))}
                             <CloudMailAliasSection form={form} />
                           </Card>
-                        ) : null}
-                        {currentMailProvider === 'cloudmail' && cloudmailAliasEnabled ? (
-                          <AliasGenerationTestCard
-                            draftConfig={aliasGenerationDraftConfig}
-                            draftSourceOptions={draftAliasSourceOptions}
-                            savedSourceOptions={savedAliasSourceOptions}
-                          />
-                        ) : null}
+                          {cloudmailAliasEnabled ? (
+                            <AliasGenerationTestCard
+                              draftConfig={aliasGenerationDraftConfig}
+                              draftSourceOptions={draftAliasSourceOptions}
+                              savedSourceOptions={savedAliasSourceOptions}
+                            />
+                          ) : null}
+                        </>
+                      ) : null}
+                      {mailboxSections.selectedSection && currentMailProvider !== 'cloudmail' ? (
+                        <ConfigSection key={`${mailboxSections.selectedSection.title}-selected`} section={mailboxSections.selectedSection} />
+                      ) : null}
+                      <MailImportPanel form={form} />
+                      {currentMailProviderRaw === 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
+                       {mailboxSections.remainingSections.map((section) => (
+                         <ConfigSection key={section.title} section={section} />
+                       ))}
+                       {currentMailProviderRaw !== 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
                     </>
                   ) : activeTab === 'register' ? (
                     <RegisterSettingsSection form={form} />

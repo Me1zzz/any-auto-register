@@ -267,7 +267,7 @@ def get_config():
     if all_cfg.get("mail_provider") == "outlook":
         all_cfg["mail_provider"] = "microsoft"
     if not all_cfg.get("mail_provider"):
-        all_cfg["mail_provider"] = "luckmail"
+        all_cfg["mail_provider"] = "cloudmail"
     if not all_cfg.get("applemail_base_url"):
         all_cfg["applemail_base_url"] = "https://www.appleemail.top"
     if not all_cfg.get("applemail_pool_dir"):
