@@ -1,5 +1,6 @@
 import importlib
 import importlib.util
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -685,6 +686,135 @@ class AliasPoolManagerTests(unittest.TestCase):
 
         with self.assertRaises(AliasPoolExhaustedError):
             manager.acquire_alias()
+
+    def test_acquire_alias_refills_from_registered_source_on_demand(self):
+        manager = AliasEmailPoolManager(task_id="task-lazy-refill")
+
+        class _LazyProducer:
+            source_id = "source-a"
+
+            def __init__(self):
+                self._state = AliasSourceState.IDLE
+                self.calls = 0
+
+            def state(self):
+                return self._state
+
+            def ensure_available(self, pool_manager, *, minimum_count: int = 1):
+                self.calls += 1
+                self._state = AliasSourceState.EXHAUSTED
+                pool_manager.add_lease(
+                    AliasEmailLease(
+                        alias_email="lazy@example.com",
+                        real_mailbox_email="real@example.com",
+                        source_kind="static_list",
+                        source_id=self.source_id,
+                        source_session_id="lazy",
+                    )
+                )
+
+        producer = _LazyProducer()
+        manager.register_source(producer)
+
+        lease = manager.acquire_alias()
+
+        self.assertEqual(lease.alias_email, "lazy@example.com")
+        self.assertEqual(lease.status, AliasLeaseStatus.LEASED)
+        self.assertEqual(producer.calls, 1)
+
+    def test_registered_static_source_is_consumed_lazily_without_eager_load(self):
+        manager = AliasEmailPoolManager(task_id="task-static-lazy")
+        producer = StaticAliasListProducer(
+            source_id="legacy-static",
+            emails=["alias1@example.com", "alias2@example.com"],
+            mailbox_email="real@example.com",
+        )
+        manager.register_source(producer)
+
+        self.assertEqual(manager.available_count_for_source("legacy-static"), 0)
+
+        lease1 = manager.acquire_alias()
+        lease2 = manager.acquire_alias()
+
+        self.assertEqual(lease1.alias_email, "alias1@example.com")
+        self.assertEqual(lease2.alias_email, "alias2@example.com")
+        self.assertEqual(producer.state(), AliasSourceState.EXHAUSTED)
+
+    def test_background_refill_tops_up_available_aliases_to_low_watermark(self):
+        manager = AliasEmailPoolManager(task_id="task-background-refill")
+        producer = StaticAliasListProducer(
+            source_id="legacy-static",
+            emails=[f"alias{i}@example.com" for i in range(12)],
+            mailbox_email="real@example.com",
+        )
+        manager.register_source(producer)
+        manager.start_background_refill(low_watermark=10, interval_seconds=0.05)
+        self.addCleanup(manager.cleanup)
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and manager.available_count() < 10:
+            time.sleep(0.02)
+
+        self.assertEqual(manager.available_count(), 10)
+
+    def test_background_refill_replenishes_after_alias_is_consumed(self):
+        manager = AliasEmailPoolManager(task_id="task-background-replenish")
+        producer = StaticAliasListProducer(
+            source_id="legacy-static",
+            emails=[f"alias{i}@example.com" for i in range(15)],
+            mailbox_email="real@example.com",
+        )
+        manager.register_source(producer)
+        manager.start_background_refill(low_watermark=10, interval_seconds=0.05)
+        self.addCleanup(manager.cleanup)
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and manager.available_count() < 10:
+            time.sleep(0.02)
+
+        self.assertEqual(manager.available_count(), 10)
+
+    def test_background_refill_continues_when_one_source_fails(self):
+        logs = []
+        manager = AliasEmailPoolManager(
+            task_id="task-background-source-failure",
+            log_fn=logs.append,
+        )
+
+        class _FailingProducer:
+            source_id = "vend-primary"
+            source_kind = "vend_email"
+
+            def state(self):
+                return AliasSourceState.IDLE
+
+            def ensure_available(self, pool_manager, *, minimum_count: int = 1):
+                raise RuntimeError("vend bootstrap failed")
+
+        producer = StaticAliasListProducer(
+            source_id="legacy-static",
+            emails=["alias1@example.com", "alias2@example.com"],
+            mailbox_email="real@example.com",
+        )
+        manager.register_source(_FailingProducer())
+        manager.register_source(producer)
+
+        lease = manager.acquire_alias()
+
+        self.assertEqual(lease.alias_email, "alias1@example.com")
+        joined_logs = "\n".join(logs)
+        self.assertIn("refill failed: vend", joined_logs)
+        self.assertIn("refill produced: static list", joined_logs)
+
+        lease = manager.acquire_alias()
+
+        self.assertEqual(lease.status, AliasLeaseStatus.LEASED)
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and manager.available_count() < 10:
+            time.sleep(0.02)
+
+        self.assertEqual(manager.available_count(), 10)
 
     def test_cleanup_clears_task_pool(self):
         manager = AliasEmailPoolManager(task_id="task-3")

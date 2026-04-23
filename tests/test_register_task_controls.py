@@ -283,6 +283,22 @@ class _PublicConsumerAwarePlatform(_FakePlatform):
         )
 
 
+class _LazyPoolAwarePlatform(_FakePlatform):
+    def register(self, email: str, password: str | None = None) -> Account:
+        assert self.mailbox is not None
+        pool = self.mailbox._task_alias_pool
+        assert pool is not None
+        source_id = "legacy-static"
+        before_count = pool.available_count_for_source(source_id)
+        lease = pool.acquire_alias()
+        return Account(
+            platform="fake",
+            email=lease.alias_email,
+            password=password or "pw",
+            extra={"pool_available_before_first_acquire": before_count},
+        )
+
+
 class _FakeChatGPTWorkspacePlatform(BasePlatform):
     name = "chatgpt"
     display_name = "ChatGPT"
@@ -524,6 +540,137 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             [account.email for account in saved_accounts],
             ["alias1@example.com", "alias2@example.com"],
         )
+
+    def test_run_register_consumes_registered_static_source_without_eager_pool_prefill(self):
+        task_id = "task-static-lazy-consume"
+        req = self._build_request(
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "legacy-static",
+                        "type": "static_list",
+                        "emails": ["alias1@example.com"],
+                        "mailbox_email": "real@example.com",
+                    }
+                ],
+            },
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+        saved_accounts = []
+
+        with (
+            patch("core.registry.get", return_value=_LazyPoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch(
+                "core.db.save_account",
+                side_effect=lambda account: saved_accounts.append(account) or account,
+            ),
+            patch("api.tasks._save_task_log"),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(saved_accounts), 1)
+        self.assertEqual(saved_accounts[0].email, "alias1@example.com")
+        self.assertEqual(
+            saved_accounts[0].extra.get("pool_available_before_first_acquire"),
+            0,
+        )
+
+    def test_run_register_starts_alias_pool_snapshot_poller(self):
+        task_id = "task-alias-pool-snapshot-log"
+        req = self._build_request(
+            count=1,
+            concurrency=1,
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "vend-primary",
+                        "type": "static_list",
+                        "emails": ["vend-1@example.com"],
+                        "mailbox_email": "real@example.com",
+                    },
+                ],
+            },
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+        poller_calls = []
+
+        def _capture_poller(current_task_id, pool_manager, stop_event, *, interval_seconds):
+            poller_calls.append(
+                {
+                    "task_id": current_task_id,
+                    "pool_manager": pool_manager,
+                    "stop_event": stop_event,
+                    "interval_seconds": interval_seconds,
+                }
+            )
+            return Mock(join=Mock())
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+            patch("api.tasks._start_alias_pool_snapshot_poller", side_effect=_capture_poller),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(poller_calls), 1)
+        self.assertEqual(poller_calls[0]["task_id"], task_id)
+        self.assertEqual(poller_calls[0]["interval_seconds"], 3.0)
+        self.assertTrue(poller_calls[0]["stop_event"].is_set())
+
+    def test_run_register_enables_background_alias_pool_refill(self):
+        task_id = "task-alias-pool-background-refill"
+        req = self._build_request(
+            count=1,
+            concurrency=1,
+            extra={
+                "mail_provider": "cloudmail",
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "legacy-static",
+                        "type": "static_list",
+                        "emails": [f"alias{i}@example.com" for i in range(12)],
+                        "mailbox_email": "real@example.com",
+                    },
+                ],
+            },
+        )
+        _create_task_record(task_id, req, "manual", None)
+        mailbox_factory = _MailboxFactory()
+
+        with (
+            patch("core.registry.get", return_value=_PoolAwarePlatform),
+            patch("core.base_mailbox.create_mailbox", side_effect=mailbox_factory),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+            patch("api.tasks._start_alias_pool_snapshot_poller", return_value=Mock(join=Mock())),
+            patch.object(
+                AliasEmailPoolManager,
+                "start_background_refill",
+                autospec=True,
+            ) as start_background_refill_mock,
+        ):
+            _run_register(task_id, req)
+
+        start_background_refill_mock.assert_called_once()
+        kwargs = start_background_refill_mock.call_args.kwargs
+        self.assertEqual(kwargs["low_watermark"], 10)
+        self.assertEqual(kwargs["interval_seconds"], 0.5)
 
     def test_run_register_binds_public_alias_consumer_context(self):
         task_id = "task-public-alias-consumer"

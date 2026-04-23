@@ -1284,11 +1284,23 @@ class CloudMailMailbox(BaseMailbox):
             alias_email = ""
             if self._normalize_email_value(mailbox_email) != self._normalize_email_value(account_email):
                 alias_email = self._normalize_email_value(account_email)
+            if alias_email:
+                return alias_email, alias_email, mailbox_email
             return mailbox_email, alias_email, mailbox_email
 
         alias_email = self._normalize_email_value(account_email)
         seen_key = f"recipient:{alias_email}" if alias_email else ""
         return "", alias_email, seen_key
+
+    def _resolve_lookup_targets(self, target: str, alias_email: str) -> list[str]:
+        targets: list[str] = []
+        for candidate in (alias_email, target):
+            normalized = self._normalize_email_value(candidate)
+            if normalized and normalized not in targets:
+                targets.append(normalized)
+        if not targets:
+            targets.append("")
+        return targets
 
     @staticmethod
     def _normalize_email_value(value: Any) -> str:
@@ -1386,6 +1398,41 @@ class CloudMailMailbox(BaseMailbox):
 
         for key in ("content", "text", "html"):
             if self._contains_alias_email(message.get(key), normalized_alias):
+                return True
+
+        fallback_target = self._normalize_email_value(
+            getattr(self, "_mailbox_receipt_fallback_target", "")
+        )
+        fallback_alias = self._normalize_email_value(
+            getattr(self, "_mailbox_receipt_fallback_alias", "")
+        )
+        fallback_recipient_only = (
+            not recipient_addresses
+            or recipient_addresses.issubset({fallback_target})
+        )
+        if (
+            fallback_target
+            and fallback_alias == normalized_alias
+            and fallback_recipient_only
+            and self._match_mailbox_receipt(message, fallback_target)
+        ):
+            return True
+
+        return False
+
+    def _match_mailbox_receipt(self, message: dict, mailbox_email: str) -> bool:
+        normalized_mailbox = self._normalize_email_value(mailbox_email)
+        if not normalized_mailbox:
+            return False
+
+        recipient_addresses = set()
+        for key in ("recipt", "receipt", "recipient", "recipients", "toEmail"):
+            recipient_addresses.update(self._collect_recipient_addresses(message.get(key)))
+        if normalized_mailbox in recipient_addresses:
+            return True
+
+        for key in ("toEmail", "recipient", "recipt", "receipt", "recipients"):
+            if self._contains_alias_email(message.get(key), normalized_mailbox):
                 return True
 
         return False
@@ -1497,7 +1544,13 @@ class CloudMailMailbox(BaseMailbox):
             CloudMailMailbox._token_cache[cache_key] = (token, now + 3600)
             return token
 
-    def _list_mails(self, email: str = "", *, retry_auth: bool = True) -> list:
+    def _list_mails(
+        self,
+        email: str = "",
+        *,
+        retry_auth: bool = True,
+        allow_alias_mailbox_fallback: bool = True,
+    ) -> list:
         import requests
 
         token = self._get_token()
@@ -1533,6 +1586,25 @@ class CloudMailMailbox(BaseMailbox):
             return []
         mails = data.get("data") or []
         self._list_mails_log_summary(email, mails)
+        fallback_target = self._normalize_email_value(
+            getattr(self, "_mailbox_receipt_fallback_target", "")
+        )
+        if (
+            allow_alias_mailbox_fallback
+            and email
+            and fallback_target
+            and self._normalize_email_value(email) != fallback_target
+            and not mails
+        ):
+            self._log(
+                "[CloudMail] alias query returned empty; retrying mailbox target: "
+                f"alias={email} mailbox={fallback_target}"
+            )
+            return self._list_mails(
+                fallback_target,
+                retry_auth=retry_auth,
+                allow_alias_mailbox_fallback=False,
+            )
         return mails
 
     def _gen_prefix(self) -> str:
@@ -1672,12 +1744,17 @@ class CloudMailMailbox(BaseMailbox):
     def get_current_ids(self, account: MailboxAccount) -> set:
         target, alias_email, _ = self._resolve_lookup_context(account)
         try:
-            mails = self._list_mails(target)
             ids = set()
-            for idx, msg in enumerate(mails):
-                if alias_email and not target and not self._match_alias_receipt(msg, alias_email):
-                    continue
-                ids.add(self._mail_id(msg, idx))
+            for query_email in self._resolve_lookup_targets(target, alias_email):
+                mails = self._list_mails(query_email)
+                for idx, msg in enumerate(mails):
+                    if (
+                        alias_email
+                        and (not target or query_email == self._normalize_email_value(target))
+                        and not self._match_alias_receipt(msg, alias_email)
+                    ):
+                        continue
+                    ids.add(self._mail_id(msg, idx))
             return ids
         except Exception:
             return set()
@@ -1696,6 +1773,22 @@ class CloudMailMailbox(BaseMailbox):
             self._remember_skip_logged_id(persist_key, message_id)
         self._log(message)
 
+    def _should_allow_mailbox_fallback(
+        self,
+        *,
+        alias_email: str,
+        mailbox_target: str,
+        account: MailboxAccount,
+    ) -> bool:
+        normalized_alias = self._normalize_email_value(alias_email)
+        normalized_mailbox = self._normalize_email_value(mailbox_target)
+        if not normalized_alias or not normalized_mailbox:
+            return False
+        if normalized_alias == normalized_mailbox:
+            return False
+        account_mailbox = self._normalize_email_value(getattr(account, "account_id", ""))
+        return bool(account_mailbox and account_mailbox == normalized_mailbox)
+
     def wait_for_code(
         self,
         account: MailboxAccount,
@@ -1707,6 +1800,19 @@ class CloudMailMailbox(BaseMailbox):
     ) -> str:
         self._last_matched_message_id = ""
         target, alias_email, seen_key = self._resolve_lookup_context(account)
+        mailbox_target = self._normalize_email_value(getattr(account, "account_id", ""))
+        allow_mailbox_fallback = self._should_allow_mailbox_fallback(
+            alias_email=alias_email,
+            mailbox_target=mailbox_target,
+            account=account,
+        )
+        self._mailbox_receipt_fallback_target = mailbox_target if allow_mailbox_fallback else ""
+        self._mailbox_receipt_fallback_alias = alias_email if allow_mailbox_fallback else ""
+        if allow_mailbox_fallback:
+            self._log(
+                "[CloudMail] enabled mailbox fallback for alias lookup: "
+                f"target={mailbox_target} alias={alias_email}"
+            )
         seen = set(before_ids or set())
         if seen_key:
             seen.update(self._load_seen_ids(seen_key))

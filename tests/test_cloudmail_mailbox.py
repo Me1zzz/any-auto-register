@@ -371,7 +371,7 @@ class CloudMailMailboxTests(unittest.TestCase):
         code = mailbox.wait_for_code(account, timeout=5)
 
         self.assertEqual(code, "654321")
-        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "real@mail.example.com")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "alias@alias.example.com")
 
     @mock.patch("requests.post")
     def test_wait_for_code_filters_by_recipient_json_string_for_alias(self, mock_post):
@@ -417,7 +417,7 @@ class CloudMailMailboxTests(unittest.TestCase):
         code = mailbox.wait_for_code(account, timeout=5)
 
         self.assertEqual(code, "267510")
-        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "sss@me1zzz.tech")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "lunar.emoticon487@dralias.com")
 
     @mock.patch("requests.post")
     def test_wait_for_code_matches_alias_when_sender_contains_alias(self, mock_post):
@@ -497,6 +497,51 @@ class CloudMailMailboxTests(unittest.TestCase):
         code = mailbox.wait_for_code(account, timeout=5)
 
         self.assertEqual(code, "654321")
+
+    @mock.patch("requests.post")
+    def test_wait_for_code_accepts_mailbox_fallback_when_alias_recipient_metadata_is_missing(self, mock_post):
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response({"code": 200, "data": []}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "m-1",
+                            "toEmail": "admin@cxwsss.online",
+                            "recipient": "admin@cxwsss.online",
+                            "subject": "Your ChatGPT code is 654321",
+                            "content": "",
+                        }
+                    ],
+                }
+            ),
+        ]
+
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+                "cloudmail_domain": "mail.example.com",
+            },
+        )
+        assert isinstance(mailbox, CloudMailMailbox)
+        logs = []
+        setattr(mailbox, "_log_fn", logs.append)
+        account = MailboxAccount(
+            email="alias@myalias.pro",
+            account_id="admin@cxwsss.online",
+        )
+
+        code = mailbox.wait_for_code(account, timeout=5)
+
+        self.assertEqual(code, "654321")
+        self.assertIn("enabled mailbox fallback", "\n".join(logs))
+        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "alias@myalias.pro")
+        self.assertEqual(mock_post.call_args_list[2].kwargs["json"]["toEmail"], "admin@cxwsss.online")
 
     @mock.patch("requests.post")
     def test_wait_for_code_prefers_send_email_over_legacy_from(self, mock_post):
@@ -618,7 +663,7 @@ class CloudMailMailboxTests(unittest.TestCase):
         current_ids = mailbox.get_current_ids(account)
 
         self.assertEqual(current_ids, {"m-2"})
-        self.assertNotIn("toEmail", mock_post.call_args_list[1].kwargs["json"])
+        self.assertEqual(mock_post.call_args_list[1].kwargs["json"]["toEmail"], "alias@alias.example.com")
 
     @mock.patch("requests.post")
     def test_wait_for_code_filters_by_recipient_when_real_mailbox_missing(self, mock_post):

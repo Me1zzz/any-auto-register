@@ -161,9 +161,14 @@ class DefaultVendEmailRuntimeExecutor:
         deadline = time.monotonic() + 120
 
         while time.monotonic() < deadline:
-            mails = cloudmail_mailbox._list_mails("")
+            mails = cloudmail_mailbox._list_mails(target_email)
+            if not mails:
+                mails = cloudmail_mailbox._list_mails("")
             for idx, msg in enumerate(mails):
-                if not cloudmail_mailbox._match_alias_receipt(msg, target_email):
+                if not (
+                    cloudmail_mailbox._match_mailbox_receipt(msg, target_email)
+                    or cloudmail_mailbox._match_alias_receipt(msg, target_email)
+                ):
                     continue
                 content = " ".join(
                     [

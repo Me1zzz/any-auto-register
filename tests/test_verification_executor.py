@@ -254,7 +254,7 @@ class VerificationExecutorTests(unittest.TestCase):
         self.assertEqual(result.source, "cloudmail_api")
         self.assertEqual(client.calls[-1][2]["headers"]["authorization"], "token-1")
 
-    def test_executor_uses_cloudmail_mailbox_full_list_for_myalias_confirmation_lookup(self):
+    def test_executor_uses_target_mailbox_first_for_myalias_confirmation_lookup(self):
         client = _FakeEmptyMailListHTTPClient()
         executor = VerificationExecutor(client=client)
         spec = AliasProviderSourceSpec(
@@ -335,9 +335,63 @@ class VerificationExecutorTests(unittest.TestCase):
                 "timeout": 30,
             },
         )
-        self.assertEqual(captured["list_calls"], ["", ""])
+        self.assertEqual(captured["list_calls"], ["real@example.com", "real@example.com"])
         self.assertEqual(len(captured["match_alias_calls"]), 1)
         self.assertEqual(captured["match_alias_calls"][0][1], "real@example.com")
+
+    def test_executor_falls_back_to_full_list_when_target_mailbox_returns_empty(self):
+        executor = VerificationExecutor(client=_FakeEmptyMailListHTTPClient())
+        spec = AliasProviderSourceSpec(
+            source_id="myalias-primary",
+            provider_type="myalias_pro",
+            confirmation_inbox_config={
+                "base_url": "https://mailbox.example",
+                "account_email": "admin@example.com",
+                "account_password": "secret-pass",
+                "match_email": "real@example.com",
+            },
+        )
+        context = AuthenticatedProviderContext(
+            confirmation_inbox_email="real@example.com",
+            real_mailbox_email="real@example.com",
+        )
+        requirement = VerificationRequirement(
+            kind="account_email",
+            label="妤犲矁鐦夐張宥呭鐠愶箑褰块柇顔绢唸",
+            inbox_role="confirmation_inbox",
+        )
+        fake_time = mock.Mock()
+        fake_time.monotonic.side_effect = [0.0, 0.0, 1.0]
+        captured = {"list_calls": []}
+
+        class _MailboxFake:
+            def __init__(self, **kwargs):
+                pass
+
+            def _list_mails(self, email=""):
+                captured["list_calls"].append(email)
+                if email:
+                    return []
+                return [
+                    {
+                        "recipient": "real@example.com",
+                        "content": "confirm real@example.com via https://provider.test/verify/right-token",
+                    }
+                ]
+
+            def _match_alias_receipt(self, message, alias_email):
+                return str(message.get("recipient") or "") == str(alias_email)
+
+        with mock.patch("core.alias_pool.verification_executor.CloudMailMailbox", _MailboxFake, create=True):
+            with mock.patch("core.alias_pool.verification_executor.time", fake_time, create=True):
+                result = executor.resolve_link(
+                    requirement=requirement,
+                    spec=spec,
+                    context=context,
+                )
+
+        self.assertEqual(result.link, "https://provider.test/verify/right-token")
+        self.assertEqual(captured["list_calls"], ["real@example.com", ""])
 
     def test_executor_prefers_service_account_email_as_myalias_confirmation_target(self):
         executor = VerificationExecutor(client=_FakeEmptyMailListHTTPClient())
