@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from core.alias_pool.myalias_pro_provider import MyAliasProProvider
 from core.alias_pool.alias_email_provider import AliasEmailProvider
@@ -14,6 +15,7 @@ from core.alias_pool.interactive_provider_state import InteractiveProviderState
 from core.alias_pool.interactive_state_repository import InteractiveStateRepository
 from core.alias_pool.provider_contracts import (
     AliasAutomationTestPolicy,
+    AliasProviderCapture,
     AliasProviderBootstrapContext,
     AliasProviderSourceSpec,
 )
@@ -120,6 +122,123 @@ class _ExistingAccountProvider(ExistingAccountAliasProviderBase):
 
     def create_alias(self, *, context, domain, alias_index):
         return AliasCreatedRecord(email=f"existing-{alias_index}@example.com")
+
+
+class _FakeSecureInSecondsRuntime:
+    def __init__(self):
+        self.calls: list[object] = []
+        self._forwarding_sequences = [
+            [],
+            [{"email": "admin@cxwsss.online", "verified": False, "verifiedAt": "", "isPrimary": False}],
+            [{"email": "admin@cxwsss.online", "verified": True, "verifiedAt": "2026-04-22T12:56:20.242Z", "isPrimary": False}],
+        ]
+        self._created_alias_count = 0
+
+    def export_session_state(self):
+        return {
+            "cookies": [
+                {
+                    "name": "next-auth.session-token",
+                    "value": "secure-session-token",
+                    "domain": "alias.secureinseconds.com",
+                    "path": "/",
+                    "secure": True,
+                }
+            ]
+        }
+
+    def restore_session(self, session_state, expected_email):
+        self.calls.append(("restore_session", expected_email, dict(session_state or {})))
+        return False
+
+    def register_account(self, email, password):
+        self.calls.append(("register_account", email, password))
+        return True, "registered"
+
+    def login_account(self, email, password):
+        self.calls.append(("login_account", email, password))
+        return True
+
+    def list_forwarding_emails(self):
+        self.calls.append("list_forwarding_emails")
+        if self._forwarding_sequences:
+            return list(self._forwarding_sequences.pop(0))
+        return [{"email": "admin@cxwsss.online", "verified": True, "verifiedAt": "2026-04-22T12:56:20.242Z", "isPrimary": False}]
+
+    def add_forwarding_email(self, email):
+        self.calls.append(("add_forwarding_email", email))
+        return True, "Email added successfully. Please check your inbox for verification."
+
+    def resend_forwarding_verification(self, email):
+        self.calls.append(("resend_forwarding_verification", email))
+        return True, "Verification email sent successfully."
+
+    def fetch_forwarding_verify_link(self, *, mailbox_email, mailbox_password, match_email, timeout_seconds, link_anchor):
+        self.calls.append(
+            (
+                "fetch_forwarding_verify_link",
+                mailbox_email,
+                mailbox_password,
+                match_email,
+                timeout_seconds,
+                link_anchor,
+            )
+        )
+        return "https://alias.secureinseconds.com/api/user/emails/verify?token=abc123"
+
+    def verify_forwarding_email(self, verify_url):
+        self.calls.append(("verify_forwarding_email", verify_url))
+        return True, "Email verified successfully."
+
+    def list_aliases(self):
+        self.calls.append("list_aliases")
+        return [
+            {
+                "email": "existing@alias.secureinseconds.com",
+                "forwardToEmails": ["admin@cxwsss.online"],
+                "active": True,
+                "deletedAt": "",
+                "aliasId": "alias-existing",
+                "description": "existing alias",
+            },
+            {
+                "email": "wrong@alias.secureinseconds.com",
+                "forwardToEmails": [],
+                "active": True,
+                "deletedAt": "",
+                "aliasId": "alias-wrong",
+                "description": "wrong alias",
+            }
+        ]
+
+    def create_alias(self, *, prefix, description, forward_to_emails):
+        self._created_alias_count += 1
+        self.calls.append(("create_alias", prefix, description, list(forward_to_emails)))
+        return {
+            "alias": f"{prefix}-rnd{self._created_alias_count}@alias.secureinseconds.com",
+            "forwardToEmails": list(forward_to_emails),
+            "description": description,
+            "_id": f"alias-{self._created_alias_count}",
+        }
+
+    def capture_summary(self):
+        return [
+            AliasProviderCapture(
+                kind="mailbox_verification",
+                request_summary={
+                    "method": "POST",
+                    "url": "https://cxwsss.online/api/login",
+                    "request_headers_whitelist": {"content-type": "application/json"},
+                    "request_body_excerpt": "mailbox verification request",
+                },
+                response_summary={
+                    "response_status": 200,
+                    "response_body_excerpt": "verification link found",
+                    "captured_at": "2026-04-22T12:56:20.242Z",
+                },
+                redaction_applied=True,
+            )
+        ]
 
 
 class InteractiveAliasProviderBaseTests(unittest.TestCase):
@@ -413,7 +532,7 @@ class InteractiveProviderContractTests(unittest.TestCase):
                 confirmation_inbox_config={
                     "account_email": "real@example.com",
                     "account_password": "mail-pass",
-                    "match_email": "real@example.com",
+                    "match_email": "admin@cxwsss.online",
                 },
                 provider_config={
                     "signup_url": "https://myalias.pro/signup/",
@@ -440,7 +559,7 @@ class InteractiveProviderContractTests(unittest.TestCase):
                 confirmation_inbox_config={
                     "account_email": "real@example.com",
                     "account_password": "mail-pass",
-                    "match_email": "real@example.com",
+                    "match_email": "admin@cxwsss.online",
                 },
                 provider_config={
                     "signup_url": "https://myalias.pro/signup/",
@@ -674,7 +793,7 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
                 confirmation_inbox_config={
                     "account_email": "real@example.com",
                     "account_password": "mail-pass",
-                    "match_email": "real@example.com",
+                    "match_email": "admin@cxwsss.online",
                 },
                 provider_config={
                     "register_url": "https://alias.secureinseconds.com/auth/register",
@@ -692,6 +811,7 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
         )
 
     def test_secureinseconds_shared_loop_maps_requirement_to_verify_forwarding_email_stage(self):
+        fake_runtime = _FakeSecureInSecondsRuntime()
         provider = SecureInSecondsProvider(
             spec=AliasProviderSourceSpec(
                 source_id="secureinseconds-primary",
@@ -701,24 +821,35 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
                 confirmation_inbox_config={
                     "account_email": "real@example.com",
                     "account_password": "mail-pass",
-                    "match_email": "real@example.com",
+                    "match_email": "admin@cxwsss.online",
                 },
                 provider_config={
                     "register_url": "https://alias.secureinseconds.com/auth/register",
                     "login_url": "https://alias.secureinseconds.com/auth/signin",
                 },
             ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda *args, **kwargs: fake_runtime,
+            ),
         )
 
-        result = provider.run_alias_generation_test(
-            AliasAutomationTestPolicy(
-                fresh_service_account=True,
-                persist_state=False,
-                minimum_alias_count=3,
-                capture_enabled=True,
+        with mock.patch(
+            "core.alias_pool.secureinseconds_provider.build_secureinseconds_service_email",
+            return_value="svcsecure01@cxwsss.online",
+        ), mock.patch(
+            "core.alias_pool.secureinseconds_provider.build_secureinseconds_service_password",
+            return_value="SisA1@TestPass",
+        ):
+            result = provider.run_alias_generation_test(
+                AliasAutomationTestPolicy(
+                    fresh_service_account=True,
+                    persist_state=False,
+                    minimum_alias_count=3,
+                    capture_enabled=True,
+                )
             )
-        )
 
         self.assertTrue(result.ok)
         self.assertEqual(
@@ -730,6 +861,53 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
                 "list_aliases",
                 "create_aliases",
                 "aliases_ready",
+            ],
+        )
+        self.assertEqual(result.account_identity.service_account_email, "svcsecure01@cxwsss.online")
+        self.assertEqual(result.account_identity.real_mailbox_email, "admin@cxwsss.online")
+        self.assertEqual(result.account_identity.service_password, "SisA1@TestPass")
+        self.assertEqual(
+            [item["email"] for item in result.aliases],
+            [
+                "existing@alias.secureinseconds.com",
+                "svcsecur02-rnd1@alias.secureinseconds.com",
+                "svcsecur03-rnd2@alias.secureinseconds.com",
+            ],
+        )
+        self.assertEqual(result.capture_summary[0].kind, "mailbox_verification")
+        self.assertEqual(fake_runtime.calls[0:9], [
+            ("register_account", "svcsecure01@cxwsss.online", "SisA1@TestPass"),
+            ("login_account", "svcsecure01@cxwsss.online", "SisA1@TestPass"),
+            "list_forwarding_emails",
+            ("add_forwarding_email", "admin@cxwsss.online"),
+            "list_forwarding_emails",
+            (
+                "fetch_forwarding_verify_link",
+                "real@example.com",
+                "mail-pass",
+                "admin@cxwsss.online",
+                120,
+                "https://alias.secureinseconds.com/api/user/emails/verify?token=",
+            ),
+            ("verify_forwarding_email", "https://alias.secureinseconds.com/api/user/emails/verify?token=abc123"),
+            "list_forwarding_emails",
+            "list_aliases",
+        ])
+        self.assertEqual(
+            [call for call in fake_runtime.calls if isinstance(call, tuple) and call[0] == "create_alias"],
+            [
+                (
+                    "create_alias",
+                    "svcsecur02",
+                    "SecureInSeconds automation alias 2",
+                    ["admin@cxwsss.online"],
+                ),
+                (
+                    "create_alias",
+                    "svcsecur03",
+                    "SecureInSeconds automation alias 3",
+                    ["admin@cxwsss.online"],
+                ),
             ],
         )
 
