@@ -883,30 +883,28 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
               form={form}
               fieldKey="cloudmail_alias_simplelogin_enabled"
               title="SimpleLogin"
-              description="启用后会把单实例 SimpleLogin source 加入 alias 池。"
+              description="启用后会把单实例 SimpleLogin source 加入 alias 池，并使用已注册邮箱直接登录创建别名。"
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  <Form.Item label="Source ID" name="cloudmail_alias_simplelogin_source_id" style={{ marginBottom: 0 }}>
-                    <Input placeholder="simplelogin-primary" />
-                  </Form.Item>
-                  <Form.Item label="State Key" name="cloudmail_alias_simplelogin_state_key" style={{ marginBottom: 0 }}>
-                    <Input placeholder="simplelogin-primary" />
-                  </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="SimpleLogin 不需要注册和邮件确认"
+                  description="这里只维护已注册好的账号邮箱列表。后端会直接按“邮箱 = 密码”执行登录，并从 SimpleLogin 实时获取可用域名后随机创建别名。"
+                />
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 320px)', gap: 12 }}>
                   <Form.Item label="目标别名数" name="cloudmail_alias_simplelogin_alias_count" style={{ marginBottom: 0 }}>
                     <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
-                  </Form.Item>
-                  <Form.Item label="站点 URL" name="cloudmail_alias_simplelogin_site_url" style={{ marginBottom: 0 }}>
-                    <Input placeholder="https://simplelogin.io/" />
                   </Form.Item>
                 </div>
 
                 <div style={{ padding: 12, borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa' }}>
                   <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-                    SimpleLogin 服务账号
+                    已注册好的邮箱列表
                   </Typography.Text>
                   <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-                    运行时会从账号列表中选择服务账号，并通过已登录页面动态解析 signed domain options；这里不提供静态 alias domain 输入项。
+                    前端只维护邮箱列表本身；运行时会直接使用这些邮箱登录，并自动按接口实时获取域名与 signed suffix，不再手填站点 URL、密码或静态域名。
                   </Typography.Text>
                   <SimpleLoginAccountListEditor name={['cloudmail_alias_simplelogin_accounts']} />
                 </div>

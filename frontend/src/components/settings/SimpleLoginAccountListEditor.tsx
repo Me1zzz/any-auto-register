@@ -15,34 +15,18 @@ export default function SimpleLoginAccountListEditor({ name }: Props) {
               key={field.key}
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr)) auto',
+                gridTemplateColumns: 'minmax(220px, 1fr) auto',
                 gap: 8,
                 alignItems: 'start',
               }}
             >
               <Form.Item
-                label="账号邮箱"
+                label="已注册邮箱"
                 name={[field.name, 'email']}
                 rules={[{ required: true, message: '请输入账号邮箱' }]}
                 style={{ marginBottom: 0 }}
               >
-                <Input placeholder="fust@fst.cxwsss.online" />
-              </Form.Item>
-
-              <Form.Item
-                label="标签"
-                name={[field.name, 'label']}
-                style={{ marginBottom: 0 }}
-              >
-                <Input placeholder="例如：fust" />
-              </Form.Item>
-
-              <Form.Item
-                label="密码"
-                name={[field.name, 'password']}
-                style={{ marginBottom: 0 }}
-              >
-                <Input.Password placeholder="留空时默认等于邮箱" />
+                <Input placeholder="jisu@fst.cxwsss.online" />
               </Form.Item>
 
               <div style={{ display: 'flex', alignItems: 'end', height: '100%' }}>
@@ -55,16 +39,20 @@ export default function SimpleLoginAccountListEditor({ name }: Props) {
 
           {fields.length === 0 ? (
             <Typography.Text type="secondary">
-              还没有配置 SimpleLogin 服务账号。至少添加一个账号后，运行时才能选择服务账号并发现 signed domain options。
+              还没有配置 SimpleLogin 已注册账号。运行时会直接使用这些邮箱登录，密码默认等于邮箱本身。
             </Typography.Text>
           ) : null}
+
+          <Typography.Text type="secondary">
+            每个邮箱都必须是已经在 SimpleLogin 完成注册和确认的账号；后端会自动按“邮箱 = 密码”的约定执行登录。
+          </Typography.Text>
 
           <Button
             type="dashed"
             icon={<PlusOutlined />}
-            onClick={() => add({ email: '', label: '', password: '' })}
+            onClick={() => add({ email: '' })}
           >
-            添加 SimpleLogin 账号
+            添加已注册邮箱
           </Button>
         </Space>
       )}
