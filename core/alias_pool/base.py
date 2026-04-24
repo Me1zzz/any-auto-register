@@ -50,3 +50,7 @@ class AliasEmailLease:
 
 class AliasPoolExhaustedError(RuntimeError):
     pass
+
+
+class AliasPoolStarvedError(RuntimeError):
+    pass

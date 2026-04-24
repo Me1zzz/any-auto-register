@@ -10,9 +10,20 @@ from core.alias_pool.base import (
     AliasEmailLease,
     AliasLeaseStatus,
     AliasPoolExhaustedError,
+    AliasPoolStarvedError,
     AliasSourceState,
 )
-from core.alias_pool.config import normalize_cloudmail_alias_pool_config
+from core.alias_pool.config import (
+    build_alias_provider_source_specs,
+    normalize_cloudmail_alias_pool_config,
+)
+from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase
+from core.alias_pool.interactive_provider_models import (
+    AliasCreatedRecord,
+    AliasDomainOption,
+    AuthenticatedProviderContext,
+)
+from core.alias_pool.interactive_provider_state import InteractiveProviderState
 from core.alias_pool.manager import AliasEmailPoolManager
 from core.alias_pool.provider_contracts import (
     AliasAccountIdentity,
@@ -71,6 +82,64 @@ class AliasPoolConfigTests(unittest.TestCase):
 
         self.assertFalse(result["enabled"])
         self.assertEqual(result["sources"], [])
+
+    def test_normalize_cloudmail_alias_pool_config_preserves_source_watermarks_and_account_caps(self):
+        payload = {
+            "cloudmail_alias_enabled": True,
+            "sources": [
+                {
+                    "id": "simplelogin-primary",
+                    "type": "simplelogin",
+                    "alias_count": 8,
+                    "low_watermark": 3,
+                    "single_account_alias_count": 2,
+                    "provider_config": {
+                        "site_url": "https://app.simplelogin.io/",
+                        "accounts": [{"email": "a@example.com"}, {"email": "b@example.com"}],
+                    },
+                },
+                {
+                    "id": "legacy-static",
+                    "type": "static_list",
+                    "emails": ["one@example.com", "two@example.com"],
+                    "low_watermark": 1,
+                },
+            ],
+        }
+
+        normalized = normalize_cloudmail_alias_pool_config(payload, task_id="task-1")
+        specs = build_alias_provider_source_specs(normalized)
+        normalized_sources = {source["id"]: source for source in normalized["sources"]}
+        specs_by_source_id = {spec.source_id: spec for spec in specs}
+
+        self.assertEqual(normalized_sources["simplelogin-primary"]["low_watermark"], 3)
+        self.assertEqual(normalized_sources["simplelogin-primary"]["single_account_alias_count"], 2)
+        self.assertEqual(normalized_sources["legacy-static"]["low_watermark"], 1)
+        self.assertEqual(specs_by_source_id["simplelogin-primary"].provider_config["single_account_alias_count"], 2)
+        self.assertEqual(specs_by_source_id["simplelogin-primary"].raw_source["low_watermark"], 3)
+
+    def test_build_alias_provider_source_specs_preserves_nested_account_cap_when_top_level_missing(self):
+        payload = {
+            "cloudmail_alias_enabled": True,
+            "sources": [
+                {
+                    "id": "simplelogin-primary",
+                    "type": "simplelogin",
+                    "alias_count": 8,
+                    "provider_config": {
+                        "site_url": "https://app.simplelogin.io/",
+                        "single_account_alias_count": 4,
+                        "accounts": [{"email": "a@example.com"}],
+                    },
+                }
+            ],
+        }
+
+        normalized = normalize_cloudmail_alias_pool_config(payload, task_id="task-compat")
+        specs = build_alias_provider_source_specs(normalized)
+
+        self.assertNotIn("single_account_alias_count", normalized["sources"][0])
+        self.assertEqual(specs[0].provider_config["single_account_alias_count"], 4)
 
 
 class AliasPoolConfigV2Tests(unittest.TestCase):
@@ -684,8 +753,46 @@ class AliasPoolManagerTests(unittest.TestCase):
     def test_acquire_alias_raises_when_pool_empty(self):
         manager = AliasEmailPoolManager(task_id="task-2")
 
-        with self.assertRaises(AliasPoolExhaustedError):
-            manager.acquire_alias()
+        with self.assertRaises(AliasPoolStarvedError):
+            manager.acquire_alias(wait_timeout_seconds=0, poll_interval_seconds=0.1)
+
+    @mock.patch("core.alias_pool.manager.random.randrange", return_value=1)
+    def test_acquire_alias_selects_random_entry_from_total_pool(self, _mock_randrange):
+        manager = AliasEmailPoolManager(task_id="task-random")
+        manager.add_lease(
+            AliasEmailLease(
+                alias_email="first@example.com",
+                real_mailbox_email="real@example.com",
+                source_kind="static_list",
+                source_id="source-a",
+                source_session_id="static",
+            )
+        )
+        manager.add_lease(
+            AliasEmailLease(
+                alias_email="second@example.com",
+                real_mailbox_email="real@example.com",
+                source_kind="static_list",
+                source_id="source-b",
+                source_session_id="static",
+            )
+        )
+
+        lease = manager.acquire_alias()
+
+        self.assertEqual(lease.alias_email, "second@example.com")
+        self.assertEqual(lease.status, AliasLeaseStatus.LEASED)
+
+    @mock.patch("core.alias_pool.manager.time.sleep")
+    @mock.patch("core.alias_pool.manager.time.monotonic")
+    def test_acquire_alias_waits_then_times_out_when_pool_stays_empty(self, mock_monotonic, mock_sleep):
+        manager = AliasEmailPoolManager(task_id="task-timeout")
+        mock_monotonic.side_effect = [0, 0, 5, 5, 10, 10, 120, 120]
+
+        with self.assertRaises(AliasPoolStarvedError):
+            manager.acquire_alias(wait_timeout_seconds=120, poll_interval_seconds=5)
+
+        self.assertGreaterEqual(mock_sleep.call_count, 1)
 
     def test_acquire_alias_refills_from_registered_source_on_demand(self):
         manager = AliasEmailPoolManager(task_id="task-lazy-refill")
@@ -881,6 +988,479 @@ class AliasPoolManagerSourceStateTests(unittest.TestCase):
         manager.register_source(producer)
 
         self.assertTrue(manager.has_live_sources())
+
+    def test_refill_to_source_watermarks_tops_up_individual_source(self):
+        manager = AliasEmailPoolManager(task_id="task-source-watermark")
+
+        class _WatermarkProducer:
+            source_id = "simplelogin-primary"
+            source_kind = "simplelogin"
+            low_watermark = 3
+
+            def __init__(self):
+                self._state = AliasSourceState.IDLE
+                self.calls = []
+                self.next_index = 1
+
+            def state(self):
+                return self._state
+
+            def ensure_available(self, pool_manager, *, minimum_count: int = 1):
+                self.calls.append(minimum_count)
+                self._state = AliasSourceState.ACTIVE
+                for _ in range(minimum_count):
+                    pool_manager.add_lease(
+                        AliasEmailLease(
+                            alias_email=f"alias-{self.next_index}@example.com",
+                            real_mailbox_email="real@example.com",
+                            source_kind=self.source_kind,
+                            source_id=self.source_id,
+                            source_session_id="session-1",
+                        )
+                    )
+                    self.next_index += 1
+
+        producer = _WatermarkProducer()
+        manager.register_source(producer)
+
+        produced = manager._refill_to_source_watermarks()
+
+        self.assertTrue(produced)
+        self.assertEqual(producer.calls, [3])
+        self.assertEqual(manager.available_count_for_source("simplelogin-primary"), 3)
+
+
+class _MemoryInteractiveStateStore:
+    def __init__(self, state=None):
+        self.state = state
+
+    def load(self, state_key=None):
+        return self.state
+
+    def save(self, state, state_key=None):
+        self.state = state
+
+
+class _RotatingExistingAccountProvider(ExistingAccountAliasProviderBase):
+    source_kind = "simplelogin"
+
+    def __init__(self, *, spec, store):
+        self.created_aliases = []
+        self.seen_modes = []
+        super().__init__(
+            spec=spec,
+            context=AliasProviderBootstrapContext(
+                task_id="task-rotate",
+                purpose="task_pool",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+
+    def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
+        self.seen_modes.append(mode)
+        account = self.select_service_account()
+        return AuthenticatedProviderContext(
+            service_account_email=account["email"],
+            confirmation_inbox_email=account["email"],
+            real_mailbox_email=account["email"],
+            service_password=account["password"],
+            username=account["label"],
+            session_state={"mode": mode},
+        )
+
+    def discover_alias_domains(self, context):
+        return [AliasDomainOption(key="example.com", domain="example.com", label="@example.com")]
+
+    def create_alias(self, *, context, domain, alias_index):
+        local_part = str(context.service_account_email or "").split("@", 1)[0]
+        created_email = f"{local_part}-{alias_index}@example.com"
+        self.created_aliases.append((context.service_account_email, created_email))
+        return AliasCreatedRecord(email=created_email)
+
+
+class _StallingFirstAccountProvider(_RotatingExistingAccountProvider):
+    def create_alias(self, *, context, domain, alias_index):
+        if context.service_account_email == "a@example.com":
+            created_email = "a-1@example.com"
+            self.created_aliases.append((context.service_account_email, created_email))
+            return AliasCreatedRecord(email=created_email)
+        return super().create_alias(context=context, domain=domain, alias_index=alias_index)
+
+
+class AliasPoolInteractiveProviderRotationTests(unittest.TestCase):
+    def test_interactive_provider_rotates_accounts_when_first_account_hits_cap(self):
+        store = _MemoryInteractiveStateStore()
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=4,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+        manager = AliasEmailPoolManager(task_id="task-rotate")
+
+        provider.ensure_available(manager, minimum_count=4)
+
+        self.assertEqual(
+            provider.created_aliases,
+            [
+                ("a@example.com", "a-1@example.com"),
+                ("a@example.com", "a-2@example.com"),
+                ("b@example.com", "b-1@example.com"),
+                ("b@example.com", "b-2@example.com"),
+            ],
+        )
+        self.assertEqual(manager.available_count_for_source("simplelogin-primary"), 4)
+        self.assertEqual(store.state.active_account_email, "b@example.com")
+        self.assertEqual(
+            [item.get("known_aliases") for item in store.state.accounts_state],
+            [
+                ["a-1@example.com", "a-2@example.com"],
+                ["b-1@example.com", "b-2@example.com"],
+            ],
+        )
+        reloaded_provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+        with self.assertRaises(RuntimeError):
+            reloaded_provider.select_service_account()
+        self.assertEqual(provider.seen_modes, ["task_pool", "task_pool"])
+
+    def test_interactive_provider_stays_active_when_desired_count_reached_but_accounts_remain(self):
+        store = _MemoryInteractiveStateStore()
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=2,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+        manager = AliasEmailPoolManager(task_id="task-rotate-active")
+
+        provider.ensure_available(manager, minimum_count=2)
+
+        self.assertEqual(
+            provider.created_aliases,
+            [
+                ("a@example.com", "a-1@example.com"),
+                ("a@example.com", "a-2@example.com"),
+            ],
+        )
+        self.assertEqual(provider.state(), AliasSourceState.ACTIVE)
+        self.assertEqual(store.state.active_account_email, "b@example.com")
+        self.assertEqual(
+            [bool(item.get("exhausted")) for item in store.state.accounts_state],
+            [True, False],
+        )
+        self.assertEqual(provider.seen_modes, ["task_pool"])
+
+    def test_interactive_provider_can_refill_again_after_first_batch_was_consumed(self):
+        store = _MemoryInteractiveStateStore()
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=2,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+        manager = AliasEmailPoolManager(task_id="task-rotate-refill")
+
+        provider.ensure_available(manager, minimum_count=2)
+        manager.acquire_alias()
+        manager.acquire_alias()
+
+        provider.ensure_available(manager, minimum_count=2)
+
+        self.assertEqual(
+            provider.created_aliases,
+            [
+                ("a@example.com", "a-1@example.com"),
+                ("a@example.com", "a-2@example.com"),
+                ("b@example.com", "b-1@example.com"),
+                ("b@example.com", "b-2@example.com"),
+            ],
+        )
+        self.assertEqual(manager.available_count_for_source("simplelogin-primary"), 2)
+        self.assertEqual(provider.state(), AliasSourceState.EXHAUSTED)
+        self.assertEqual(store.state.active_account_email, "b@example.com")
+        self.assertEqual(provider.seen_modes, ["task_pool", "task_pool"])
+
+    def test_run_alias_generation_test_rotates_away_from_exhausted_active_account(self):
+        store = _MemoryInteractiveStateStore(
+            state=InteractiveProviderState(
+                state_key="simplelogin-primary",
+                active_account_email="a@example.com",
+                service_account_email="a@example.com",
+                accounts_state=[
+                    {
+                        "email": "a@example.com",
+                        "password": "pa",
+                        "label": "a",
+                        "service_account_email": "a@example.com",
+                        "confirmation_inbox_email": "a@example.com",
+                        "real_mailbox_email": "a@example.com",
+                        "service_password": "pa",
+                        "username": "a",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": ["a-1@example.com", "a-2@example.com"],
+                        "exhausted": True,
+                    },
+                    {
+                        "email": "b@example.com",
+                        "password": "pb",
+                        "label": "b",
+                        "service_account_email": "b@example.com",
+                        "confirmation_inbox_email": "b@example.com",
+                        "real_mailbox_email": "b@example.com",
+                        "service_password": "pb",
+                        "username": "b",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": [],
+                        "exhausted": False,
+                    },
+                ],
+                known_aliases=["a-1@example.com", "a-2@example.com"],
+            )
+        )
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=4,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=False,
+                persist_state=True,
+                minimum_alias_count=4,
+                capture_enabled=False,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            provider.created_aliases,
+            [
+                ("b@example.com", "b-1@example.com"),
+                ("b@example.com", "b-2@example.com"),
+            ],
+        )
+        self.assertEqual(
+            result.aliases,
+            [
+                {"email": "a-1@example.com"},
+                {"email": "a-2@example.com"},
+                {"email": "b-1@example.com"},
+                {"email": "b-2@example.com"},
+            ],
+        )
+        self.assertEqual(result.account_identity.service_account_email, "b@example.com")
+        self.assertEqual(store.state.active_account_email, "b@example.com")
+        self.assertEqual(
+            [item.get("known_aliases") for item in store.state.accounts_state],
+            [
+                ["a-1@example.com", "a-2@example.com"],
+                ["b-1@example.com", "b-2@example.com"],
+            ],
+        )
+        self.assertEqual(provider.seen_modes, ["alias_test"])
+
+    def test_run_alias_generation_test_without_persist_does_not_mutate_store_state(self):
+        initial_state = InteractiveProviderState(
+            state_key="simplelogin-primary",
+            active_account_email="a@example.com",
+            service_account_email="a@example.com",
+            accounts_state=[
+                {
+                    "email": "a@example.com",
+                    "password": "pa",
+                    "label": "a",
+                    "service_account_email": "a@example.com",
+                    "confirmation_inbox_email": "a@example.com",
+                    "real_mailbox_email": "a@example.com",
+                    "service_password": "pa",
+                    "username": "a",
+                    "session_state": {},
+                    "domain_options": [],
+                    "known_aliases": ["a-1@example.com", "a-2@example.com"],
+                    "exhausted": True,
+                },
+                {
+                    "email": "b@example.com",
+                    "password": "pb",
+                    "label": "b",
+                    "service_account_email": "b@example.com",
+                    "confirmation_inbox_email": "b@example.com",
+                    "real_mailbox_email": "b@example.com",
+                    "service_password": "pb",
+                    "username": "b",
+                    "session_state": {},
+                    "domain_options": [],
+                    "known_aliases": [],
+                    "exhausted": False,
+                },
+            ],
+            known_aliases=["a-1@example.com", "a-2@example.com"],
+        )
+        store = _MemoryInteractiveStateStore(state=initial_state)
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=4,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=False,
+                persist_state=False,
+                minimum_alias_count=4,
+                capture_enabled=False,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(store.state.active_account_email, "a@example.com")
+        self.assertEqual(
+            [item.get("known_aliases") for item in store.state.accounts_state],
+            [
+                ["a-1@example.com", "a-2@example.com"],
+                [],
+            ],
+        )
+
+    def test_run_alias_generation_test_uses_next_available_account_when_target_already_satisfied(self):
+        store = _MemoryInteractiveStateStore(
+            state=InteractiveProviderState(
+                state_key="simplelogin-primary",
+                active_account_email="a@example.com",
+                service_account_email="a@example.com",
+                accounts_state=[
+                    {
+                        "email": "a@example.com",
+                        "password": "pa",
+                        "label": "a",
+                        "service_account_email": "a@example.com",
+                        "confirmation_inbox_email": "a@example.com",
+                        "real_mailbox_email": "a@example.com",
+                        "service_password": "pa",
+                        "username": "a",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": ["a-1@example.com", "a-2@example.com"],
+                        "exhausted": True,
+                    },
+                    {
+                        "email": "b@example.com",
+                        "password": "pb",
+                        "label": "b",
+                        "service_account_email": "b@example.com",
+                        "confirmation_inbox_email": "b@example.com",
+                        "real_mailbox_email": "b@example.com",
+                        "service_password": "pb",
+                        "username": "b",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": [],
+                        "exhausted": False,
+                    },
+                ],
+                known_aliases=["a-1@example.com", "a-2@example.com"],
+            )
+        )
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=2,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _RotatingExistingAccountProvider(spec=spec, store=store)
+
+        result = provider.run_alias_generation_test(
+            AliasAutomationTestPolicy(
+                fresh_service_account=False,
+                persist_state=False,
+                minimum_alias_count=4,
+                capture_enabled=False,
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(provider.created_aliases, [])
+        self.assertEqual(provider.seen_modes, ["alias_test"])
+        self.assertEqual(result.account_identity.service_account_email, "b@example.com")
+
+    def test_interactive_provider_marks_stalled_account_exhausted_and_uses_next_account(self):
+        store = _MemoryInteractiveStateStore()
+        spec = AliasProviderSourceSpec(
+            source_id="simplelogin-primary",
+            provider_type="simplelogin",
+            state_key="simplelogin-primary",
+            desired_alias_count=2,
+            provider_config={
+                "single_account_alias_count": 2,
+                "accounts": [
+                    {"email": "a@example.com", "password": "pa"},
+                    {"email": "b@example.com", "password": "pb"},
+                ],
+            },
+        )
+        provider = _StallingFirstAccountProvider(spec=spec, store=store)
+        manager = AliasEmailPoolManager(task_id="task-rotate-stall")
+
+        provider.ensure_available(manager, minimum_count=2)
+
+        self.assertIn(("b@example.com", "b-1@example.com"), provider.created_aliases)
+        self.assertEqual(
+            [bool(item.get("exhausted")) for item in store.state.accounts_state],
+            [True, False],
+        )
+        self.assertEqual(provider.seen_modes, ["task_pool", "task_pool"])
 
 
 class StaticAliasListProducerStateTests(unittest.TestCase):

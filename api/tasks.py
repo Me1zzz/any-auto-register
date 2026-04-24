@@ -368,6 +368,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             attempt_id: int | None = None
             try:
                 from core.proxy_pool import proxy_pool
+                from core.alias_pool.base import AliasPoolStarvedError
 
                 control.checkpoint()
                 attempt_id = control.start_attempt()
@@ -497,6 +498,9 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 return AttemptResult.skipped(str(e))
             except StopTaskRequested as e:
                 _log(task_id, f"[STOP] {e}")
+                return AttemptResult.stopped(str(e))
+            except AliasPoolStarvedError as e:
+                _log(task_id, f"[STOP] alias pool starved: {e}")
                 return AttemptResult.stopped(str(e))
             except Exception as e:
                 if _proxy and proxy_pool is not None:

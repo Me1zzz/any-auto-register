@@ -1,4 +1,5 @@
 from collections import deque
+import random
 import threading
 import time
 
@@ -6,6 +7,7 @@ from .base import (
     AliasEmailLease,
     AliasLeaseStatus,
     AliasPoolExhaustedError,
+    AliasPoolStarvedError,
     AliasSourceState,
 )
 
@@ -85,6 +87,71 @@ class AliasEmailPoolManager:
                 if producer.state() in {AliasSourceState.IDLE, AliasSourceState.ACTIVE}
             ]
 
+    def _source_low_watermark(self, producer) -> int:
+        try:
+            return max(int(getattr(producer, "low_watermark", 0) or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _refill_source_to_target(self, producer, target: int) -> bool:
+        target = max(int(target or 0), 0)
+        if target <= 0:
+            return False
+
+        produced_any = False
+        source_id = str(getattr(producer, "source_id", "") or "")
+        while self.available_count_for_source(source_id) < target:
+            before = self.available_count_for_source(source_id)
+            needed = max(target - before, 1)
+            ensure_available = getattr(producer, "ensure_available", None)
+            self._log(
+                "[AliasPool] source watermark refill attempt: "
+                f"{self._format_source_kind(getattr(producer, 'source_kind', ''))} "
+                f"source_id={source_id} need={needed} available={before}"
+            )
+            try:
+                if callable(ensure_available):
+                    ensure_available(self, minimum_count=needed)
+                else:
+                    producer.load_into(self)
+            except Exception as exc:
+                self._log(
+                    "[AliasPool] source watermark refill failed: "
+                    f"{self._format_source_kind(getattr(producer, 'source_kind', ''))} "
+                    f"source_id={source_id} need={needed} error={exc}"
+                )
+                break
+
+            after = self.available_count_for_source(source_id)
+            if after <= before:
+                self._log(
+                    "[AliasPool] source watermark refill no progress: "
+                    f"{self._format_source_kind(getattr(producer, 'source_kind', ''))} "
+                    f"source_id={source_id} available={after}"
+                )
+                break
+
+            produced_any = True
+            self._log(
+                "[AliasPool] source watermark refill produced: "
+                f"{self._format_source_kind(getattr(producer, 'source_kind', ''))} "
+                f"source_id={source_id} +{after - before} available={after}"
+            )
+        return produced_any
+
+    def _refill_to_source_watermarks(self) -> bool:
+        produced_any = False
+        with self._refill_lock:
+            for producer in self._live_sources_snapshot():
+                source_target = self._source_low_watermark(producer)
+                if source_target <= 0:
+                    continue
+                if self.available_count_for_source(str(getattr(producer, "source_id", "") or "")) >= source_target:
+                    continue
+                if self._refill_source_to_target(producer, source_target):
+                    produced_any = True
+        return produced_any
+
     def _refill_to_minimum(self, minimum_count: int) -> bool:
         target = max(int(minimum_count or 0), 1)
         produced_any = False
@@ -153,7 +220,9 @@ class AliasEmailPoolManager:
                     break
                 low_watermark = max(int(self._background_refill_low_watermark or 0), 0)
                 if low_watermark <= 0:
+                    self._refill_to_source_watermarks()
                     continue
+                source_produced = self._refill_to_source_watermarks()
                 while (
                     not self._background_refill_stop_event.is_set()
                     and self.available_count() < low_watermark
@@ -161,6 +230,8 @@ class AliasEmailPoolManager:
                 ):
                     produced = self._refill_to_minimum(low_watermark)
                     if not produced:
+                        if source_produced:
+                            break
                         break
                     time.sleep(0)
             except Exception as exc:
@@ -205,12 +276,22 @@ class AliasEmailPoolManager:
     def request_background_refill_if_needed(self) -> None:
         with self._lock:
             low_watermark = max(int(self._background_refill_low_watermark or 0), 0)
+            source_watermark_needs_refill = any(
+                self._source_low_watermark(producer) > 0
+                and self.available_count_for_source(str(getattr(producer, "source_id", "") or ""))
+                < self._source_low_watermark(producer)
+                and producer.state() in {AliasSourceState.IDLE, AliasSourceState.ACTIVE}
+                for producer in self._sources.values()
+            )
             should_wake = (
-                low_watermark > 0
-                and len(self._available) < low_watermark
-                and any(
-                    producer.state() in {AliasSourceState.IDLE, AliasSourceState.ACTIVE}
-                    for producer in self._sources.values()
+                source_watermark_needs_refill
+                or (
+                    low_watermark > 0
+                    and len(self._available) < low_watermark
+                    and any(
+                        producer.state() in {AliasSourceState.IDLE, AliasSourceState.ACTIVE}
+                        for producer in self._sources.values()
+                    )
                 )
             )
         if should_wake:
@@ -222,10 +303,56 @@ class AliasEmailPoolManager:
         with self._lock:
             if not self._available:
                 raise AliasPoolExhaustedError("CloudMail é’î‚¢æ‚•é–­î†¾î†ˆå§¹çŠ²å‡¡é‘°æ¥€æ•–")
+            index = random.randrange(len(self._available))
+            self._available.rotate(-index)
             lease = self._available.popleft()
+            self._available.rotate(index)
             lease.status = AliasLeaseStatus.LEASED
         self.request_background_refill_if_needed()
         return lease
+
+    def _pop_available_alias(self) -> AliasEmailLease | None:
+        with self._lock:
+            if not self._available:
+                return None
+            index = random.randrange(len(self._available))
+            self._available.rotate(-index)
+            lease = self._available.popleft()
+            self._available.rotate(index)
+            lease.status = AliasLeaseStatus.LEASED
+            return lease
+
+    def acquire_alias(
+        self,
+        *,
+        wait_timeout_seconds: float = 120,
+        poll_interval_seconds: float = 5,
+    ) -> AliasEmailLease:
+        timeout = max(float(wait_timeout_seconds or 0), 0.0)
+        poll_interval = max(float(poll_interval_seconds or 0), 0.1)
+        deadline = time.monotonic() + timeout
+
+        while True:
+            lease = self._pop_available_alias()
+            if lease is not None:
+                self.request_background_refill_if_needed()
+                return lease
+
+            produced = self._refill_to_source_watermarks()
+            if not produced:
+                produced = self._refill_to_minimum(1)
+            if produced:
+                lease = self._pop_available_alias()
+                if lease is not None:
+                    self.request_background_refill_if_needed()
+                    return lease
+
+            if time.monotonic() >= deadline:
+                raise AliasPoolStarvedError("CloudMail alias pool stayed empty until timeout")
+
+            self.request_background_refill_if_needed()
+            remaining = max(deadline - time.monotonic(), 0.0)
+            time.sleep(min(poll_interval, remaining))
 
     def cleanup(self) -> None:
         self.stop_background_refill()

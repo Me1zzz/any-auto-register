@@ -86,9 +86,12 @@ def _decode_interactive_source(item: dict[str, Any], source_id: str, provider_ty
         "id": source_id,
         "type": provider_type,
         "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
+        "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
         "state_key": _parse_string(item.get("state_key")) or source_id,
         "provider_config": _parse_provider_config(item.get("provider_config")),
     }
+    if item.get("single_account_alias_count") not in (None, ""):
+        normalized["single_account_alias_count"] = max(_parse_int(item.get("single_account_alias_count"), 0), 0)
     if provider_type == "emailshield":
         provider_config = dict(normalized["provider_config"])
         accounts = provider_config.get("accounts")
@@ -510,6 +513,7 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
                     "id": source_id,
                     "type": "static_list",
                     "emails": _parse_alias_emails(item.get("emails")),
+                    "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
                 }
             )
             continue
@@ -529,6 +533,7 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
                     "prefix": str(item.get("prefix") or "").strip(),
                     "suffix": str(item.get("suffix") or "").strip().lower(),
                     "count": max(_parse_int(item.get("count"), 0), 0),
+                    "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
                     "middle_length_min": min_length,
                     "middle_length_max": max_length,
                 }
@@ -550,6 +555,7 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
                 "alias_domain": str(item.get("alias_domain") or "").strip().lower(),
                 "alias_domain_id": str(item.get("alias_domain_id") or "").strip(),
                 "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
+                "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
                 "state_key": str(item.get("state_key") or source_id).strip() or source_id,
             }
             if confirmation_inbox:
@@ -715,6 +721,17 @@ def build_alias_provider_source_specs(pool_config: dict[str, Any]) -> list[Alias
                 provider_config = _decode_vend_source(source, source_id).get("provider_config", {})
         if provider_type in INTERACTIVE_PROVIDER_TYPES:
             provider_config = _parse_provider_config(source.get("provider_config"))
+            source_account_cap = source.get("single_account_alias_count")
+            if source_account_cap not in (None, ""):
+                provider_config["single_account_alias_count"] = max(
+                    _parse_int(source_account_cap, 0),
+                    0,
+                )
+            elif provider_config.get("single_account_alias_count") not in (None, ""):
+                provider_config["single_account_alias_count"] = max(
+                    _parse_int(provider_config.get("single_account_alias_count"), 0),
+                    0,
+                )
             explicit_confirmation_inbox = source.get("confirmation_inbox")
             if isinstance(explicit_confirmation_inbox, dict):
                 confirmation_inbox_config = dict(explicit_confirmation_inbox)

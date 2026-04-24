@@ -65,6 +65,7 @@ export function createAliasGenerationDraftSourceTemplate(
         id: resolvedSourceId,
         type,
         emails: '',
+        low_watermark: 0,
       }
     case 'simple_generator':
       return {
@@ -75,6 +76,7 @@ export function createAliasGenerationDraftSourceTemplate(
         count: 3,
         middle_length_min: 3,
         middle_length_max: 6,
+        low_watermark: 0,
       }
     case 'vend_email':
       return {
@@ -82,6 +84,7 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
+        low_watermark: 0,
       }
     case 'myalias_pro':
       return {
@@ -89,6 +92,7 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
+        low_watermark: 0,
         confirmation_inbox: {
           provider: 'cloudmail',
         },
@@ -103,6 +107,7 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
+        low_watermark: 0,
         confirmation_inbox: {
           provider: 'cloudmail',
         },
@@ -117,6 +122,8 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
+        low_watermark: 0,
+        single_account_alias_count: 3,
         provider_config: {
           accounts: '',
         },
@@ -127,6 +134,8 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
+        low_watermark: 0,
+        single_account_alias_count: 3,
         provider_config: {
           site_url: 'https://app.simplelogin.io/',
           accounts: '',
@@ -138,6 +147,7 @@ export function createAliasGenerationDraftSourceTemplate(
         type,
         alias_count: 3,
         state_key: resolvedSourceId,
+        low_watermark: 0,
         confirmation_inbox: {
           provider: 'cloudmail',
         },
@@ -167,6 +177,8 @@ export interface AliasGenerationTestDraftSource extends Record<string, unknown> 
   alias_domain?: unknown
   alias_domain_id?: unknown
   alias_count?: unknown
+  low_watermark?: unknown
+  single_account_alias_count?: unknown
   state_key?: unknown
   confirmation_inbox?: unknown
   provider_config?: unknown
@@ -182,6 +194,7 @@ export interface AliasGenerationTestDraftConfig {
   cloudmail_alias_enabled?: unknown
   cloudmail_alias_emails?: unknown
   cloudmail_alias_service_static_enabled?: unknown
+  cloudmail_alias_service_static_low_watermark?: unknown
   cloudmail_alias_service_simple_enabled?: unknown
   cloudmail_alias_service_simple_prefix?: unknown
   cloudmail_alias_service_simple_suffix?: unknown
@@ -192,16 +205,20 @@ export interface AliasGenerationTestDraftConfig {
   cloudmail_alias_service_vend_source_id?: unknown
   cloudmail_alias_service_vend_alias_count?: unknown
   cloudmail_alias_service_vend_state_key?: unknown
+  cloudmail_alias_service_vend_low_watermark?: unknown
   cloudmail_alias_vend_enabled?: unknown
   cloudmail_alias_vend_alias_count?: unknown
   cloudmail_alias_vend_source_id?: unknown
   cloudmail_alias_vend_state_key?: unknown
+  cloudmail_alias_vend_low_watermark?: unknown
   cloudmail_alias_myalias_pro_enabled?: unknown
   cloudmail_alias_myalias_pro_alias_count?: unknown
+  cloudmail_alias_myalias_pro_low_watermark?: unknown
   cloudmail_alias_secureinseconds_enabled?: unknown
   cloudmail_alias_secureinseconds_source_id?: unknown
   cloudmail_alias_secureinseconds_state_key?: unknown
   cloudmail_alias_secureinseconds_alias_count?: unknown
+  cloudmail_alias_secureinseconds_low_watermark?: unknown
   cloudmail_alias_secureinseconds_register_url?: unknown
   cloudmail_alias_secureinseconds_login_url?: unknown
   cloudmail_alias_secureinseconds_confirmation_email?: unknown
@@ -211,17 +228,22 @@ export interface AliasGenerationTestDraftConfig {
   cloudmail_alias_emailshield_source_id?: unknown
   cloudmail_alias_emailshield_state_key?: unknown
   cloudmail_alias_emailshield_alias_count?: unknown
+  cloudmail_alias_emailshield_low_watermark?: unknown
+  cloudmail_alias_emailshield_single_account_alias_count?: unknown
   cloudmail_alias_emailshield_accounts?: unknown
   cloudmail_alias_simplelogin_enabled?: unknown
   cloudmail_alias_simplelogin_source_id?: unknown
   cloudmail_alias_simplelogin_state_key?: unknown
   cloudmail_alias_simplelogin_alias_count?: unknown
+  cloudmail_alias_simplelogin_low_watermark?: unknown
+  cloudmail_alias_simplelogin_single_account_alias_count?: unknown
   cloudmail_alias_simplelogin_site_url?: unknown
   cloudmail_alias_simplelogin_accounts?: unknown
   cloudmail_alias_alias_email_enabled?: unknown
   cloudmail_alias_alias_email_source_id?: unknown
   cloudmail_alias_alias_email_state_key?: unknown
   cloudmail_alias_alias_email_alias_count?: unknown
+  cloudmail_alias_alias_email_low_watermark?: unknown
   cloudmail_alias_alias_email_login_url?: unknown
   cloudmail_alias_alias_email_match_email?: unknown
   sources?: unknown
@@ -681,6 +703,7 @@ function normalizeAliasGenerationDraftSource(
       id: sourceId,
       type: 'static_list',
       emails: normalizeMultilineValue(source.emails),
+      low_watermark: normalizeNumericFieldValue(source.low_watermark),
     }
   }
 
@@ -693,6 +716,7 @@ function normalizeAliasGenerationDraftSource(
       count: normalizeNumericFieldValue(source.count),
       middle_length_min: normalizeNumericFieldValue(source.middle_length_min),
       middle_length_max: normalizeNumericFieldValue(source.middle_length_max),
+      low_watermark: normalizeNumericFieldValue(source.low_watermark),
     }
   }
 
@@ -721,6 +745,11 @@ function normalizeAliasGenerationDraftSource(
       id: sourceId,
       type: sourceType,
       alias_count: normalizeNumericFieldValue(source.alias_count),
+      low_watermark: normalizeNumericFieldValue(source.low_watermark),
+      single_account_alias_count:
+        sourceType === 'emailshield' || sourceType === 'simplelogin'
+          ? normalizeNumericFieldValue(source.single_account_alias_count)
+          : undefined,
       state_key: stringifyFieldValue(source.state_key),
       confirmation_inbox: asRecord(source.confirmation_inbox) ?? undefined,
       provider_config: normalizedProviderConfig,
@@ -740,6 +769,7 @@ function normalizeAliasGenerationDraftSource(
     alias_domain: stringifyFieldValue(source.alias_domain),
     alias_domain_id: stringifyFieldValue(source.alias_domain_id),
     alias_count: normalizeNumericFieldValue(source.alias_count),
+    low_watermark: normalizeNumericFieldValue(source.low_watermark),
     state_key: stringifyFieldValue(source.state_key),
   }
 }
@@ -890,6 +920,8 @@ function buildProviderSourceFromFixedFields(params: {
   sourceId: unknown
   stateKey: unknown
   aliasCount: unknown
+  lowWatermark?: unknown
+  singleAccountAliasCount?: unknown
   preservedSource: AliasGenerationTestDraftSource | null
   providerConfig: Record<string, unknown> | undefined
   confirmationInbox?: Record<string, unknown> | undefined
@@ -912,11 +944,21 @@ function buildProviderSourceFromFixedFields(params: {
   const aliasCount =
     normalizeNumericFieldValue(params.aliasCount)
     ?? normalizeNumericFieldValue(params.preservedSource?.alias_count)
+  const lowWatermark =
+    normalizeNumericFieldValue(params.lowWatermark)
+    ?? normalizeNumericFieldValue(params.preservedSource?.low_watermark)
+  const singleAccountAliasCount =
+    normalizeNumericFieldValue(params.singleAccountAliasCount)
+    ?? normalizeNumericFieldValue(params.preservedSource?.single_account_alias_count)
 
   return {
     id: sourceId,
     type: params.type,
     alias_count: aliasCount,
+    low_watermark: lowWatermark,
+    ...(typeof singleAccountAliasCount === 'number'
+      ? { single_account_alias_count: singleAccountAliasCount }
+      : {}),
     state_key: stateKey,
     confirmation_inbox: params.confirmationInbox ?? asRecord(params.preservedSource?.confirmation_inbox) ?? undefined,
     provider_config: params.providerConfig ?? asRecord(params.preservedSource?.provider_config) ?? undefined,
@@ -959,6 +1001,10 @@ function buildVendDraftSource(
       normalizeNumericFieldValue(draftConfig.cloudmail_alias_vend_alias_count)
       ?? normalizeNumericFieldValue(draftConfig.cloudmail_alias_service_vend_alias_count)
       ?? normalizeNumericFieldValue(preservedSource?.alias_count),
+    low_watermark:
+      normalizeNumericFieldValue(draftConfig.cloudmail_alias_vend_low_watermark)
+      ?? normalizeNumericFieldValue(draftConfig.cloudmail_alias_service_vend_low_watermark)
+      ?? normalizeNumericFieldValue(preservedSource?.low_watermark),
     state_key:
       stringifyFieldValue(draftConfig.cloudmail_alias_vend_state_key)
       || stringifyFieldValue(draftConfig.cloudmail_alias_service_vend_state_key)
@@ -979,6 +1025,9 @@ function buildMyAliasProDraftSource(
     sourceId: undefined,
     stateKey: undefined,
     aliasCount: draftConfig.cloudmail_alias_myalias_pro_alias_count,
+    lowWatermark:
+      draftConfig.cloudmail_alias_myalias_pro_low_watermark
+      ?? preservedSource?.low_watermark,
     preservedSource,
     providerConfig: {
       signup_url:
@@ -1068,6 +1117,7 @@ function buildSecureInSecondsDraftSource(
     sourceId: draftConfig.cloudmail_alias_secureinseconds_source_id,
     stateKey: draftConfig.cloudmail_alias_secureinseconds_state_key,
     aliasCount: draftConfig.cloudmail_alias_secureinseconds_alias_count,
+    lowWatermark: draftConfig.cloudmail_alias_secureinseconds_low_watermark,
     preservedSource,
     providerConfig: {
       register_url:
@@ -1104,6 +1154,8 @@ function buildEmailShieldDraftSource(
     sourceId: draftConfig.cloudmail_alias_emailshield_source_id,
     stateKey: draftConfig.cloudmail_alias_emailshield_state_key,
     aliasCount: draftConfig.cloudmail_alias_emailshield_alias_count,
+    lowWatermark: draftConfig.cloudmail_alias_emailshield_low_watermark,
+    singleAccountAliasCount: draftConfig.cloudmail_alias_emailshield_single_account_alias_count,
     preservedSource,
     providerConfig: {
       accounts:
@@ -1125,6 +1177,8 @@ function buildSimpleLoginDraftSource(
     sourceId: draftConfig.cloudmail_alias_simplelogin_source_id,
     stateKey: draftConfig.cloudmail_alias_simplelogin_state_key,
     aliasCount: draftConfig.cloudmail_alias_simplelogin_alias_count,
+    lowWatermark: draftConfig.cloudmail_alias_simplelogin_low_watermark,
+    singleAccountAliasCount: draftConfig.cloudmail_alias_simplelogin_single_account_alias_count,
     preservedSource,
     providerConfig: {
       site_url:
@@ -1148,6 +1202,7 @@ function buildAliasEmailDraftSource(
     sourceId: draftConfig.cloudmail_alias_alias_email_source_id,
     stateKey: draftConfig.cloudmail_alias_alias_email_state_key,
     aliasCount: draftConfig.cloudmail_alias_alias_email_alias_count,
+    lowWatermark: draftConfig.cloudmail_alias_alias_email_low_watermark,
     preservedSource,
     providerConfig: {
       login_url:
@@ -1182,6 +1237,9 @@ function buildLegacyStaticDraftSource(
     id: stringifyFieldValue(preservedSource?.id) || 'legacy-static',
     type: 'static_list',
     emails: normalizedEmails,
+    low_watermark:
+      normalizeNumericFieldValue(draftConfig.cloudmail_alias_service_static_low_watermark)
+      ?? normalizeNumericFieldValue(preservedSource?.low_watermark),
   }
 }
 
@@ -1240,16 +1298,20 @@ export function deriveCloudmailAliasServiceFormValues(
   AliasGenerationTestDraftConfig,
   | 'cloudmail_alias_enabled'
   | 'cloudmail_alias_emails'
+  | 'cloudmail_alias_service_static_low_watermark'
   | 'cloudmail_alias_vend_enabled'
   | 'cloudmail_alias_vend_alias_count'
   | 'cloudmail_alias_vend_source_id'
   | 'cloudmail_alias_vend_state_key'
+  | 'cloudmail_alias_vend_low_watermark'
   | 'cloudmail_alias_myalias_pro_enabled'
   | 'cloudmail_alias_myalias_pro_alias_count'
+  | 'cloudmail_alias_myalias_pro_low_watermark'
   | 'cloudmail_alias_secureinseconds_enabled'
   | 'cloudmail_alias_secureinseconds_source_id'
   | 'cloudmail_alias_secureinseconds_state_key'
   | 'cloudmail_alias_secureinseconds_alias_count'
+  | 'cloudmail_alias_secureinseconds_low_watermark'
   | 'cloudmail_alias_secureinseconds_register_url'
   | 'cloudmail_alias_secureinseconds_login_url'
   | 'cloudmail_alias_secureinseconds_confirmation_email'
@@ -1259,17 +1321,22 @@ export function deriveCloudmailAliasServiceFormValues(
   | 'cloudmail_alias_emailshield_source_id'
   | 'cloudmail_alias_emailshield_state_key'
   | 'cloudmail_alias_emailshield_alias_count'
+  | 'cloudmail_alias_emailshield_low_watermark'
+  | 'cloudmail_alias_emailshield_single_account_alias_count'
   | 'cloudmail_alias_emailshield_accounts'
   | 'cloudmail_alias_simplelogin_enabled'
   | 'cloudmail_alias_simplelogin_source_id'
   | 'cloudmail_alias_simplelogin_state_key'
   | 'cloudmail_alias_simplelogin_alias_count'
+  | 'cloudmail_alias_simplelogin_low_watermark'
+  | 'cloudmail_alias_simplelogin_single_account_alias_count'
   | 'cloudmail_alias_simplelogin_site_url'
   | 'cloudmail_alias_simplelogin_accounts'
   | 'cloudmail_alias_alias_email_enabled'
   | 'cloudmail_alias_alias_email_source_id'
   | 'cloudmail_alias_alias_email_state_key'
   | 'cloudmail_alias_alias_email_alias_count'
+  | 'cloudmail_alias_alias_email_low_watermark'
   | 'cloudmail_alias_alias_email_login_url'
   | 'cloudmail_alias_alias_email_match_email'
 > {
@@ -1298,6 +1365,8 @@ export function deriveCloudmailAliasServiceFormValues(
       : normalizedSources.length > 0,
     cloudmail_alias_emails:
       normalizeMultilineValue(draftConfig.cloudmail_alias_emails) || normalizedEmails,
+    cloudmail_alias_service_static_low_watermark:
+      normalizeNumericFieldValue(staticSource?.low_watermark),
     cloudmail_alias_vend_enabled:
       typeof draftConfig.cloudmail_alias_vend_enabled === 'undefined'
         ? Boolean(vendSource) || parseBooleanConfigValue(draftConfig.cloudmail_alias_service_vend_enabled)
@@ -1312,12 +1381,19 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_vend_state_key:
       stringifyFieldValue(draftConfig.cloudmail_alias_service_vend_state_key)
       || stringifyFieldValue(vendSource?.state_key),
+    cloudmail_alias_vend_low_watermark:
+      normalizeNumericFieldValue(draftConfig.cloudmail_alias_vend_low_watermark)
+      ?? normalizeNumericFieldValue(vendSource?.low_watermark)
+      ?? normalizeNumericFieldValue(draftConfig.cloudmail_alias_service_vend_low_watermark),
     cloudmail_alias_myalias_pro_enabled: Boolean(myaliasProSource),
     cloudmail_alias_myalias_pro_alias_count: normalizeNumericFieldValue(myaliasProSource?.alias_count),
+    cloudmail_alias_myalias_pro_low_watermark:
+      normalizeNumericFieldValue(myaliasProSource?.low_watermark),
     cloudmail_alias_secureinseconds_enabled: Boolean(secureInSecondsSource),
     cloudmail_alias_secureinseconds_source_id: stringifyFieldValue(secureInSecondsSource?.id),
     cloudmail_alias_secureinseconds_state_key: stringifyFieldValue(secureInSecondsSource?.state_key),
     cloudmail_alias_secureinseconds_alias_count: normalizeNumericFieldValue(secureInSecondsSource?.alias_count),
+    cloudmail_alias_secureinseconds_low_watermark: normalizeNumericFieldValue(secureInSecondsSource?.low_watermark),
     cloudmail_alias_secureinseconds_register_url: stringifyFieldValue(secureInSecondsConfig?.register_url),
     cloudmail_alias_secureinseconds_login_url: stringifyFieldValue(secureInSecondsConfig?.login_url),
     cloudmail_alias_secureinseconds_confirmation_email: stringifyFieldValue(secureInSecondsConfirmation?.account_email),
@@ -1327,6 +1403,9 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_emailshield_source_id: stringifyFieldValue(emailShieldSource?.id),
     cloudmail_alias_emailshield_state_key: stringifyFieldValue(emailShieldSource?.state_key),
     cloudmail_alias_emailshield_alias_count: normalizeNumericFieldValue(emailShieldSource?.alias_count),
+    cloudmail_alias_emailshield_low_watermark: normalizeNumericFieldValue(emailShieldSource?.low_watermark),
+    cloudmail_alias_emailshield_single_account_alias_count:
+      normalizeNumericFieldValue(emailShieldSource?.single_account_alias_count),
     cloudmail_alias_emailshield_accounts:
       normalizeSimpleLoginAccountsFieldValue(emailShieldConfig?.accounts)
       || normalizeSimpleLoginAccountsFieldValue(draftConfig.cloudmail_alias_emailshield_accounts),
@@ -1334,6 +1413,9 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_simplelogin_source_id: stringifyFieldValue(simpleLoginSource?.id),
     cloudmail_alias_simplelogin_state_key: stringifyFieldValue(simpleLoginSource?.state_key),
     cloudmail_alias_simplelogin_alias_count: normalizeNumericFieldValue(simpleLoginSource?.alias_count),
+    cloudmail_alias_simplelogin_low_watermark: normalizeNumericFieldValue(simpleLoginSource?.low_watermark),
+    cloudmail_alias_simplelogin_single_account_alias_count:
+      normalizeNumericFieldValue(simpleLoginSource?.single_account_alias_count),
     cloudmail_alias_simplelogin_site_url: stringifyFieldValue(simpleLoginConfig?.site_url),
     cloudmail_alias_simplelogin_accounts:
       normalizeSimpleLoginAccountsFieldValue(simpleLoginConfig?.accounts)
@@ -1342,6 +1424,7 @@ export function deriveCloudmailAliasServiceFormValues(
     cloudmail_alias_alias_email_source_id: stringifyFieldValue(aliasEmailSource?.id),
     cloudmail_alias_alias_email_state_key: stringifyFieldValue(aliasEmailSource?.state_key),
     cloudmail_alias_alias_email_alias_count: normalizeNumericFieldValue(aliasEmailSource?.alias_count),
+    cloudmail_alias_alias_email_low_watermark: normalizeNumericFieldValue(aliasEmailSource?.low_watermark),
     cloudmail_alias_alias_email_login_url: stringifyFieldValue(aliasEmailConfig?.login_url),
     cloudmail_alias_alias_email_match_email: stringifyFieldValue(aliasEmailConfirmation?.match_email),
   }
@@ -1368,6 +1451,8 @@ export function createAliasGenerationTestDraftConfig(
       typeof formValues.cloudmail_alias_service_static_enabled === 'undefined'
         ? parseBooleanConfigValue(formValues.cloudmail_alias_enabled)
         : formValues.cloudmail_alias_service_static_enabled,
+    cloudmail_alias_service_static_low_watermark:
+      formValues.cloudmail_alias_service_static_low_watermark,
     cloudmail_alias_service_simple_enabled: formValues.cloudmail_alias_service_simple_enabled,
     cloudmail_alias_service_simple_prefix: formValues.cloudmail_alias_service_simple_prefix,
     cloudmail_alias_service_simple_suffix: formValues.cloudmail_alias_service_simple_suffix,
@@ -1378,12 +1463,15 @@ export function createAliasGenerationTestDraftConfig(
     cloudmail_alias_vend_alias_count: vendAliasCount,
     cloudmail_alias_vend_source_id: vendSourceId,
     cloudmail_alias_vend_state_key: vendStateKey,
+    cloudmail_alias_vend_low_watermark: formValues.cloudmail_alias_vend_low_watermark,
     cloudmail_alias_myalias_pro_enabled: formValues.cloudmail_alias_myalias_pro_enabled,
     cloudmail_alias_myalias_pro_alias_count: formValues.cloudmail_alias_myalias_pro_alias_count,
+    cloudmail_alias_myalias_pro_low_watermark: formValues.cloudmail_alias_myalias_pro_low_watermark,
     cloudmail_alias_secureinseconds_enabled: formValues.cloudmail_alias_secureinseconds_enabled,
     cloudmail_alias_secureinseconds_source_id: formValues.cloudmail_alias_secureinseconds_source_id,
     cloudmail_alias_secureinseconds_state_key: formValues.cloudmail_alias_secureinseconds_state_key,
     cloudmail_alias_secureinseconds_alias_count: formValues.cloudmail_alias_secureinseconds_alias_count,
+    cloudmail_alias_secureinseconds_low_watermark: formValues.cloudmail_alias_secureinseconds_low_watermark,
     cloudmail_alias_secureinseconds_register_url: formValues.cloudmail_alias_secureinseconds_register_url,
     cloudmail_alias_secureinseconds_login_url: formValues.cloudmail_alias_secureinseconds_login_url,
     cloudmail_alias_secureinseconds_confirmation_email: formValues.cloudmail_alias_secureinseconds_confirmation_email,
@@ -1393,17 +1481,24 @@ export function createAliasGenerationTestDraftConfig(
     cloudmail_alias_emailshield_source_id: formValues.cloudmail_alias_emailshield_source_id,
     cloudmail_alias_emailshield_state_key: formValues.cloudmail_alias_emailshield_state_key,
     cloudmail_alias_emailshield_alias_count: formValues.cloudmail_alias_emailshield_alias_count,
+    cloudmail_alias_emailshield_low_watermark: formValues.cloudmail_alias_emailshield_low_watermark,
+    cloudmail_alias_emailshield_single_account_alias_count:
+      formValues.cloudmail_alias_emailshield_single_account_alias_count,
     cloudmail_alias_emailshield_accounts: formValues.cloudmail_alias_emailshield_accounts,
     cloudmail_alias_simplelogin_enabled: formValues.cloudmail_alias_simplelogin_enabled,
     cloudmail_alias_simplelogin_source_id: formValues.cloudmail_alias_simplelogin_source_id,
     cloudmail_alias_simplelogin_state_key: formValues.cloudmail_alias_simplelogin_state_key,
     cloudmail_alias_simplelogin_alias_count: formValues.cloudmail_alias_simplelogin_alias_count,
+    cloudmail_alias_simplelogin_low_watermark: formValues.cloudmail_alias_simplelogin_low_watermark,
+    cloudmail_alias_simplelogin_single_account_alias_count:
+      formValues.cloudmail_alias_simplelogin_single_account_alias_count,
     cloudmail_alias_simplelogin_site_url: formValues.cloudmail_alias_simplelogin_site_url,
     cloudmail_alias_simplelogin_accounts: formValues.cloudmail_alias_simplelogin_accounts,
     cloudmail_alias_alias_email_enabled: formValues.cloudmail_alias_alias_email_enabled,
     cloudmail_alias_alias_email_source_id: formValues.cloudmail_alias_alias_email_source_id,
     cloudmail_alias_alias_email_state_key: formValues.cloudmail_alias_alias_email_state_key,
     cloudmail_alias_alias_email_alias_count: formValues.cloudmail_alias_alias_email_alias_count,
+    cloudmail_alias_alias_email_low_watermark: formValues.cloudmail_alias_alias_email_low_watermark,
     cloudmail_alias_alias_email_login_url: formValues.cloudmail_alias_alias_email_login_url,
     cloudmail_alias_alias_email_match_email: formValues.cloudmail_alias_alias_email_match_email,
     cloudmail_alias_service_vend_enabled:
@@ -1422,6 +1517,10 @@ export function createAliasGenerationTestDraftConfig(
       typeof formValues.cloudmail_alias_service_vend_state_key === 'undefined'
         ? vendStateKey
         : formValues.cloudmail_alias_service_vend_state_key,
+    cloudmail_alias_service_vend_low_watermark:
+      typeof formValues.cloudmail_alias_service_vend_low_watermark === 'undefined'
+        ? formValues.cloudmail_alias_vend_low_watermark
+        : formValues.cloudmail_alias_service_vend_low_watermark,
     sources: deriveAliasGenerationDraftSources(formValues),
   }
 }

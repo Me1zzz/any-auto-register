@@ -1,14 +1,13 @@
 import { DeleteOutlined } from '@ant-design/icons'
 import { Button, Card, Form, Input, InputNumber, Select, Space, Tag, Typography, theme } from 'antd'
 
+import SimpleLoginAccountListEditor from '@/components/settings/SimpleLoginAccountListEditor'
 import {
   ADDABLE_ALIAS_GENERATION_SOURCE_TYPES,
   getAliasGenerationSourceTypeLabel,
   type AliasGenerationSourceType,
   type AliasGenerationTestDraftSource,
 } from '@/lib/aliasGenerationTest'
-
-import SimpleLoginAccountListEditor from '@/components/settings/SimpleLoginAccountListEditor'
 
 type Props = {
   index: number
@@ -55,6 +54,7 @@ export default function AliasGenerationSourceCard({
   const isSimpleGenerator = sourceType === 'simple_generator'
   const isSimpleLogin = sourceType === 'simplelogin'
   const isEmailShield = sourceType === 'emailshield'
+  const supportsSingleAccountAliasCount = isSimpleLogin || isEmailShield
   const showCommonInteractiveFields = INTERACTIVE_SOURCE_TYPES.has(sourceType)
   const showConfirmationInbox = sourceType === 'myalias_pro'
     || sourceType === 'secureinseconds'
@@ -101,7 +101,7 @@ export default function AliasGenerationSourceCard({
           <Form.Item
             label="Source ID"
             name={[...baseName, 'id']}
-            rules={[{ required: true, message: '请输入 Source ID' }]}
+            rules={[{ required: true, message: '请填写 Source ID' }]}
             style={{ marginBottom: 0 }}
           >
             <Input placeholder="simplelogin-primary" />
@@ -126,6 +126,24 @@ export default function AliasGenerationSourceCard({
               <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
             </Form.Item>
           ) : null}
+
+          <Form.Item
+            label="补货水位"
+            name={[...baseName, 'low_watermark']}
+            style={{ marginBottom: 0 }}
+          >
+            <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
+          </Form.Item>
+
+          {supportsSingleAccountAliasCount ? (
+            <Form.Item
+              label="单账号别名上限"
+              name={[...baseName, 'single_account_alias_count']}
+              style={{ marginBottom: 0 }}
+            >
+              <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+            </Form.Item>
+          ) : null}
         </div>
 
         {isSimpleGenerator ? (
@@ -142,13 +160,13 @@ export default function AliasGenerationSourceCard({
             <Form.Item label="后缀" name={[...baseName, 'suffix']} style={{ marginBottom: 0 }}>
               <Input placeholder="@example.com" />
             </Form.Item>
-            <Form.Item label="生成数量" name={[...baseName, 'count']} style={{ marginBottom: 0 }}>
+            <Form.Item label="总生成数" name={[...baseName, 'count']} style={{ marginBottom: 0 }}>
               <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
             </Form.Item>
-            <Form.Item label="最小中段长度" name={[...baseName, 'middle_length_min']} style={{ marginBottom: 0 }}>
+            <Form.Item label="中间段最短长度" name={[...baseName, 'middle_length_min']} style={{ marginBottom: 0 }}>
               <InputNumber min={1} style={{ width: '100%' }} placeholder="3" />
             </Form.Item>
-            <Form.Item label="最大中段长度" name={[...baseName, 'middle_length_max']} style={{ marginBottom: 0 }}>
+            <Form.Item label="中间段最长长度" name={[...baseName, 'middle_length_max']} style={{ marginBottom: 0 }}>
               <InputNumber min={1} style={{ width: '100%' }} placeholder="6" />
             </Form.Item>
           </div>
@@ -179,7 +197,7 @@ export default function AliasGenerationSourceCard({
               gap: 12,
             }}
           >
-            <Form.Item label="注册地址 URL" name={[...baseName, 'provider_config', 'register_url']} style={{ marginBottom: 0 }}>
+            <Form.Item label="注册页 URL" name={[...baseName, 'provider_config', 'register_url']} style={{ marginBottom: 0 }}>
               <Input placeholder="https://alias.secureinseconds.com/auth/register" />
             </Form.Item>
             <Form.Item label="登录页 URL" name={[...baseName, 'provider_config', 'login_url']} style={{ marginBottom: 0 }}>
@@ -189,28 +207,26 @@ export default function AliasGenerationSourceCard({
         ) : null}
 
         {isEmailShield ? (
-          <>
-            <div
-              style={{
-                padding: 12,
-                borderRadius: token.borderRadius,
-                border: `1px solid ${token.colorBorder}`,
-                background: token.colorBgElevated,
-              }}
-            >
-              <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-                EmailShield 服务账号
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-                运行时会直接使用已注册好的 EmailShield 邮箱登录，再访问创建页提交 `email_destination` 与 `note` 表单；这里不再暴露注册页、登录页或确认邮箱字段。
-              </Typography.Text>
-              <SimpleLoginAccountListEditor
-                name={[...baseName, 'provider_config', 'accounts']}
-                providerLabel="EmailShield"
-                passwordHint="后端默认按“1103@邮箱前缀”的约定推导密码；如果账号密码与约定不同，也可以在保存的 source JSON 中显式补 password。"
-              />
-            </div>
-          </>
+          <div
+            style={{
+              padding: 12,
+              borderRadius: token.borderRadius,
+              border: `1px solid ${token.colorBorder}`,
+              background: token.colorBgElevated,
+            }}
+          >
+            <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+              EmailShield 已注册账号
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+              一行一个邮箱。保存时会自动转换为后端原有的 `accounts: [{'{'} email {'}'}]` 结构。
+            </Typography.Text>
+            <SimpleLoginAccountListEditor
+              name={[...baseName, 'provider_config', 'accounts']}
+              providerLabel="EmailShield"
+              passwordHint="如果 source JSON 里附带 password 字段，前端会继续保留。"
+            />
+          </div>
         ) : null}
 
         {isSimpleLogin ? (
@@ -228,10 +244,10 @@ export default function AliasGenerationSourceCard({
               }}
             >
               <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-                SimpleLogin 服务账号
+                SimpleLogin 已注册账号
               </Typography.Text>
               <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-                运行时会从账号列表中选择服务账号，并通过已登录页面动态解析 signed domain options；这里不提供静态 alias domain 输入项。
+                一行一个邮箱。保存时会自动转换为后端原有的 `accounts: [{'{'} email {'}'}]` 结构。
               </Typography.Text>
               <SimpleLoginAccountListEditor name={[...baseName, 'provider_config', 'accounts']} />
             </div>
@@ -245,7 +261,7 @@ export default function AliasGenerationSourceCard({
             </Form.Item>
 
             <Typography.Text type="secondary">
-              alias.email 通过确认邮箱中的 magic link 完成登录；下方匹配邮箱会用于定位那封登录邮件。
+              alias.email 通过确认邮箱里的 magic link 完成登录，确认邮箱配置在下方设置。
             </Typography.Text>
           </>
         ) : null}
@@ -264,7 +280,7 @@ export default function AliasGenerationSourceCard({
             </Form.Item>
 
             <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-              确认邮箱匹配
+              确认邮箱配置
             </Typography.Text>
 
             <div
@@ -274,13 +290,13 @@ export default function AliasGenerationSourceCard({
                 gap: 12,
               }}
             >
-              {(sourceType === 'alias_email') ? null : (
+              {sourceType === 'alias_email' ? null : (
                 <Form.Item label="确认邮箱账号" name={[...baseName, 'confirmation_inbox', 'account_email']} style={{ marginBottom: 0 }}>
                   <Input placeholder="real@example.com" />
                 </Form.Item>
               )}
 
-              {(sourceType === 'myalias_pro' || sourceType === 'secureinseconds') ? (
+              {sourceType === 'myalias_pro' || sourceType === 'secureinseconds' ? (
                 <Form.Item label="确认邮箱密码" name={[...baseName, 'confirmation_inbox', 'account_password']} style={{ marginBottom: 0 }}>
                   <Input.Password placeholder="mail-pass" />
                 </Form.Item>

@@ -15,6 +15,8 @@ class InteractiveProviderState:
     session_state: dict[str, Any] = field(default_factory=dict)
     domain_options: list[dict[str, Any]] = field(default_factory=list)
     known_aliases: list[str] = field(default_factory=list)
+    accounts_state: list[dict[str, Any]] = field(default_factory=list)
+    active_account_email: str = ""
     current_stage: dict[str, str] = field(default_factory=lambda: {"code": "", "label": ""})
     stage_history: list[dict[str, Any]] = field(default_factory=list)
     last_failure: dict[str, Any] = field(default_factory=lambda: {"stageCode": "", "stageLabel": "", "reason": ""})

@@ -742,6 +742,9 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
             >
               <Input.TextArea rows={5} placeholder={'alias1@example.com\nalias2@example.com'} />
             </Form.Item>
+            <Form.Item label="补货水位" name="cloudmail_alias_service_static_low_watermark" style={{ marginBottom: 0, marginTop: 12 }}>
+              <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
+            </Form.Item>
 
             <Card
               size="small"
@@ -768,6 +771,9 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
                     >
                       <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
                     </Form.Item>
+                    <Form.Item label="补货水位" name="cloudmail_alias_vend_low_watermark" style={{ marginBottom: 0 }}>
+                      <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
+                    </Form.Item>
                   </div>
                 ) : null}
 
@@ -786,6 +792,9 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 <Form.Item label="单 CloudMail 最多可注册多少个 MyAlias Pro 账号" name="cloudmail_alias_myalias_pro_alias_count" style={{ marginBottom: 0 }}>
                   <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                </Form.Item>
+                <Form.Item label="补货水位" name="cloudmail_alias_myalias_pro_low_watermark" style={{ marginBottom: 0 }}>
+                  <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
                 </Form.Item>
                 <Form.Item style={{ marginBottom: 0 }}>
                   <Typography.Text type="secondary">

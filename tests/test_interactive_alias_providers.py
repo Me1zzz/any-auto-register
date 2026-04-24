@@ -565,6 +565,141 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
             {"email": "fust@example.com", "password": "fust@example.com", "label": "Fust"},
         )
 
+    def test_simplelogin_uses_selected_account_from_rotating_state(self):
+        store = _MemoryStore(
+            InteractiveProviderState(
+                state_key="simplelogin-primary",
+                active_account_email="b@example.com",
+                accounts_state=[
+                    {
+                        "email": "a@example.com",
+                        "password": "pa",
+                        "label": "a",
+                        "service_account_email": "a@example.com",
+                        "confirmation_inbox_email": "a@example.com",
+                        "real_mailbox_email": "a@example.com",
+                        "service_password": "pa",
+                        "username": "a",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": ["a-1@example.com", "a-2@example.com"],
+                        "exhausted": True,
+                    },
+                    {
+                        "email": "b@example.com",
+                        "password": "pb",
+                        "label": "bee",
+                        "service_account_email": "b@example.com",
+                        "confirmation_inbox_email": "b@example.com",
+                        "real_mailbox_email": "b@example.com",
+                        "service_password": "pb",
+                        "username": "bee",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": [],
+                        "exhausted": False,
+                    },
+                ],
+                known_aliases=["a-1@example.com", "a-2@example.com"],
+            )
+        )
+        provider = SimpleLoginAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="simplelogin-primary",
+                provider_type="simplelogin",
+                state_key="simplelogin-primary",
+                desired_alias_count=4,
+                provider_config={
+                    "site_url": "https://simplelogin.io/",
+                    "single_account_alias_count": 2,
+                    "accounts": [
+                        {"email": "a@example.com", "password": "pa", "label": "a"},
+                        {"email": "b@example.com", "password": "pb", "label": "bee"},
+                    ],
+                },
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="task_pool",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+
+        context = provider.ensure_authenticated_context("task_pool")
+
+        self.assertEqual(context.service_account_email, "b@example.com")
+        self.assertEqual(context.confirmation_inbox_email, "b@example.com")
+        self.assertEqual(context.real_mailbox_email, "b@example.com")
+        self.assertEqual(context.service_password, "pb")
+        self.assertEqual(context.username, "bee")
+
+    def test_emailshield_uses_selected_account_from_rotating_state(self):
+        store = _MemoryStore(
+            InteractiveProviderState(
+                state_key="emailshield-primary",
+                active_account_email="b@example.com",
+                accounts_state=[
+                    {
+                        "email": "a@example.com",
+                        "password": "pa",
+                        "label": "a",
+                        "service_account_email": "a@example.com",
+                        "confirmation_inbox_email": "a@example.com",
+                        "real_mailbox_email": "a@example.com",
+                        "service_password": "pa",
+                        "username": "a",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": ["a-1@example.com", "a-2@example.com"],
+                        "exhausted": True,
+                    },
+                    {
+                        "email": "b@example.com",
+                        "password": "pb",
+                        "label": "bee",
+                        "service_account_email": "b@example.com",
+                        "confirmation_inbox_email": "b@example.com",
+                        "real_mailbox_email": "b@example.com",
+                        "service_password": "pb",
+                        "username": "bee",
+                        "session_state": {},
+                        "domain_options": [],
+                        "known_aliases": [],
+                        "exhausted": False,
+                    },
+                ],
+                known_aliases=["a-1@example.com", "a-2@example.com"],
+            )
+        )
+        provider = EmailShieldAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="emailshield-primary",
+                provider_type="emailshield",
+                state_key="emailshield-primary",
+                desired_alias_count=4,
+                provider_config={
+                    "single_account_alias_count": 2,
+                    "accounts": [
+                        {"email": "a@example.com", "password": "pa", "label": "a"},
+                        {"email": "b@example.com", "password": "pb", "label": "bee"},
+                    ],
+                },
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="task_pool",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+
+        context = provider.ensure_authenticated_context("task_pool")
+
+        self.assertEqual(context.service_account_email, "b@example.com")
+        self.assertEqual(context.confirmation_inbox_email, "b@example.com")
+        self.assertEqual(context.real_mailbox_email, "b@example.com")
+        self.assertEqual(context.service_password, "pb")
+        self.assertEqual(context.username, "bee")
+
 
 class InteractiveProviderContractTests(unittest.TestCase):
     def test_myalias_pro_maps_account_email_verification_to_shared_requirement(self):
