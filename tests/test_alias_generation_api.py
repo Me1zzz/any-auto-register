@@ -1401,6 +1401,70 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["stages"][0]["code"], "request_magic_link")
         self.assertEqual(body["stages"][1]["code"], "consume_magic_link")
 
+    def test_alias_generation_test_api_supports_secureinseconds_forwarding_stage_codes(self):
+        client = TestClient(app)
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "secureinseconds-primary",
+                        "type": "secureinseconds",
+                        "alias_count": 3,
+                        "state_key": "secureinseconds-primary",
+                        "confirmation_inbox": {
+                            "provider": "cloudmail",
+                            "account_email": "real@example.com",
+                            "account_password": "mail-pass",
+                            "match_email": "admin@cxwsss.online",
+                        },
+                        "provider_config": {
+                            "register_url": "https://alias.secureinseconds.com/auth/register",
+                            "login_url": "https://alias.secureinseconds.com/auth/signin",
+                        },
+                    }
+                ],
+            },
+        ), patch("api.config.AliasAutomationTestService") as service_cls:
+            service_cls.return_value.run.return_value = AliasProbeResult(
+                ok=True,
+                source_id="secureinseconds-primary",
+                source_type="secureinseconds",
+                alias_email="svcsecur02-rnd1@alias.secureinseconds.com",
+                real_mailbox_email="admin@cxwsss.online",
+                service_email="svcsecure01@cxwsss.online",
+                account={
+                    "realMailboxEmail": "admin@cxwsss.online",
+                    "serviceEmail": "svcsecure01@cxwsss.online",
+                    "password": "SisA1@TestPass",
+                    "username": "svcsecure01",
+                },
+                aliases=[
+                    {"email": "existing@alias.secureinseconds.com"},
+                    {"email": "svcsecur02-rnd1@alias.secureinseconds.com"},
+                    {"email": "svcsecur03-rnd2@alias.secureinseconds.com"},
+                ],
+                current_stage={"code": "aliases_ready", "label": "别名预览已生成"},
+                stages=[
+                    {"code": "session_ready", "label": "会话已就绪", "status": "completed"},
+                    {"code": "verify_forwarding_email", "label": "验证转发邮箱", "status": "completed"},
+                    {"code": "discover_alias_domains", "label": "发现可用域名", "status": "completed"},
+                    {"code": "list_aliases", "label": "列出现有别名", "status": "completed"},
+                    {"code": "create_aliases", "label": "创建别名", "status": "completed"},
+                ],
+            )
+
+            response = client.post("/api/config/alias-test", json={"sourceId": "secureinseconds-primary", "useDraftConfig": False})
+
+        body = response.json()
+        self.assertEqual(body["sourceType"], "secureinseconds")
+        self.assertEqual(body["accountIdentity"]["serviceAccountEmail"], "svcsecure01@cxwsss.online")
+        self.assertEqual(body["accountIdentity"]["realMailboxEmail"], "admin@cxwsss.online")
+        self.assertEqual(body["stages"][1]["code"], "verify_forwarding_email")
+        self.assertEqual(len(body["aliases"]), 3)
+
     def test_alias_generation_test_api_keeps_account_identity_compatibility_for_interactive_provider(self):
         client = TestClient(app)
 
