@@ -932,25 +932,13 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  <Form.Item label="Source ID" name="cloudmail_alias_alias_email_source_id" style={{ marginBottom: 0 }}>
-                    <Input placeholder="alias-email-primary" />
-                  </Form.Item>
-                  <Form.Item label="State Key" name="cloudmail_alias_alias_email_state_key" style={{ marginBottom: 0 }}>
-                    <Input placeholder="alias-email-primary" />
-                  </Form.Item>
                   <Form.Item label="目标别名数" name="cloudmail_alias_alias_email_alias_count" style={{ marginBottom: 0 }}>
                     <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
-                  </Form.Item>
-                  <Form.Item label="登录页 URL" name="cloudmail_alias_alias_email_login_url" style={{ marginBottom: 0 }}>
-                    <Input placeholder="https://alias.email/users/login/" />
-                  </Form.Item>
-                  <Form.Item label="匹配邮箱" name="cloudmail_alias_alias_email_match_email" style={{ marginBottom: 0 }}>
-                    <Input placeholder="real@example.com" />
                   </Form.Item>
                 </div>
 
                 <Typography.Text type="secondary">
-                  alias.email 通过确认邮箱中的 magic link 完成登录；这里仅维护固定单实例 source 配置，并继续统一写入 `sources`。
+                  alias.email 的登录页与 CloudMail 匹配策略由后端固定配置管理；这里仅控制单账号目标别名数。测试时会像 vend mail 一样，使用随机前缀的 CloudMail 邮箱作为服务账号。
                 </Typography.Text>
               </Space>
             </AliasServiceToggleCard>
