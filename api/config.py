@@ -64,6 +64,9 @@ CONFIG_KEYS = [
     "cloudmail_alias_service_vend_source_id",
     "cloudmail_alias_service_vend_alias_count",
     "cloudmail_alias_service_vend_state_key",
+    "cloudmail_team_account_email",
+    "cloudmail_team_account_password",
+    "cloudmail_team_otp_mailbox_email",
     "sources",
     "cloudmail_timeout",
     "mail_provider",
@@ -139,6 +142,7 @@ CONFIG_KEYS = [
 
 WRITE_ONLY_CONFIG_KEYS = {
     "cloudmail_admin_password",
+    "cloudmail_team_account_password",
 }
 
 

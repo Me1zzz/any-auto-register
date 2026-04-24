@@ -644,6 +644,47 @@ class AliasGenerationApiTests(unittest.TestCase):
         stored_payload = set_many.call_args.args[0]
         self.assertEqual(stored_payload, {"mail_provider": "cloudmail"})
 
+    def test_cloudmail_team_account_config_keys_are_supported(self):
+        client = TestClient(app)
+
+        with patch("api.config.config_store.set_many") as set_many:
+            resp = client.put(
+                "/api/config",
+                json={
+                    "data": {
+                        "cloudmail_team_account_email": "manager@example.com",
+                        "cloudmail_team_account_password": "team-secret",
+                        "cloudmail_team_otp_mailbox_email": "admin@example.com",
+                    }
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            set_many.call_args.args[0],
+            {
+                "cloudmail_team_account_email": "manager@example.com",
+                "cloudmail_team_account_password": "team-secret",
+                "cloudmail_team_otp_mailbox_email": "admin@example.com",
+            },
+        )
+
+        with patch(
+            "api.config.config_store.get_all",
+            return_value={
+                "cloudmail_team_account_email": "manager@example.com",
+                "cloudmail_team_account_password": "team-secret",
+                "cloudmail_team_otp_mailbox_email": "admin@example.com",
+            },
+        ):
+            get_resp = client.get("/api/config")
+
+        self.assertEqual(get_resp.status_code, 200)
+        body = get_resp.json()
+        self.assertEqual(body["cloudmail_team_account_email"], "manager@example.com")
+        self.assertEqual(body["cloudmail_team_account_password"], "")
+        self.assertEqual(body["cloudmail_team_otp_mailbox_email"], "admin@example.com")
+
     def test_alias_generation_test_api_returns_real_vend_probe_fields(self):
         client = TestClient(app)
 

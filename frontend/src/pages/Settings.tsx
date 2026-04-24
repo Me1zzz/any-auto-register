@@ -193,6 +193,24 @@ const TAB_ITEMS = [
           { key: 'cloudmail_domain', label: '邮箱域名（可选）', placeholder: 'mail.example.com,mail2.example.com' },
           { key: 'cloudmail_subdomain', label: '子域名（可选）', placeholder: 'pool-a' },
           { key: 'cloudmail_timeout', label: '请求超时秒数', placeholder: '30' },
+          {
+            key: 'cloudmail_team_account_email',
+            label: 'ChatGPT Team account email',
+            placeholder: 'manager@example.com',
+            description: 'Preconfigured ChatGPT Team member/manager email. This feature is only used with CloudMail.',
+          },
+          {
+            key: 'cloudmail_team_account_password',
+            label: 'ChatGPT Team account password (optional)',
+            secret: true,
+            description: 'Passwordless OTP login is used by default. Fill this only when OpenAI asks for a password.',
+          },
+          {
+            key: 'cloudmail_team_otp_mailbox_email',
+            label: 'Team OTP mailbox (optional)',
+            placeholder: 'admin@example.com',
+            description: 'Leave empty to use the current CloudMail admin inbox. OTP messages are matched by the Team account email.',
+          },
         ],
       },
       {
