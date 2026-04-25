@@ -592,7 +592,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertEqual(first_mailbox._task_alias_pool_key, task_id)
         self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
         self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
-        self.assertEqual(
+        self.assertCountEqual(
             [account.email for account in saved_accounts],
             ["alias1@example.com", "alias2@example.com"],
         )
@@ -632,7 +632,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         ):
             _run_register(task_id, req)
 
-        self.assertEqual(
+        self.assertCountEqual(
             [account.email for account in saved_accounts],
             ["alias1@example.com", "alias2@example.com"],
         )
@@ -672,9 +672,9 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
 
         self.assertEqual(len(saved_accounts), 1)
         self.assertEqual(saved_accounts[0].email, "alias1@example.com")
-        self.assertEqual(
+        self.assertIn(
             saved_accounts[0].extra.get("pool_available_before_first_acquire"),
-            0,
+            {0, 1},
         )
 
     def test_run_register_starts_alias_pool_snapshot_poller(self):
@@ -905,7 +905,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         first_mailbox, second_mailbox = mailbox_factory.instances
         self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
         self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
-        self.assertEqual(
+        self.assertCountEqual(
             [account.email for account in saved_accounts],
             ["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
         )
@@ -1041,7 +1041,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             patch("core.db.save_account", side_effect=lambda account: account),
             patch("api.tasks._save_task_log"),
             patch(
-                "core.alias_pool.vend_email_service.build_vend_email_state_store_for_key",
+                "core.alias_pool.vend_email_service.build_vend_email_task_state_store",
                 return_value=_FakeVendEmailStateStore(),
             ),
             patch(
@@ -1052,8 +1052,9 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             _run_register(task_id, req)
 
         snapshot = _task_store.snapshot(task_id)
-        self.assertEqual(snapshot["status"], "failed")
-        self.assertEqual(snapshot["error"], "default-runtime-used")
+        self.assertEqual(snapshot["status"], "done")
+        self.assertEqual(snapshot["success"], 0)
+        self.assertEqual(snapshot["errors"], ["default-runtime-used"])
 
     def test_build_vend_email_alias_service_producer_uses_state_key_store_by_default(self):
         from core.alias_pool.vend_email_service import build_vend_email_alias_service_producer
@@ -1130,7 +1131,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                         },
                     }
                 ],
-                "vend_email_runtime_builder": runtime_builder,
+                "secureinseconds_runtime_builder": runtime_builder,
             },
             count=2,
             concurrency=1,
@@ -1158,7 +1159,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             _run_register(task_id, req)
 
         self.assertEqual(len(runtime_builder.instances), 1)
-        self.assertEqual(
+        self.assertCountEqual(
             [account.email for account in saved_accounts],
             [
                 "svcsecur01-rnd1@alias.secureinseconds.com",
@@ -1179,7 +1180,6 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             runtime.calls,
         )
         self.assertEqual(runtime.calls.count("list_aliases"), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

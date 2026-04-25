@@ -18,6 +18,12 @@ MYALIAS_PRO_DEFAULT_CONFIG = {
     "alias_url": "https://myalias.pro/aliases/",
 }
 
+SECUREINSECONDS_DEFAULT_CONFIG = {
+    "source_id": "secureinseconds-primary",
+    "register_url": "https://alias.secureinseconds.com/auth/register",
+    "login_url": "https://alias.secureinseconds.com/auth/signin",
+}
+
 ALIAS_EMAIL_DEFAULT_CONFIG = {
     "source_id": "alias-email-primary",
     "login_url": "https://alias.email/users/login/",
@@ -91,10 +97,11 @@ def _decode_interactive_source(item: dict[str, Any], source_id: str, provider_ty
         "id": source_id,
         "type": provider_type,
         "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
-        "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
         "state_key": _parse_string(item.get("state_key")) or source_id,
         "provider_config": _parse_provider_config(item.get("provider_config")),
     }
+    if item.get("low_watermark") not in (None, ""):
+        normalized["low_watermark"] = max(_parse_int(item.get("low_watermark"), 0), 0)
     if item.get("single_account_alias_count") not in (None, ""):
         normalized["single_account_alias_count"] = max(_parse_int(item.get("single_account_alias_count"), 0), 0)
     if provider_type == "emailshield":
@@ -215,6 +222,11 @@ def _build_alias_email_source(
         ),
         0,
     )
+    low_watermark_value = (
+        payload.get("cloudmail_alias_alias_email_low_watermark")
+        if payload.get("cloudmail_alias_alias_email_low_watermark") not in (None, "")
+        else existing_source.get("low_watermark")
+    )
 
     provider_config = dict(existing_source.get("provider_config") or {})
     provider_config["login_url"] = str(ALIAS_EMAIL_DEFAULT_CONFIG["login_url"])
@@ -226,6 +238,8 @@ def _build_alias_email_source(
         "state_key": state_key,
         "provider_config": provider_config,
     }
+    if low_watermark_value not in (None, ""):
+        source["low_watermark"] = max(_parse_int(low_watermark_value, 0), 0)
 
     confirmation_inbox = _build_interactive_confirmation_inbox_config(
         {
@@ -236,6 +250,55 @@ def _build_alias_email_source(
     )
     if confirmation_inbox:
         source["confirmation_inbox"] = confirmation_inbox
+    return source
+
+
+def _build_secureinseconds_source(
+    payload: dict[str, Any],
+    existing_source: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not _parse_bool(payload.get("cloudmail_alias_secureinseconds_enabled")):
+        return None
+
+    existing_source = dict(existing_source or {})
+    source_id = _parse_string(existing_source.get("id")) or str(SECUREINSECONDS_DEFAULT_CONFIG["source_id"])
+    state_key = _parse_string(existing_source.get("state_key")) or source_id
+    alias_count = max(
+        _parse_int(
+            payload.get("cloudmail_alias_secureinseconds_alias_count"),
+            _parse_int(existing_source.get("alias_count"), 0),
+        ),
+        0,
+    )
+    low_watermark_value = (
+        payload.get("cloudmail_alias_secureinseconds_low_watermark")
+        if payload.get("cloudmail_alias_secureinseconds_low_watermark") not in (None, "")
+        else existing_source.get("low_watermark")
+    )
+
+    provider_config = dict(existing_source.get("provider_config") or {})
+    provider_config["register_url"] = str(SECUREINSECONDS_DEFAULT_CONFIG["register_url"])
+    provider_config["login_url"] = str(SECUREINSECONDS_DEFAULT_CONFIG["login_url"])
+
+    source: dict[str, Any] = {
+        "id": source_id,
+        "type": "secureinseconds",
+        "alias_count": alias_count,
+        "state_key": state_key,
+        "confirmation_inbox": _build_interactive_confirmation_inbox_config(
+            {
+                **existing_source,
+                "type": "secureinseconds",
+            },
+            payload,
+            hydrate_global=True,
+        ),
+        "provider_config": provider_config,
+    }
+    if low_watermark_value not in (None, ""):
+        source["low_watermark"] = max(_parse_int(low_watermark_value, 0), 0)
+    if not source["confirmation_inbox"]:
+        source.pop("confirmation_inbox", None)
     return source
 
 
@@ -327,6 +390,7 @@ def _decode_vend_source(item: dict[str, Any], source_id: str) -> dict[str, Any]:
         "alias_domain",
         "alias_domain_id",
         "alias_count",
+        "low_watermark",
     ]
     for field_name in ordered_optional_fields:
         if field_name in item:
@@ -349,6 +413,7 @@ def _decode_vend_source(item: dict[str, Any], source_id: str) -> dict[str, Any]:
             "alias_domain",
             "alias_domain_id",
             "alias_count",
+            "low_watermark",
         )
         if key in vend_item
     }
@@ -422,7 +487,19 @@ def _hydrate_explicit_interactive_sources(
             hydrated.append(source)
             continue
         hydrated_source = dict(source)
-        confirmation_inbox = _build_interactive_confirmation_inbox_config(source, payload)
+        confirmation_inbox = _build_interactive_confirmation_inbox_config(
+            source,
+            payload,
+            hydrate_global=source_type in {"alias_email", "secureinseconds"},
+        )
+        provider_config = dict(hydrated_source.get("provider_config") or {})
+        if source_type == "secureinseconds":
+            provider_config["register_url"] = str(SECUREINSECONDS_DEFAULT_CONFIG["register_url"])
+            provider_config["login_url"] = str(SECUREINSECONDS_DEFAULT_CONFIG["login_url"])
+        elif source_type == "alias_email":
+            provider_config["login_url"] = str(ALIAS_EMAIL_DEFAULT_CONFIG["login_url"])
+        if provider_config:
+            hydrated_source["provider_config"] = provider_config
         if confirmation_inbox:
             hydrated_source["confirmation_inbox"] = confirmation_inbox
         hydrated.append(hydrated_source)
@@ -487,88 +564,110 @@ def _build_cloudmail_alias_sources(payload: dict[str, Any]) -> list[dict[str, An
     legacy_alias_emails = _parse_alias_emails(payload.get("cloudmail_alias_emails"))
 
     if _parse_bool(payload.get("cloudmail_alias_service_static_enabled")) and legacy_alias_emails:
-        sources.append(
-            {
-                "id": "legacy-static",
-                "type": "static_list",
-                "emails": legacy_alias_emails,
-            }
-        )
+        static_source = {
+            "id": "legacy-static",
+            "type": "static_list",
+            "emails": legacy_alias_emails,
+        }
+        if payload.get("cloudmail_alias_service_static_low_watermark") not in (None, ""):
+            static_source["low_watermark"] = max(
+                _parse_int(payload.get("cloudmail_alias_service_static_low_watermark"), 0),
+                0,
+            )
+        sources.append(static_source)
 
     if _parse_bool(payload.get("cloudmail_alias_service_simple_enabled")):
         simple_suffix = _parse_string(payload.get("cloudmail_alias_service_simple_suffix")).lower()
         if simple_suffix:
-            sources.append(
-                {
-                    "id": "cloudmail-simple",
-                    "type": "simple_generator",
-                    "prefix": _parse_string(payload.get("cloudmail_alias_service_simple_prefix")),
-                    "suffix": simple_suffix,
-                    "count": max(_parse_int(payload.get("cloudmail_alias_service_simple_count"), 0), 0),
-                    "middle_length_min": max(
-                        _parse_int(payload.get("cloudmail_alias_service_simple_middle_length_min"), 3),
-                        1,
-                    ),
-                    "middle_length_max": max(
-                        _parse_int(payload.get("cloudmail_alias_service_simple_middle_length_max"), 6),
-                        1,
-                    ),
-                }
-            )
+            simple_source = {
+                "id": "cloudmail-simple",
+                "type": "simple_generator",
+                "prefix": _parse_string(payload.get("cloudmail_alias_service_simple_prefix")),
+                "suffix": simple_suffix,
+                "count": max(_parse_int(payload.get("cloudmail_alias_service_simple_count"), 0), 0),
+                "middle_length_min": max(
+                    _parse_int(payload.get("cloudmail_alias_service_simple_middle_length_min"), 3),
+                    1,
+                ),
+                "middle_length_max": max(
+                    _parse_int(payload.get("cloudmail_alias_service_simple_middle_length_max"), 6),
+                    1,
+                ),
+            }
+            if payload.get("cloudmail_alias_service_simple_low_watermark") not in (None, ""):
+                simple_source["low_watermark"] = max(
+                    _parse_int(payload.get("cloudmail_alias_service_simple_low_watermark"), 0),
+                    0,
+                )
+            sources.append(simple_source)
 
     if _parse_bool(payload.get("cloudmail_alias_service_vend_enabled")):
         vend_source_id = _parse_string(payload.get("cloudmail_alias_service_vend_source_id")) or str(
             VEND_EMAIL_DEFAULT_CONFIG["source_id"]
         )
         vend_state_key = _parse_string(payload.get("cloudmail_alias_service_vend_state_key")) or vend_source_id
-        sources.append(
+        vend_low_watermark_value = (
+            payload.get("cloudmail_alias_service_vend_low_watermark")
+            if payload.get("cloudmail_alias_service_vend_low_watermark") not in (None, "")
+            else payload.get("cloudmail_alias_vend_low_watermark")
+        )
+        vend_source = {
+            "id": vend_source_id,
+            "type": "vend_email",
+            "register_url": str(VEND_EMAIL_DEFAULT_CONFIG["register_url"]),
+            "cloudmail_api_base": _parse_string(payload.get("cloudmail_api_base")),
+            "cloudmail_admin_email": _parse_string(payload.get("cloudmail_admin_email")),
+            "cloudmail_admin_password": _parse_string(payload.get("cloudmail_admin_password")),
+            "cloudmail_domain": payload.get("cloudmail_domain") or "",
+            "cloudmail_subdomain": _parse_string(payload.get("cloudmail_subdomain")),
+            "cloudmail_timeout": _parse_int(payload.get("cloudmail_timeout"), 30),
+            "confirmation_inbox": _build_vend_confirmation_inbox_config(
                 {
-                    "id": vend_source_id,
-                    "type": "vend_email",
-                    "register_url": str(VEND_EMAIL_DEFAULT_CONFIG["register_url"]),
                     "cloudmail_api_base": _parse_string(payload.get("cloudmail_api_base")),
                     "cloudmail_admin_email": _parse_string(payload.get("cloudmail_admin_email")),
                     "cloudmail_admin_password": _parse_string(payload.get("cloudmail_admin_password")),
                     "cloudmail_domain": payload.get("cloudmail_domain") or "",
                     "cloudmail_subdomain": _parse_string(payload.get("cloudmail_subdomain")),
                     "cloudmail_timeout": _parse_int(payload.get("cloudmail_timeout"), 30),
-                    "confirmation_inbox": _build_vend_confirmation_inbox_config(
-                        {
-                            "cloudmail_api_base": _parse_string(payload.get("cloudmail_api_base")),
-                            "cloudmail_admin_email": _parse_string(payload.get("cloudmail_admin_email")),
-                            "cloudmail_admin_password": _parse_string(payload.get("cloudmail_admin_password")),
-                            "cloudmail_domain": payload.get("cloudmail_domain") or "",
-                            "cloudmail_subdomain": _parse_string(payload.get("cloudmail_subdomain")),
-                            "cloudmail_timeout": _parse_int(payload.get("cloudmail_timeout"), 30),
-                            "mailbox_email": _parse_string(payload.get("cloudmail_alias_mailbox_email")),
-                        }
-                    ),
-                    "alias_domain": str(VEND_EMAIL_DEFAULT_CONFIG["alias_domain"]),
-                    "alias_domain_id": str(VEND_EMAIL_DEFAULT_CONFIG["alias_domain_id"]),
-                    "alias_count": max(
-                    _parse_int(payload.get("cloudmail_alias_service_vend_alias_count"), 0),
-                    0,
-                ),
-                "state_key": vend_state_key,
-            }
-        )
+                    "mailbox_email": _parse_string(payload.get("cloudmail_alias_mailbox_email")),
+                }
+            ),
+            "alias_domain": str(VEND_EMAIL_DEFAULT_CONFIG["alias_domain"]),
+            "alias_domain_id": str(VEND_EMAIL_DEFAULT_CONFIG["alias_domain_id"]),
+            "alias_count": max(
+                _parse_int(payload.get("cloudmail_alias_service_vend_alias_count"), 0),
+                0,
+            ),
+            "state_key": vend_state_key,
+        }
+        if vend_low_watermark_value not in (None, ""):
+            vend_source["low_watermark"] = max(_parse_int(vend_low_watermark_value, 0), 0)
+        sources.append(vend_source)
 
     if _parse_bool(payload.get("cloudmail_alias_myalias_pro_enabled")):
         myalias_source_id = str(MYALIAS_PRO_DEFAULT_CONFIG["source_id"])
-        sources.append(
-            {
-                "id": myalias_source_id,
-                "type": "myalias_pro",
-                "alias_count": max(_parse_int(payload.get("cloudmail_alias_myalias_pro_alias_count"), 0), 0),
-                "state_key": myalias_source_id,
-                "confirmation_inbox": _build_interactive_confirmation_inbox_config({}, payload, hydrate_global=True),
-                "provider_config": {
-                    "signup_url": str(MYALIAS_PRO_DEFAULT_CONFIG["signup_url"]),
-                    "login_url": str(MYALIAS_PRO_DEFAULT_CONFIG["login_url"]),
-                    "alias_url": str(MYALIAS_PRO_DEFAULT_CONFIG["alias_url"]),
-                },
-            }
-        )
+        myalias_source = {
+            "id": myalias_source_id,
+            "type": "myalias_pro",
+            "alias_count": max(_parse_int(payload.get("cloudmail_alias_myalias_pro_alias_count"), 0), 0),
+            "state_key": myalias_source_id,
+            "confirmation_inbox": _build_interactive_confirmation_inbox_config({}, payload, hydrate_global=True),
+            "provider_config": {
+                "signup_url": str(MYALIAS_PRO_DEFAULT_CONFIG["signup_url"]),
+                "login_url": str(MYALIAS_PRO_DEFAULT_CONFIG["login_url"]),
+                "alias_url": str(MYALIAS_PRO_DEFAULT_CONFIG["alias_url"]),
+            },
+        }
+        if payload.get("cloudmail_alias_myalias_pro_low_watermark") not in (None, ""):
+            myalias_source["low_watermark"] = max(
+                _parse_int(payload.get("cloudmail_alias_myalias_pro_low_watermark"), 0),
+                0,
+            )
+        sources.append(myalias_source)
+
+    secureinseconds_source = _build_secureinseconds_source(payload)
+    if secureinseconds_source is not None:
+        sources.append(secureinseconds_source)
 
     alias_email_source = _build_alias_email_source(payload)
     if alias_email_source is not None:
@@ -601,14 +700,14 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
         source_id = str(item.get("id") or f"source-{index + 1}").strip() or f"source-{index + 1}"
 
         if source_type == "static_list":
-            normalized.append(
-                {
-                    "id": source_id,
-                    "type": "static_list",
-                    "emails": _parse_alias_emails(item.get("emails")),
-                    "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
-                }
-            )
+            static_source = {
+                "id": source_id,
+                "type": "static_list",
+                "emails": _parse_alias_emails(item.get("emails")),
+            }
+            if item.get("low_watermark") not in (None, ""):
+                static_source["low_watermark"] = max(_parse_int(item.get("low_watermark"), 0), 0)
+            normalized.append(static_source)
             continue
 
         if source_type == "simple_generator":
@@ -619,18 +718,18 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
             if max_length < min_length:
                 max_length = min_length
 
-            normalized.append(
-                {
-                    "id": source_id,
-                    "type": "simple_generator",
-                    "prefix": str(item.get("prefix") or "").strip(),
-                    "suffix": str(item.get("suffix") or "").strip().lower(),
-                    "count": max(_parse_int(item.get("count"), 0), 0),
-                    "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
-                    "middle_length_min": min_length,
-                    "middle_length_max": max_length,
-                }
-            )
+            simple_source = {
+                "id": source_id,
+                "type": "simple_generator",
+                "prefix": str(item.get("prefix") or "").strip(),
+                "suffix": str(item.get("suffix") or "").strip().lower(),
+                "count": max(_parse_int(item.get("count"), 0), 0),
+                "middle_length_min": min_length,
+                "middle_length_max": max_length,
+            }
+            if item.get("low_watermark") not in (None, ""):
+                simple_source["low_watermark"] = max(_parse_int(item.get("low_watermark"), 0), 0)
+            normalized.append(simple_source)
             continue
 
         if source_type == "vend_email":
@@ -648,9 +747,10 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
                 "alias_domain": str(item.get("alias_domain") or "").strip().lower(),
                 "alias_domain_id": str(item.get("alias_domain_id") or "").strip(),
                 "alias_count": max(_parse_int(item.get("alias_count"), 0), 0),
-                "low_watermark": max(_parse_int(item.get("low_watermark"), 0), 0),
                 "state_key": str(item.get("state_key") or source_id).strip() or source_id,
             }
+            if item.get("low_watermark") not in (None, ""):
+                vend_source["low_watermark"] = max(_parse_int(item.get("low_watermark"), 0), 0)
             if confirmation_inbox:
                 vend_source["confirmation_inbox"] = confirmation_inbox
             normalized.append(vend_source)
@@ -684,27 +784,29 @@ def decode_alias_provider_sources(value: Any) -> list[dict[str, Any]]:
         source_type = _parse_string(item.get("type"))
         source_id = _parse_string(item.get("id"))
         if source_type == "static_list":
-            sanitized.append(
-                {
-                    "id": source_id,
-                    "type": "static_list",
-                    "emails": _parse_alias_emails(item.get("emails")),
-                }
-            )
+            static_source = {
+                "id": source_id,
+                "type": "static_list",
+                "emails": _parse_alias_emails(item.get("emails")),
+            }
+            if item.get("low_watermark") not in (None, ""):
+                static_source["low_watermark"] = max(_parse_int(item.get("low_watermark"), 0), 0)
+            sanitized.append(static_source)
             continue
 
         if source_type == "simple_generator":
-            sanitized.append(
-                {
-                    "id": source_id,
-                    "type": "simple_generator",
-                    "prefix": item.get("prefix") or "",
-                    "suffix": item.get("suffix") or "",
-                    "count": item.get("count"),
-                    "middle_length_min": item.get("middle_length_min"),
-                    "middle_length_max": item.get("middle_length_max"),
-                }
-            )
+            simple_source = {
+                "id": source_id,
+                "type": "simple_generator",
+                "prefix": item.get("prefix") or "",
+                "suffix": item.get("suffix") or "",
+                "count": item.get("count"),
+                "middle_length_min": item.get("middle_length_min"),
+                "middle_length_max": item.get("middle_length_max"),
+            }
+            if item.get("low_watermark") not in (None, ""):
+                simple_source["low_watermark"] = max(_parse_int(item.get("low_watermark"), 0), 0)
+            sanitized.append(simple_source)
             continue
 
         if source_type == "vend_email":

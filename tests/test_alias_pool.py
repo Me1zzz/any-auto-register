@@ -9,7 +9,6 @@ from tempfile import TemporaryDirectory
 from core.alias_pool.base import (
     AliasEmailLease,
     AliasLeaseStatus,
-    AliasPoolExhaustedError,
     AliasPoolStarvedError,
     AliasSourceState,
 )
@@ -117,6 +116,67 @@ class AliasPoolConfigTests(unittest.TestCase):
         self.assertEqual(normalized_sources["legacy-static"]["low_watermark"], 1)
         self.assertEqual(specs_by_source_id["simplelogin-primary"].provider_config["single_account_alias_count"], 2)
         self.assertEqual(specs_by_source_id["simplelogin-primary"].raw_source["low_watermark"], 3)
+
+    def test_built_providers_expose_source_low_watermark_for_manager_refill(self):
+        from core.alias_pool.interactive_provider_base import InteractiveAliasProviderBase
+        from core.alias_pool.provider_adapters import (
+            build_simple_generator_alias_provider,
+            build_static_list_alias_provider,
+        )
+
+        pool_config = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "sources": [
+                    {
+                        "id": "legacy-static",
+                        "type": "static_list",
+                        "emails": ["one@example.com"],
+                        "low_watermark": 2,
+                    },
+                    {
+                        "id": "simple-a",
+                        "type": "simple_generator",
+                        "suffix": "@example.com",
+                        "count": 5,
+                        "low_watermark": 3,
+                    },
+                ],
+            },
+            task_id="task-watermarks",
+        )
+        specs_by_source_id = {
+            spec.source_id: spec
+            for spec in build_alias_provider_source_specs(pool_config)
+        }
+        context = AliasProviderBootstrapContext(task_id="task-watermarks", purpose="task_pool")
+
+        static_provider = build_static_list_alias_provider(specs_by_source_id["legacy-static"], context)
+        simple_provider = build_simple_generator_alias_provider(specs_by_source_id["simple-a"], context)
+        interactive_provider = InteractiveAliasProviderBase(
+            spec=AliasProviderSourceSpec(
+                source_id="interactive-a",
+                provider_type="simplelogin",
+                raw_source={"low_watermark": 4},
+            ),
+            context=context,
+        )
+        vend_provider = VendAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="vend-a",
+                provider_type="vend_email",
+                raw_source={"low_watermark": 5},
+            ),
+            state_repository=mock.Mock(),
+            runtime=mock.Mock(),
+            confirmation_reader=mock.Mock(),
+            telemetry=mock.Mock(),
+        )
+
+        self.assertEqual(static_provider.low_watermark, 2)
+        self.assertEqual(simple_provider.low_watermark, 3)
+        self.assertEqual(interactive_provider.low_watermark, 4)
+        self.assertEqual(vend_provider.low_watermark, 5)
 
     def test_build_alias_provider_source_specs_preserves_nested_account_cap_when_top_level_missing(self):
         payload = {
@@ -608,7 +668,6 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "id": "alias-email-primary",
                     "type": "alias_email",
                     "alias_count": 3,
-                    "low_watermark": 0,
                     "state_key": "alias-email-primary",
                     "provider_config": {
                         "login_url": "https://alias.email/users/login/",
@@ -642,6 +701,7 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                 "cloudmail_timeout": 41,
                 "cloudmail_alias_alias_email_enabled": True,
                 "cloudmail_alias_alias_email_alias_count": 5,
+                "cloudmail_alias_alias_email_low_watermark": 2,
             },
             task_id="task-alias-email-minimal",
         )
@@ -653,7 +713,7 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
                     "id": "alias-email-primary",
                     "type": "alias_email",
                     "alias_count": 5,
-                    "low_watermark": 0,
+                    "low_watermark": 2,
                     "state_key": "alias-email-primary",
                     "provider_config": {
                         "login_url": "https://alias.email/users/login/",
@@ -674,6 +734,51 @@ class AliasPoolConfigV2Tests(unittest.TestCase):
             ],
         )
 
+    def test_normalize_builds_backend_managed_secureinseconds_source_from_minimal_flags(self):
+        result = normalize_cloudmail_alias_pool_config(
+            {
+                "cloudmail_alias_enabled": True,
+                "cloudmail_api_base": "https://cloudmail.example/api",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret-pass",
+                "cloudmail_domain": "cxwsss.online",
+                "cloudmail_subdomain": "mx",
+                "cloudmail_timeout": 41,
+                "cloudmail_alias_secureinseconds_enabled": True,
+                "cloudmail_alias_secureinseconds_alias_count": 6,
+                "cloudmail_alias_secureinseconds_low_watermark": 3,
+            },
+            task_id="task-secureinseconds-minimal",
+        )
+
+        self.assertEqual(
+            result["sources"],
+            [
+                {
+                    "id": "secureinseconds-primary",
+                    "type": "secureinseconds",
+                    "alias_count": 6,
+                    "low_watermark": 3,
+                    "state_key": "secureinseconds-primary",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "api_base": "https://cloudmail.example/api",
+                        "admin_email": "admin@example.com",
+                        "account_email": "admin@example.com",
+                        "admin_password": "secret-pass",
+                        "account_password": "secret-pass",
+                        "domain": "cxwsss.online",
+                        "subdomain": "mx",
+                        "timeout": 41,
+                    },
+                    "provider_config": {
+                        "register_url": "https://alias.secureinseconds.com/auth/register",
+                        "login_url": "https://alias.secureinseconds.com/auth/signin",
+                    },
+                }
+            ],
+        )
+
 
 class AliasProviderConfigEncodingTests(unittest.TestCase):
     def test_encode_and_decode_alias_provider_sources_round_trip_supported_types(self):
@@ -687,6 +792,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                 "id": "legacy-static",
                 "type": "static_list",
                 "emails": ["alias1@example.com"],
+                "low_watermark": 1,
                 "mailbox_email": "real@example.com",
             },
             {
@@ -695,6 +801,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                 "prefix": "msi.",
                 "suffix": "@manyme.com",
                 "count": 2,
+                "low_watermark": 1,
                 "middle_length_min": 3,
                 "middle_length_max": 6,
                 "mailbox_email": "real@example.com",
@@ -711,6 +818,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                 "cloudmail_timeout": 45,
                 "alias_domain": "serf.me",
                 "alias_count": 2,
+                "low_watermark": 1,
                 "state_key": "vend-state",
                 "alias_domain_id": "42",
             },
@@ -725,6 +833,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                     "id": "legacy-static",
                     "type": "static_list",
                     "emails": ["alias1@example.com"],
+                    "low_watermark": 1,
                 },
                 {
                     "id": "simple-1",
@@ -732,6 +841,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                     "prefix": "msi.",
                     "suffix": "@manyme.com",
                     "count": 2,
+                    "low_watermark": 1,
                     "middle_length_min": 3,
                     "middle_length_max": 6,
                 },
@@ -747,6 +857,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                     "cloudmail_timeout": 45,
                     "alias_domain": "serf.me",
                     "alias_count": 2,
+                    "low_watermark": 1,
                     "state_key": "vend-state",
                     "alias_domain_id": "42",
                     "confirmation_inbox": {
@@ -769,6 +880,7 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
                         "alias_domain": "serf.me",
                         "alias_domain_id": "42",
                         "alias_count": 2,
+                        "low_watermark": 1,
                         "state_key": "vend-state",
                         "confirmation_inbox": {
                             "provider": "cloudmail",
@@ -811,6 +923,39 @@ class AliasProviderConfigEncodingTests(unittest.TestCase):
         )
 
 
+class AliasProviderRuntimeBuilderTests(unittest.TestCase):
+    def test_secureinseconds_ignores_runtime_builder_returning_wrong_runtime_shape(self):
+        from core.alias_pool.secureinseconds_provider import SecureInSecondsProvider
+
+        spec = AliasProviderSourceSpec(
+            source_id="secureinseconds-primary",
+            provider_type="secureinseconds",
+            state_key="secureinseconds-primary",
+            desired_alias_count=1,
+            provider_config={
+                "register_url": "https://alias.secureinseconds.com/auth/register",
+                "login_url": "https://alias.secureinseconds.com/auth/signin",
+            },
+        )
+        wrong_runtime_builder = mock.Mock(return_value=object())
+        context = AliasProviderBootstrapContext(
+            task_id="task-secure-runtime",
+            purpose="task_pool",
+            runtime_builder=wrong_runtime_builder,
+        )
+        provider = SecureInSecondsProvider(spec=spec, context=context)
+
+        with mock.patch(
+            "core.alias_pool.secureinseconds_provider.build_secureinseconds_runtime",
+            return_value=mock.sentinel.secure_runtime,
+        ) as default_runtime_builder:
+            runtime = provider._build_runtime()
+
+        self.assertIs(runtime, mock.sentinel.secure_runtime)
+        self.assertTrue(wrong_runtime_builder.called)
+        default_runtime_builder.assert_called_once()
+
+
 class AliasEmailLeaseTests(unittest.TestCase):
     def test_alias_email_lease_defaults_to_available_status(self):
         lease = AliasEmailLease(
@@ -847,7 +992,7 @@ class AliasPoolManagerTests(unittest.TestCase):
 
         lease = manager.acquire_alias()
 
-        self.assertEqual(lease.alias_email, "alias1@example.com")
+        self.assertIn(lease.alias_email, {"alias1@example.com", "alias2@example.com"})
         self.assertEqual(lease.real_mailbox_email, "real@example.com")
         self.assertEqual(lease.status, AliasLeaseStatus.LEASED)
 
@@ -1001,15 +1146,17 @@ class AliasPoolManagerTests(unittest.TestCase):
 
         producer = StaticAliasListProducer(
             source_id="legacy-static",
-            emails=["alias1@example.com", "alias2@example.com"],
+            emails=[f"alias{i}@example.com" for i in range(12)],
             mailbox_email="real@example.com",
         )
         manager.register_source(_FailingProducer())
         manager.register_source(producer)
+        manager.start_background_refill(low_watermark=10, interval_seconds=0.05)
+        self.addCleanup(manager.cleanup)
 
         lease = manager.acquire_alias()
 
-        self.assertEqual(lease.alias_email, "alias1@example.com")
+        self.assertTrue(lease.alias_email.startswith("alias"))
         joined_logs = "\n".join(logs)
         self.assertIn("refill failed: vend", joined_logs)
         self.assertIn("refill produced: static list", joined_logs)
@@ -1035,8 +1182,8 @@ class AliasPoolManagerTests(unittest.TestCase):
         producer.load_into(manager)
         manager.cleanup()
 
-        with self.assertRaises(AliasPoolExhaustedError):
-            manager.acquire_alias()
+        with self.assertRaises(AliasPoolStarvedError):
+            manager.acquire_alias(wait_timeout_seconds=0)
 
 
 class AliasPoolManagerSourceStateTests(unittest.TestCase):
@@ -1532,9 +1679,19 @@ class AliasPoolInteractiveProviderRotationTests(unittest.TestCase):
         )
 
         self.assertTrue(result.ok)
-        self.assertEqual(provider.created_aliases, [])
+        self.assertEqual(
+            provider.created_aliases,
+            [
+                ("b@example.com", "b-1@example.com"),
+                ("b@example.com", "b-2@example.com"),
+            ],
+        )
         self.assertEqual(provider.seen_modes, ["alias_test"])
         self.assertEqual(result.account_identity.service_account_email, "b@example.com")
+        self.assertEqual(
+            [item["email"] for item in result.aliases],
+            ["a-1@example.com", "a-2@example.com", "b-1@example.com", "b-2@example.com"],
+        )
 
     def test_interactive_provider_marks_stalled_account_exhausted_and_uses_next_account(self):
         store = _MemoryInteractiveStateStore()
@@ -1647,7 +1804,7 @@ class SimpleAliasGeneratorProducerTests(unittest.TestCase):
             producer.load_into(manager)
 
         leases = [manager.acquire_alias() for _ in range(5)]
-        self.assertEqual(
+        self.assertCountEqual(
             [lease.alias_email for lease in leases],
             [
                 "prefix.a@manyme.com",
@@ -2499,7 +2656,7 @@ class AliasAutomationTestServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(static_result.provider_type, "static_list")
-        self.assertEqual(
+        self.assertCountEqual(
             static_result.aliases,
             [
                 {"email": "a@example.com"},
@@ -3387,7 +3544,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         self.assertIn("list_aliases", runtime.calls)
         self.assertIn("create_aliases:2", runtime.calls)
         leases = [manager.acquire_alias(), manager.acquire_alias(), manager.acquire_alias()]
-        self.assertEqual(
+        self.assertCountEqual(
             [lease.alias_email for lease in leases],
             [
                 "vendcapexisting20260417@serf.me",
@@ -3647,7 +3804,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         producer.load_into(manager)
 
         leases = [manager.acquire_alias(), manager.acquire_alias(), manager.acquire_alias()]
-        self.assertEqual(
+        self.assertCountEqual(
             [lease.alias_email for lease in leases],
             ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],
         )

@@ -619,7 +619,6 @@ class AliasGenerationApiTests(unittest.TestCase):
             AliasProviderBootstrapContext(
                 task_id="alias-test",
                 purpose="automation_test",
-                runtime_builder=_default_alias_test_runtime_builder,
                 test_policy=AliasAutomationTestPolicy(
                     fresh_service_account=True,
                     persist_state=False,

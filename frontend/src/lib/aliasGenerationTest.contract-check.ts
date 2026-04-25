@@ -140,15 +140,8 @@ const fixedServiceDraftConfig = createAliasGenerationTestDraftConfig({
   cloudmail_alias_myalias_pro_alias_count: 3,
   cloudmail_alias_myalias_pro_low_watermark: 1,
   cloudmail_alias_secureinseconds_enabled: true,
-  cloudmail_alias_secureinseconds_source_id: 'secureinseconds-primary',
-  cloudmail_alias_secureinseconds_state_key: 'secureinseconds-state',
   cloudmail_alias_secureinseconds_alias_count: 4,
   cloudmail_alias_secureinseconds_low_watermark: 2,
-  cloudmail_alias_secureinseconds_register_url: 'https://alias.secureinseconds.com/auth/register',
-  cloudmail_alias_secureinseconds_login_url: 'https://alias.secureinseconds.com/auth/signin',
-  cloudmail_alias_secureinseconds_confirmation_email: 'real@example.com',
-  cloudmail_alias_secureinseconds_confirmation_password: 'mail-pass',
-  cloudmail_alias_secureinseconds_match_email: 'real@example.com',
   cloudmail_alias_emailshield_enabled: true,
   cloudmail_alias_emailshield_source_id: 'emailshield-primary',
   cloudmail_alias_emailshield_state_key: 'emailshield-state',
@@ -165,12 +158,8 @@ const fixedServiceDraftConfig = createAliasGenerationTestDraftConfig({
   cloudmail_alias_simplelogin_site_url: 'https://simplelogin.io/',
   cloudmail_alias_simplelogin_accounts: 'fust@fst.cxwsss.online\nlogon@fst.cxwsss.online',
   cloudmail_alias_alias_email_enabled: true,
-  cloudmail_alias_alias_email_source_id: 'alias-email-primary',
-  cloudmail_alias_alias_email_state_key: 'alias-email-state',
   cloudmail_alias_alias_email_alias_count: 3,
   cloudmail_alias_alias_email_low_watermark: 1,
-  cloudmail_alias_alias_email_login_url: 'https://alias.email/users/login/',
-  cloudmail_alias_alias_email_match_email: 'real@example.com',
 })
 
 const fixedServiceRoundTrip = deriveCloudmailAliasServiceFormValues({

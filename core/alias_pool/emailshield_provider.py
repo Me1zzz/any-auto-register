@@ -20,6 +20,17 @@ class EmailShieldProvider(ExistingAccountAliasProviderBase):
         self._session_base_url = ""
         self._authenticated_account_email = ""
 
+    def _configured_accounts(self) -> list[dict[str, str]]:
+        accounts = super()._configured_accounts()
+        for account in accounts:
+            if self._configured_password_for_email(account["email"]):
+                continue
+            account["password"] = self._default_password_for_email(account["email"])
+        return accounts
+
+    def requires_alias_domain_options(self) -> bool:
+        return False
+
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
         account = self.select_service_account()
         configured_password = self._configured_password_for_email(account["email"])

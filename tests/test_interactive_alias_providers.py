@@ -1295,6 +1295,55 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
         )
 
     def test_secureinseconds_shared_loop_maps_requirement_to_verify_forwarding_email_stage(self):
+        class _Runtime:
+            def __init__(self):
+                self.forwarding_verified = False
+                self.created_alias_count = 0
+
+            def export_session_state(self):
+                return {"session": "secure-test"}
+
+            def restore_session(self, _session_state, _service_account_email):
+                return False
+
+            def register_account(self, _email, _password):
+                return True, ""
+
+            def login_account(self, _email, _password):
+                return True
+
+            def list_forwarding_emails(self):
+                return [{"email": "real@example.com", "verified": self.forwarding_verified}]
+
+            def add_forwarding_email(self, _email):
+                return True, ""
+
+            def resend_forwarding_verification(self, _email):
+                return True, ""
+
+            def fetch_forwarding_verify_link(self, **_kwargs):
+                return "https://alias.secureinseconds.com/api/user/emails/verify?token=abc123"
+
+            def verify_forwarding_email(self, _verify_link):
+                self.forwarding_verified = True
+                return True, ""
+
+            def list_aliases(self):
+                return []
+
+            def create_alias(self, *, prefix, description, forward_to_emails):
+                self.created_alias_count += 1
+                return {
+                    "alias": f"{prefix}@alias.secureinseconds.com",
+                    "_id": f"alias-{self.created_alias_count}",
+                    "description": description,
+                    "forwardToEmails": forward_to_emails,
+                }
+
+            def capture_summary(self):
+                return []
+
+        runtime = _Runtime()
         provider = SecureInSecondsProvider(
             spec=AliasProviderSourceSpec(
                 source_id="secureinseconds-primary",
@@ -1311,7 +1360,11 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
                     "login_url": "https://alias.secureinseconds.com/auth/signin",
                 },
             ),
-            context=AliasProviderBootstrapContext(task_id="alias-test", purpose="automation_test"),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="automation_test",
+                runtime_builder=lambda *_args, **_kwargs: runtime,
+            ),
         )
 
         result = provider.run_alias_generation_test(

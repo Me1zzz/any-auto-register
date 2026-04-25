@@ -829,29 +829,11 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
               description="启用后会把单实例 SecureInSeconds source 加入 alias 池。"
             >
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                <Form.Item label="Source ID" name="cloudmail_alias_secureinseconds_source_id" style={{ marginBottom: 0 }}>
-                  <Input placeholder="secureinseconds-primary" />
-                </Form.Item>
-                <Form.Item label="State Key" name="cloudmail_alias_secureinseconds_state_key" style={{ marginBottom: 0 }}>
-                  <Input placeholder="secureinseconds-primary" />
-                </Form.Item>
-                <Form.Item label="目标别名数" name="cloudmail_alias_secureinseconds_alias_count" style={{ marginBottom: 0 }}>
+                <Form.Item label="单账户最大可创建别名数" name="cloudmail_alias_secureinseconds_alias_count" style={{ marginBottom: 0 }}>
                   <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
                 </Form.Item>
-                <Form.Item label="注册地址 URL" name="cloudmail_alias_secureinseconds_register_url" style={{ marginBottom: 0 }}>
-                  <Input placeholder="https://alias.secureinseconds.com/auth/register" />
-                </Form.Item>
-                <Form.Item label="登录页 URL" name="cloudmail_alias_secureinseconds_login_url" style={{ marginBottom: 0 }}>
-                  <Input placeholder="https://alias.secureinseconds.com/auth/signin" />
-                </Form.Item>
-                <Form.Item label="确认邮箱账号" name="cloudmail_alias_secureinseconds_confirmation_email" style={{ marginBottom: 0 }}>
-                  <Input placeholder="real@example.com" />
-                </Form.Item>
-                <Form.Item label="确认邮箱密码" name="cloudmail_alias_secureinseconds_confirmation_password" style={{ marginBottom: 0 }}>
-                  <Input.Password placeholder="mail-pass" />
-                </Form.Item>
-                <Form.Item label="匹配邮箱" name="cloudmail_alias_secureinseconds_match_email" style={{ marginBottom: 0 }}>
-                  <Input placeholder="real@example.com" />
+                <Form.Item label="补货水位" name="cloudmail_alias_secureinseconds_low_watermark" style={{ marginBottom: 0 }}>
+                  <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
                 </Form.Item>
               </div>
             </AliasServiceToggleCard>
@@ -932,8 +914,11 @@ function CloudMailAliasSection({ form }: { form: ReturnType<typeof Form.useForm>
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  <Form.Item label="目标别名数" name="cloudmail_alias_alias_email_alias_count" style={{ marginBottom: 0 }}>
+                  <Form.Item label="单账户最大可创建别名数" name="cloudmail_alias_alias_email_alias_count" style={{ marginBottom: 0 }}>
                     <InputNumber min={0} style={{ width: '100%' }} placeholder="3" />
+                  </Form.Item>
+                  <Form.Item label="补货水位" name="cloudmail_alias_alias_email_low_watermark" style={{ marginBottom: 0 }}>
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
                   </Form.Item>
                 </div>
 

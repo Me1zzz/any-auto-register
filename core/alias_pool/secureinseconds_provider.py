@@ -335,6 +335,22 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
             raise RuntimeError("secureinseconds runtime not initialized")
         return self._runtime
 
+    def _is_runtime_compatible(self, candidate) -> bool:
+        required_methods = (
+            "export_session_state",
+            "restore_session",
+            "register_account",
+            "login_account",
+            "list_forwarding_emails",
+            "add_forwarding_email",
+            "resend_forwarding_verification",
+            "fetch_forwarding_verify_link",
+            "verify_forwarding_email",
+            "list_aliases",
+            "create_alias",
+        )
+        return all(callable(getattr(candidate, method_name, None)) for method_name in required_methods)
+
     def _build_runtime(self) -> SecureInSecondsRuntime:
         runtime_builder = getattr(self._context, "runtime_builder", None)
         provider_config = self._provider_config()
@@ -348,7 +364,7 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
                     candidate = runtime_builder(*args, **kwargs)
                 except TypeError:
                     continue
-                if candidate is not None:
+                if candidate is not None and self._is_runtime_compatible(candidate):
                     return cast(SecureInSecondsRuntime, candidate)
         return build_secureinseconds_runtime(provider_config=provider_config)
 

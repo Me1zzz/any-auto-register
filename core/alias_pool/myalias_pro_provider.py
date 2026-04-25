@@ -116,6 +116,9 @@ class MyAliasProProvider(InteractiveAliasProviderBase):
             return None
         return domains[(alias_index - 1) % len(domains)]
 
+    def requires_alias_domain_options(self) -> bool:
+        return False
+
     def build_capture_summary(self):
         return []
 

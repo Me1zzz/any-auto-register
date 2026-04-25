@@ -164,11 +164,20 @@ class DefaultVendEmailRuntimeExecutor:
             mails = cloudmail_mailbox._list_mails(target_email)
             if not mails:
                 mails = cloudmail_mailbox._list_mails("")
+            match_mailbox_receipt = getattr(cloudmail_mailbox, "_match_mailbox_receipt", None)
+            match_alias_receipt = getattr(cloudmail_mailbox, "_match_alias_receipt", None)
             for idx, msg in enumerate(mails):
-                if not (
-                    cloudmail_mailbox._match_mailbox_receipt(msg, target_email)
-                    or cloudmail_mailbox._match_alias_receipt(msg, target_email)
-                ):
+                mailbox_matches = (
+                    bool(match_mailbox_receipt(msg, target_email))
+                    if callable(match_mailbox_receipt)
+                    else False
+                )
+                alias_matches = (
+                    bool(match_alias_receipt(msg, target_email))
+                    if callable(match_alias_receipt)
+                    else False
+                )
+                if not (mailbox_matches or alias_matches):
                     continue
                 content = " ".join(
                     [
@@ -1051,6 +1060,10 @@ class VendEmailAliasServiceProducer:
     def __init__(self, *, source: dict, state_store, runtime: object):
         self.source = dict(source)
         self.source_id = str(source.get("id") or "vend-email")
+        try:
+            self.low_watermark = max(int(source.get("low_watermark") or 0), 0)
+        except (TypeError, ValueError):
+            self.low_watermark = 0
         self.state_store = state_store
         self.runtime = cast(VendEmailRuntime, runtime)
         self._state = AliasSourceState.IDLE

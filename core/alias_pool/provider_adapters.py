@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.alias_pool.base import AliasPoolExhaustedError
+from core.alias_pool.base import AliasPoolExhaustedError, AliasPoolStarvedError
 from core.alias_pool.manager import AliasEmailPoolManager
 from core.alias_pool.provider_contracts import (
     AliasAccountIdentity,
@@ -27,6 +27,7 @@ class _SingleAliasProducerAdapter:
         mailbox_email: str,
         task_id: str,
         alias_count: int,
+        low_watermark: int = 0,
     ):
         self.producer = producer
         self.source_id = source_id
@@ -34,6 +35,7 @@ class _SingleAliasProducerAdapter:
         self.mailbox_email = mailbox_email
         self.task_id = task_id
         self.alias_count = max(int(alias_count or 0), 0)
+        self.low_watermark = max(int(low_watermark or 0), 0)
 
     @property
     def provider_type(self) -> str:
@@ -56,14 +58,19 @@ class _SingleAliasProducerAdapter:
         target_alias_count = max(self.alias_count, int(policy.minimum_alias_count or 0), 1)
         if hasattr(self.producer, "count"):
             self.producer.count = target_alias_count
+        if hasattr(self.producer, "_remaining_count"):
+            self.producer._remaining_count = max(
+                int(getattr(self.producer, "_remaining_count", 0) or 0),
+                target_alias_count,
+            )
         manager = AliasEmailPoolManager(task_id=self.task_id)
         self.load_into(manager)
         aliases: list[dict[str, str]] = []
         real_mailbox_email = self.mailbox_email
         for _ in range(target_alias_count):
             try:
-                lease = manager.acquire_alias()
-            except AliasPoolExhaustedError:
+                lease = manager.acquire_alias(wait_timeout_seconds=0)
+            except (AliasPoolExhaustedError, AliasPoolStarvedError):
                 break
             if not real_mailbox_email:
                 real_mailbox_email = lease.real_mailbox_email
@@ -100,6 +107,7 @@ def build_static_list_alias_provider(
         mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
         task_id=context.task_id,
         alias_count=max(spec.desired_alias_count, 0),
+        low_watermark=source.get("low_watermark") or 0,
     )
 
 
@@ -124,4 +132,5 @@ def build_simple_generator_alias_provider(
         mailbox_email=str(source.get("mailbox_email") or "").strip().lower(),
         task_id=context.task_id,
         alias_count=max(spec.desired_alias_count, 0),
+        low_watermark=source.get("low_watermark") or 0,
     )

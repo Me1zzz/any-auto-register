@@ -323,14 +323,40 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             registry.register("vend_email", _build_vend_email_provider)
             register_interactive_alias_providers(registry)
             bootstrap = AliasProviderBootstrap(registry=registry)
+            runtime_builders = merged_extra.get("alias_provider_runtime_builders")
+            if not isinstance(runtime_builders, dict):
+                runtime_builders = {}
+
+            def _runtime_builder_for(provider_type: str):
+                normalized_provider_type = str(provider_type or "").strip().lower()
+                mapped_builder = runtime_builders.get(normalized_provider_type)
+                if callable(mapped_builder):
+                    return mapped_builder
+                specific_builder = merged_extra.get(f"{normalized_provider_type}_runtime_builder")
+                if callable(specific_builder):
+                    return specific_builder
+                if normalized_provider_type == "vend_email":
+                    vend_builder = merged_extra.get("vend_email_runtime_builder")
+                    if callable(vend_builder):
+                        return vend_builder
+                return None
+
             bootstrap_context = AliasProviderBootstrapContext(
                 task_id=task_id,
                 purpose="task_pool",
-                runtime_builder=merged_extra.get("vend_email_runtime_builder"),
                 state_store_factory=merged_extra.get("vend_email_state_store_factory"),
             )
             for spec in build_alias_provider_source_specs(pool_config):
-                producer = bootstrap.build(spec=spec, context=bootstrap_context)
+                source_context = AliasProviderBootstrapContext(
+                    task_id=bootstrap_context.task_id,
+                    purpose=bootstrap_context.purpose,
+                    runtime_builder=_runtime_builder_for(spec.provider_type),
+                    state_store_factory=bootstrap_context.state_store_factory,
+                    confirmation_reader=bootstrap_context.confirmation_reader,
+                    telemetry_sink=bootstrap_context.telemetry_sink,
+                    test_policy=bootstrap_context.test_policy,
+                )
+                producer = bootstrap.build(spec=spec, context=source_context)
                 manager.register_source(producer)
             return manager
 

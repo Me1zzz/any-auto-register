@@ -16,7 +16,7 @@ type Props = {
   form: FormInstance
 }
 
-const LEGACY_MANAGED_SOURCE_TYPES = new Set(['static_list', 'vend_email', 'alias_email'])
+const LEGACY_MANAGED_SOURCE_TYPES = new Set(['static_list', 'vend_email', 'secureinseconds', 'alias_email'])
 
 export default function AliasGenerationSourceEditor({ form }: Props) {
   const watchedSources = Form.useWatch('sources', form)

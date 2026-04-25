@@ -14,15 +14,15 @@ export type AliasGenerationSourceType =
 export const ADDABLE_ALIAS_GENERATION_SOURCE_TYPES: AliasGenerationSourceType[] = [
   'simple_generator',
   'myalias_pro',
-  'secureinseconds',
   'emailshield',
   'simplelogin',
-  'alias_email',
 ]
 
 const LEGACY_MANAGED_ALIAS_GENERATION_SOURCE_TYPES = new Set<AliasGenerationSourceType>([
   'static_list',
   'vend_email',
+  'secureinseconds',
+  'alias_email',
 ])
 
 const ALIAS_GENERATION_SOURCE_TYPE_LABELS: Record<string, string> = {
@@ -108,13 +108,6 @@ export function createAliasGenerationDraftSourceTemplate(
         alias_count: 3,
         state_key: resolvedSourceId,
         low_watermark: 0,
-        confirmation_inbox: {
-          provider: 'cloudmail',
-        },
-        provider_config: {
-          register_url: 'https://alias.secureinseconds.com/auth/register',
-          login_url: 'https://alias.secureinseconds.com/auth/signin',
-        },
       }
     case 'emailshield':
       return {
@@ -148,12 +141,6 @@ export function createAliasGenerationDraftSourceTemplate(
         alias_count: 3,
         state_key: resolvedSourceId,
         low_watermark: 0,
-        confirmation_inbox: {
-          provider: 'cloudmail',
-        },
-        provider_config: {
-          login_url: 'https://alias.email/users/login/',
-        },
       }
   }
 }
@@ -892,28 +879,6 @@ function normalizeSimpleLoginAccountsFieldValue(value: unknown): string {
   return parseSimpleLoginAccountLines(value).join('\n')
 }
 
-function buildConfirmationInboxConfig(params: {
-  provider: 'cloudmail'
-  accountEmail?: unknown
-  accountPassword?: unknown
-  matchEmail?: unknown
-}): Record<string, unknown> | undefined {
-  const accountEmail = stringifyFieldValue(params.accountEmail)
-  const accountPassword = stringifyFieldValue(params.accountPassword)
-  const matchEmail = stringifyFieldValue(params.matchEmail)
-
-  if (!accountEmail && !accountPassword && !matchEmail) {
-    return undefined
-  }
-
-  return {
-    provider: params.provider,
-    ...(accountEmail ? { account_email: accountEmail } : {}),
-    ...(accountPassword ? { account_password: accountPassword } : {}),
-    ...(matchEmail ? { match_email: matchEmail } : {}),
-  }
-}
-
 function buildProviderSourceFromFixedFields(params: {
   type: 'myalias_pro' | 'secureinseconds' | 'emailshield' | 'simplelogin' | 'alias_email'
   enabled: unknown
@@ -962,6 +927,35 @@ function buildProviderSourceFromFixedFields(params: {
     state_key: stateKey,
     confirmation_inbox: params.confirmationInbox ?? asRecord(params.preservedSource?.confirmation_inbox) ?? undefined,
     provider_config: params.providerConfig ?? asRecord(params.preservedSource?.provider_config) ?? undefined,
+  }
+}
+
+function buildBackendManagedProviderSource(params: {
+  type: 'secureinseconds' | 'alias_email'
+  enabled: unknown
+  aliasCount: unknown
+  lowWatermark?: unknown
+  preservedSource: AliasGenerationTestDraftSource | null
+}): AliasGenerationTestDraftSource | null {
+  const enabled = parseBooleanConfigValue(params.enabled)
+  if (!enabled) {
+    return null
+  }
+
+  const sourceId = getDefaultAliasGenerationSourceId(params.type)
+  const aliasCount =
+    normalizeNumericFieldValue(params.aliasCount)
+    ?? normalizeNumericFieldValue(params.preservedSource?.alias_count)
+  const lowWatermark =
+    normalizeNumericFieldValue(params.lowWatermark)
+    ?? normalizeNumericFieldValue(params.preservedSource?.low_watermark)
+
+  return {
+    id: sourceId,
+    type: params.type,
+    alias_count: aliasCount,
+    low_watermark: lowWatermark,
+    state_key: sourceId,
   }
 }
 
@@ -1111,34 +1105,12 @@ function buildSecureInSecondsDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
 ): AliasGenerationTestDraftSource | null {
-  return buildProviderSourceFromFixedFields({
+  return buildBackendManagedProviderSource({
     type: 'secureinseconds',
     enabled: draftConfig.cloudmail_alias_secureinseconds_enabled,
-    sourceId: draftConfig.cloudmail_alias_secureinseconds_source_id,
-    stateKey: draftConfig.cloudmail_alias_secureinseconds_state_key,
     aliasCount: draftConfig.cloudmail_alias_secureinseconds_alias_count,
     lowWatermark: draftConfig.cloudmail_alias_secureinseconds_low_watermark,
     preservedSource,
-    providerConfig: {
-      register_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_secureinseconds_register_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.register_url),
-      login_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_secureinseconds_login_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
-    },
-    confirmationInbox: buildConfirmationInboxConfig({
-      provider: 'cloudmail',
-      accountEmail:
-        draftConfig.cloudmail_alias_secureinseconds_confirmation_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.account_email,
-      accountPassword:
-        draftConfig.cloudmail_alias_secureinseconds_confirmation_password
-        ?? asRecord(preservedSource?.confirmation_inbox)?.account_password,
-      matchEmail:
-        draftConfig.cloudmail_alias_secureinseconds_match_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
-    }),
   })
 }
 
@@ -1196,25 +1168,12 @@ function buildAliasEmailDraftSource(
   draftConfig: AliasGenerationTestDraftConfig,
   preservedSource: AliasGenerationTestDraftSource | null,
 ): AliasGenerationTestDraftSource | null {
-  return buildProviderSourceFromFixedFields({
+  return buildBackendManagedProviderSource({
     type: 'alias_email',
     enabled: draftConfig.cloudmail_alias_alias_email_enabled,
-    sourceId: draftConfig.cloudmail_alias_alias_email_source_id,
-    stateKey: draftConfig.cloudmail_alias_alias_email_state_key,
     aliasCount: draftConfig.cloudmail_alias_alias_email_alias_count,
     lowWatermark: draftConfig.cloudmail_alias_alias_email_low_watermark,
     preservedSource,
-    providerConfig: {
-      login_url:
-        stringifyFieldValue(draftConfig.cloudmail_alias_alias_email_login_url)
-        || stringifyFieldValue(asRecord(preservedSource?.provider_config)?.login_url),
-    },
-    confirmationInbox: buildConfirmationInboxConfig({
-      provider: 'cloudmail',
-      matchEmail:
-        draftConfig.cloudmail_alias_alias_email_match_email
-        ?? asRecord(preservedSource?.confirmation_inbox)?.match_email,
-    }),
   })
 }
 

@@ -48,6 +48,10 @@ class VendAliasProvider:
             **{key: value for key, value in raw_source.items() if key != "provider_config"},
         }
         self.source_id = spec.source_id
+        try:
+            self.low_watermark = max(int(raw_source.get("low_watermark") or 0), 0)
+        except (TypeError, ValueError):
+            self.low_watermark = 0
         self.state_store = getattr(state_repository, "store", state_repository)
         self._state_repository = state_repository
         self.runtime = runtime
@@ -80,6 +84,7 @@ class VendAliasProvider:
             self._ensure_session(state)
             target_total = min(target_cap, len(known_aliases_before) + requested)
             alias_items = self._load_alias_items(state, target_total)
+            state.last_capture_summary = self._capture_summary()
             state.known_aliases = [
                 str(item.get("email") or "").strip().lower()
                 for item in alias_items
@@ -114,8 +119,35 @@ class VendAliasProvider:
                 if len(state.known_aliases) >= target_cap
                 else AliasSourceState.ACTIVE
             )
-        except Exception:
+        except Exception as exc:
             self._state = AliasSourceState.FAILED
+            stage_code = self._telemetry.resolve_failure_stage_code(state)
+            history = [
+                item
+                for item in list(getattr(state, "stage_history", []) or [])
+                if isinstance(item, dict)
+            ]
+            if history and str(history[-1].get("code") or "") == stage_code:
+                self._telemetry.update_stage_status(
+                    state,
+                    stage_code,
+                    status="failed",
+                    detail=str(exc),
+                )
+            else:
+                self._telemetry.record_stage(
+                    state,
+                    stage_code,
+                    status="failed",
+                    detail=str(exc),
+                )
+            self._telemetry.record_failure(state, stage_code, str(exc), retryable=True)
+            state.last_error = str(exc)
+            try:
+                state.last_capture_summary = self._capture_summary()
+            except Exception:
+                pass
+            self._state_repository.save(state)
             raise
 
     def load_into(self, pool_manager) -> None:

@@ -41,6 +41,10 @@ class InteractiveAliasProviderBase:
         self._spec = spec
         self._context = context
         self.source_id = spec.source_id
+        try:
+            self.low_watermark = max(int(dict(spec.raw_source or {}).get("low_watermark") or 0), 0)
+        except (TypeError, ValueError):
+            self.low_watermark = 0
         self._state_repository = self._build_state_repository()
         self._state = AliasSourceState.IDLE
         self._account_selection_state: InteractiveProviderState | None = None
@@ -97,6 +101,8 @@ class InteractiveAliasProviderBase:
 
                 domains = list(self.discover_alias_domains(context))
                 context = replace(context, domain_options=domains)
+                if self.requires_alias_domain_options() and not domains:
+                    raise RuntimeError(f"{self.provider_type} live alias domains unavailable")
 
                 aliases = self._dedupe_alias_items(
                     [{"email": email} for email in known_aliases_before]
@@ -196,27 +202,15 @@ class InteractiveAliasProviderBase:
                 target = max(int(policy.minimum_alias_count or 0), int(self._spec.desired_alias_count or 0), 1)
                 record("session_ready", "Session ready", "completed")
                 record("discover_alias_domains", "Discover alias domains", "pending")
-                record("list_aliases", "List existing aliases", "pending")
-                record("create_aliases", "Create aliases", "pending")
                 context, domains = self._preview_aliases_across_accounts(
                     state=state,
                     target_total=target,
                 )
-                aliases = [{"email": email} for email in self._flatten_known_aliases(state)]
-                timeline[-3] = AliasProviderStage(
-                    code=timeline[-3].code,
-                    label=timeline[-3].label,
-                    status="completed",
-                    detail=f"found {len(domains)} domain options",
-                )
-                timeline[-2] = AliasProviderStage(
-                    code=timeline[-2].code,
-                    label=timeline[-2].label,
-                    status="completed",
-                    detail=f"found {len(aliases)} aliases",
-                )
-                update_last("completed", detail=f"prepared {len(aliases)} aliases")
-                record("aliases_ready", "Aliases ready", "completed", detail=f"prepared {len(aliases)} aliases")
+                update_last("completed", detail=f"found {len(domains)} domain options")
+                aliases = self._flatten_known_alias_items(state)
+                record("list_aliases", "List existing aliases", "completed", detail=f"found {len(aliases)} aliases")
+                record("create_aliases", "Create aliases", "completed", detail=f"prepared {len(aliases)} aliases")
+                record("aliases_ready", "别名预览已生成", "completed", detail=f"prepared {len(aliases)} aliases")
 
                 capture_summary = self._capture_summary_for_policy(policy)
                 if policy.persist_state:
@@ -269,6 +263,8 @@ class InteractiveAliasProviderBase:
             record("discover_alias_domains", "发现可用域名", "pending")
             domains = list(self.discover_alias_domains(context))
             context = replace(context, domain_options=domains)
+            if self.requires_alias_domain_options() and not domains:
+                raise RuntimeError(f"{self.provider_type} live alias domains unavailable")
             update_last("completed", detail=f"找到 {len(domains)} 个域名选项")
 
             record("list_aliases", "列出现有别名", "pending")
@@ -411,11 +407,13 @@ class InteractiveAliasProviderBase:
 
             domains = list(self.discover_alias_domains(context))
             context = replace(context, domain_options=domains)
+            if self.requires_alias_domain_options() and not domains:
+                raise RuntimeError(f"{self.provider_type} live alias domains unavailable")
             last_context = context
             last_domains = domains
 
             account_aliases = self._dedupe_alias_items(
-                [{"email": email} for email in self._account_known_aliases(account)]
+                self._account_alias_items(account)
                 + [
                     dict(item)
                     for item in list(self.list_existing_aliases(context))
@@ -525,6 +523,15 @@ class InteractiveAliasProviderBase:
                 persisted = self._legacy_account_state_item(state, account)
 
             known_aliases = self._dedupe_alias_values(list(persisted.get("known_aliases") or []))
+            alias_items = self._dedupe_alias_items(
+                [
+                    dict(item)
+                    for item in list(persisted.get("alias_items") or [])
+                    if isinstance(item, Mapping)
+                ]
+                + [{"email": email} for email in known_aliases]
+            )
+            known_aliases = self._alias_values_from_items(alias_items)
             account_state = {
                 "email": email,
                 "password": str(persisted.get("password") or account["password"]).strip() or account["password"],
@@ -538,6 +545,7 @@ class InteractiveAliasProviderBase:
                 "session_state": dict(persisted.get("session_state") or {}),
                 "domain_options": self._normalize_domain_state_items(persisted.get("domain_options")),
                 "known_aliases": known_aliases,
+                "alias_items": alias_items,
                 "exhausted": bool(persisted.get("exhausted")),
             }
             if self._account_is_full(known_aliases):
@@ -626,6 +634,16 @@ class InteractiveAliasProviderBase:
             return list(state.known_aliases)
         state.known_aliases = self._dedupe_alias_values(list(state.known_aliases or []))
         return list(state.known_aliases)
+
+    def _flatten_known_alias_items(self, state: InteractiveProviderState) -> list[dict[str, object]]:
+        if state.accounts_state:
+            flattened: list[dict[str, object]] = []
+            for item in list(state.accounts_state or []):
+                if not isinstance(item, Mapping):
+                    continue
+                flattened.extend(self._account_alias_items(item))
+            return self._dedupe_alias_items(flattened)
+        return self._dedupe_alias_items([{"email": email} for email in self._flatten_known_aliases(state)])
 
     def _preview_aliases_across_accounts(
         self,
@@ -835,6 +853,7 @@ class InteractiveAliasProviderBase:
             "session_state": dict(state.session_state or {}),
             "domain_options": self._normalize_domain_state_items(state.domain_options),
             "known_aliases": self._dedupe_alias_values(list(state.known_aliases or [])),
+            "alias_items": self._dedupe_alias_items([{"email": email} for email in state.known_aliases]),
             "exhausted": False,
         }
 
@@ -885,6 +904,18 @@ class InteractiveAliasProviderBase:
 
     def _account_known_aliases(self, account: Mapping[str, object]) -> list[str]:
         return self._dedupe_alias_values(list(account.get("known_aliases") or []))
+
+    def _account_alias_items(self, account: Mapping[str, object]) -> list[dict[str, object]]:
+        alias_items = self._dedupe_alias_items(
+            [
+                dict(item)
+                for item in list(account.get("alias_items") or [])
+                if isinstance(item, Mapping)
+            ]
+        )
+        if alias_items:
+            return alias_items
+        return self._dedupe_alias_items([{"email": email} for email in self._account_known_aliases(account)])
 
     def _account_is_full(self, known_aliases: Sequence[object]) -> bool:
         single_account_cap = self._single_account_alias_cap()
@@ -938,6 +969,7 @@ class InteractiveAliasProviderBase:
         active_account = self._active_account_state_item(state)
         if active_account is not None:
             active_account["domain_options"] = domain_state_items
+            active_account["alias_items"] = self._dedupe_alias_items(aliases)
             active_account["known_aliases"] = self._dedupe_alias_values(alias_values)
             if self._account_is_full(active_account["known_aliases"]):
                 active_account["exhausted"] = True
@@ -987,6 +1019,9 @@ class InteractiveAliasProviderBase:
 
     def build_capture_summary(self) -> list[AliasProviderCapture]:
         return []
+
+    def requires_alias_domain_options(self) -> bool:
+        return True
 
     def list_existing_aliases(self, context: AuthenticatedProviderContext) -> list[dict[str, str]]:
         return []
