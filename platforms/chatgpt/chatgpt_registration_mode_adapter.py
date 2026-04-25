@@ -13,6 +13,81 @@ CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY = "access_token_only"
 CHATGPT_REGISTRATION_MODE_CODEX_GUI = "codex_gui"
 DEFAULT_CHATGPT_REGISTRATION_MODE = CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
 GUI_CONTROL_EXECUTOR = "gui_control"
+CODEX_GUI_VARIANT_DEFAULT = "default"
+CODEX_GUI_VARIANT_OFFICIAL_SIGNUP = "official_signup"
+
+
+@dataclass(frozen=True)
+class CodexGUIVariantResolution:
+    requested_variant: str
+    effective_variant: str
+    fallback_reason: str = ""
+
+
+def normalize_codex_gui_variant(value) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {
+        CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
+        "official",
+        "official_oauth_signup",
+        "official_signup_oauth",
+    }:
+        return CODEX_GUI_VARIANT_OFFICIAL_SIGNUP
+    return CODEX_GUI_VARIANT_DEFAULT
+
+
+def _has_non_empty_mapping_value(config: dict, key: str, required_keys: tuple[str, ...]) -> bool:
+    value = config.get(key)
+    if not isinstance(value, dict):
+        return False
+    return all(str(value.get(required_key) or "").strip() for required_key in required_keys)
+
+
+def has_complete_team_workspace_config(extra: Optional[dict]) -> bool:
+    extra = extra or {}
+    workspace_id = str(
+        extra.get("chatgpt_team_workspace_id")
+        or extra.get("codex_gui_team_workspace_id")
+        or extra.get("team_workspace_id")
+        or ""
+    ).strip()
+    if not workspace_id:
+        return False
+    if _has_non_empty_mapping_value(extra, "chatgpt_team_member_account", ("email", "credential")):
+        return True
+    if _has_non_empty_mapping_value(extra, "codex_gui_team_member_account", ("email", "credential")):
+        return True
+    email = str(extra.get("chatgpt_team_member_email") or extra.get("codex_gui_team_member_email") or "").strip()
+    credential = str(
+        extra.get("chatgpt_team_member_credential")
+        or extra.get("codex_gui_team_member_credential")
+        or ""
+    ).strip()
+    return bool(email and credential)
+
+
+def resolve_codex_gui_variant(extra: Optional[dict]) -> CodexGUIVariantResolution:
+    extra = extra or {}
+    requested = normalize_codex_gui_variant(
+        extra.get("codex_gui_variant")
+        or extra.get("chatgpt_gui_oauth_variant")
+        or extra.get("codex_gui_oauth_variant")
+    )
+    if requested != CODEX_GUI_VARIANT_OFFICIAL_SIGNUP:
+        return CodexGUIVariantResolution(
+            requested_variant=CODEX_GUI_VARIANT_DEFAULT,
+            effective_variant=CODEX_GUI_VARIANT_DEFAULT,
+        )
+    if has_complete_team_workspace_config(extra):
+        return CodexGUIVariantResolution(
+            requested_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
+            effective_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
+        )
+    return CodexGUIVariantResolution(
+        requested_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
+        effective_variant=CODEX_GUI_VARIANT_DEFAULT,
+        fallback_reason="missing_or_incomplete_team_workspace_config",
+    )
 
 
 def normalize_chatgpt_registration_mode(value) -> str:

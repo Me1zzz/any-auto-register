@@ -2,11 +2,14 @@ import unittest
 from unittest import mock
 
 from platforms.chatgpt.chatgpt_registration_mode_adapter import (
+    CODEX_GUI_VARIANT_DEFAULT,
+    CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
     CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY,
     CHATGPT_REGISTRATION_MODE_CODEX_GUI,
     CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
     ChatGPTRegistrationContext,
     build_chatgpt_registration_mode_adapter,
+    resolve_codex_gui_variant,
     resolve_chatgpt_registration_mode,
 )
 
@@ -37,6 +40,39 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
             resolve_chatgpt_registration_mode({"default_executor": "gui_control"}),
             CHATGPT_REGISTRATION_MODE_CODEX_GUI,
         )
+
+    def test_resolve_codex_gui_variant_requires_explicit_request_and_team_config(self):
+        resolution = resolve_codex_gui_variant(
+            {
+                "codex_gui_variant": "official-signup",
+                "chatgpt_team_member_account": {
+                    "email": "owner@example.com",
+                    "credential": "team-token",
+                },
+                "chatgpt_team_workspace_id": "ws-demo",
+            }
+        )
+
+        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.fallback_reason, "")
+
+    def test_resolve_codex_gui_variant_falls_back_when_team_config_missing(self):
+        resolution = resolve_codex_gui_variant({"codex_gui_variant": "official_signup"})
+
+        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_DEFAULT)
+        self.assertEqual(
+            resolution.fallback_reason,
+            "missing_or_incomplete_team_workspace_config",
+        )
+
+    def test_resolve_codex_gui_variant_defaults_without_request(self):
+        resolution = resolve_codex_gui_variant({})
+
+        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_DEFAULT)
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_DEFAULT)
+        self.assertEqual(resolution.fallback_reason, "")
 
     def test_build_account_marks_selected_mode(self):
         adapter = build_chatgpt_registration_mode_adapter(

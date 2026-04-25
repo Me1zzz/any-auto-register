@@ -22,5 +22,16 @@ class CodexGUIFlowContext:
     last_error: str = ""
     last_error_action: str = ""
     pending_step_id: str = ""
+    gui_variant: str = "default"
+    variant_requested: str = "default"
+    variant_fallback_reason: str = ""
+    official_signup_completed: bool = False
+    register_tail_completed: bool = False
+    workspace_enroll_result: dict[str, Any] = field(default_factory=dict)
+    oauth_login_result: dict[str, Any] = field(default_factory=dict)
+    workspace_cleanup_result: dict[str, Any] = field(default_factory=dict)
+    cleanup_required: bool = False
+    cleanup_retry_count: int = 0
+    cleanup_compensation_context: dict[str, Any] = field(default_factory=dict)
     step_attempts: dict[str, int] = field(default_factory=dict)
     step_history: list[str] = field(default_factory=list)

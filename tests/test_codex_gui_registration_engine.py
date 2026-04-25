@@ -33,8 +33,9 @@ from platforms.chatgpt.codex_gui_registration_engine import (
     EmailServiceAdapter,
     PyAutoGUICodexGUIDriver,
 )
-from platforms.chatgpt.codex_gui.models import CodexGUIIdentity
+from platforms.chatgpt.codex_gui.models import CodexGUIIdentity, FlowStepResult
 from platforms.chatgpt.codex_gui.steps.registration.submit_registration_otp_step import SubmitRegistrationOtpStep
+from platforms.chatgpt.team_workspace import ChatGPTTeamWorkspaceResult
 
 
 class _DummyEmailService:
@@ -355,6 +356,235 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertIn(("click", "otp_login_button"), driver.events)
         self.assertIn(("click", "continue_button"), driver.events)
 
+    def test_official_signup_variant_enrolls_logs_in_and_cleans_up(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+        events = []
+
+        def inviter(**kwargs):
+            events.append("invite")
+            return ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="invite",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+                detail="invited",
+            )
+
+        def remover(**kwargs):
+            events.append("remove")
+            return ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="remove",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+                detail="removed",
+            )
+
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_variant": "official_signup",
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_workspace_inviter": inviter,
+                "chatgpt_team_workspace_remover": remover,
+                "chatgpt_team_cleanup_retry_delay_seconds": 0,
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+        engine._official_signup_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: events.append("official"))
+        engine._registration_workflow.run_tail_after_password = mock.Mock(side_effect=lambda _engine, ctx: events.append("tail"))
+        engine._login_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: (events.append("login"), setattr(ctx, "oauth_login_completed", True))[0])
+
+        result = engine.run()
+
+        self.assertTrue(result.success)
+        self.assertEqual(events, ["official", "tail", "invite", "login", "remove"])
+        metadata = result.metadata or {}
+        self.assertEqual(metadata["codex_gui_variant"], "official_signup")
+        self.assertTrue(metadata["codex_gui_workspace_enrolled"])
+        self.assertTrue(metadata["codex_gui_oauth_login_reuse_completed"])
+        self.assertEqual(metadata["codex_gui_oauth_login_reuse_result"]["detail"], "oauth_login_completed")
+        self.assertTrue(metadata["codex_gui_workspace_cleanup_completed"])
+        self.assertTrue(metadata["codex_gui_cleanup_required"])
+
+    def test_official_signup_missing_team_config_falls_back_to_default_gui_flow(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+        engine = self._make_engine(email_service, driver)
+        engine.extra_config["codex_gui_variant"] = "official_signup"
+        engine._variant_resolution = __import__(
+            "platforms.chatgpt.chatgpt_registration_mode_adapter",
+            fromlist=["resolve_codex_gui_variant"],
+        ).resolve_codex_gui_variant(engine.extra_config)
+        engine._official_signup_workflow.run = mock.Mock(side_effect=AssertionError("official workflow should not run"))
+
+        result = engine.run()
+
+        self.assertTrue(result.success)
+        metadata = result.metadata or {}
+        self.assertEqual(metadata["codex_gui_variant"], "default")
+        self.assertEqual(
+            metadata["codex_gui_variant_fallback_reason"],
+            "missing_or_incomplete_team_workspace_config",
+        )
+        self.assertIn(("click", "register_button"), driver.events)
+
+    def test_official_signup_cleanup_failure_fails_successful_main_flow(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+
+        def inviter(**kwargs):
+            return ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="invite",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+            )
+
+        def remover(**kwargs):
+            return ChatGPTTeamWorkspaceResult(
+                success=False,
+                action="remove",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+                detail="remove failed",
+            )
+
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_variant": "official_signup",
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_workspace_inviter": inviter,
+                "chatgpt_team_workspace_remover": remover,
+                "chatgpt_team_cleanup_max_attempts": 2,
+                "chatgpt_team_cleanup_retry_delay_seconds": 0,
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+        engine._official_signup_workflow.run = mock.Mock(return_value=None)
+        engine._registration_workflow.run_tail_after_password = mock.Mock(return_value=None)
+        engine._login_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: setattr(ctx, "oauth_login_completed", True))
+
+        result = engine.run()
+
+        self.assertFalse(result.success)
+        self.assertIn("工作空间清理阶段错误", result.error_message)
+        metadata = result.metadata or {}
+        self.assertEqual(metadata["codex_gui_failure_stage"], "workspace_cleanup")
+        self.assertEqual(metadata["codex_gui_cleanup_retry_count"], 2)
+
+    def test_official_signup_enroll_failure_stops_before_login_and_cleanup(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+
+        def inviter(**kwargs):
+            return ChatGPTTeamWorkspaceResult(
+                success=False,
+                action="invite",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+                detail="invite failed",
+            )
+
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_variant": "official_signup",
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_workspace_inviter": inviter,
+                "chatgpt_team_workspace_remover": lambda **_kwargs: self.fail("cleanup should not run"),
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+        engine._official_signup_workflow.run = mock.Mock(return_value=None)
+        engine._registration_workflow.run_tail_after_password = mock.Mock(return_value=None)
+        engine._login_workflow.run = mock.Mock(side_effect=AssertionError("login should not run"))
+
+        result = engine.run()
+
+        self.assertFalse(result.success)
+        metadata = result.metadata or {}
+        self.assertEqual(metadata["codex_gui_failure_stage"], "workspace_enroll")
+        self.assertFalse(metadata["codex_gui_cleanup_required"])
+        engine._login_workflow.run.assert_not_called()
+
+    def test_official_signup_login_failure_still_cleans_up_and_reports_login_failure(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+        events = []
+
+        def inviter(**kwargs):
+            return ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="invite",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+            )
+
+        def remover(**kwargs):
+            events.append("remove")
+            return ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="remove",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+            )
+
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_variant": "official_signup",
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_workspace_inviter": inviter,
+                "chatgpt_team_workspace_remover": remover,
+                "chatgpt_team_cleanup_retry_delay_seconds": 0,
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+        engine._official_signup_workflow.run = mock.Mock(return_value=None)
+        engine._registration_workflow.run_tail_after_password = mock.Mock(return_value=None)
+        engine._login_workflow.run = mock.Mock(side_effect=RuntimeError("login failed"))
+
+        result = engine.run()
+
+        self.assertFalse(result.success)
+        self.assertEqual(events, ["remove"])
+        metadata = result.metadata or {}
+        self.assertEqual(metadata["codex_gui_failure_stage"], "oauth_login")
+        self.assertFalse(metadata["codex_gui_oauth_login_reuse_completed"])
+        self.assertEqual(metadata["codex_gui_oauth_login_reuse_result"]["detail"], "login failed")
+        self.assertTrue(metadata["codex_gui_workspace_cleanup_completed"])
+
     def test_run_fails_when_login_ends_at_add_phone(self):
         email_service = _DummyEmailService(["111111", "222222"])
         driver = _FakeDriverWithLoginFailure()
@@ -498,7 +728,8 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         result = SubmitRegistrationOtpStep().run(engine, ctx)
 
-        self.assertIsNotNone(result)
+        if not isinstance(result, FlowStepResult):
+            self.fail("SubmitRegistrationOtpStep should return FlowStepResult")
         self.assertTrue(result.success)
         otp_inputs = [event for event in driver.events if event[:2] == ("input", "verification_code_input")]
         self.assertEqual([event[2] for event in otp_inputs[:2]], ["111111", "222222"])

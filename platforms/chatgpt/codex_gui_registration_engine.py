@@ -6,7 +6,7 @@ import logging
 import random
 import time
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from core.task_runtime import TaskInterruption
 from services.cliproxyapi_sync import get_codex_auth_url
@@ -17,8 +17,18 @@ from .codex_gui.models import CodexGUIIdentity
 from .codex_gui.services.email_code_service import EmailCodeServiceAdapter as EmailServiceAdapter
 from .codex_gui.steps.base import StepErrorDecision
 from .codex_gui.steps.errors import RegistrationHardFailureError
-from .codex_gui.workflows import LoginWorkflow, RegistrationWorkflow
+from .codex_gui.workflows import LoginWorkflow, OfficialSignupWorkflow, RegistrationWorkflow
+from .chatgpt_registration_mode_adapter import (
+    CODEX_GUI_VARIANT_DEFAULT,
+    CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
+    resolve_codex_gui_variant,
+)
 from .refresh_token_registration_engine import RegistrationResult
+from .team_workspace import (
+    ChatGPTTeamWorkspaceResult,
+    invite_chatgpt_team_member,
+    remove_chatgpt_team_member_with_retry,
+)
 from .utils import generate_random_age, generate_random_name, generate_random_password
 
 logger = logging.getLogger(__name__)
@@ -53,6 +63,9 @@ class CodexGUIRegistrationEngine:
         self._oauth_login_completed = False
         self._registration_workflow = RegistrationWorkflow()
         self._login_workflow = LoginWorkflow()
+        self._official_signup_workflow = OfficialSignupWorkflow()
+        self._variant_resolution = resolve_codex_gui_variant(self.extra_config)
+        self._last_flow_context: CodexGUIFlowContext | None = None
 
     def _log(self, message: str, level: str = "info") -> None:
         """统一写入内存日志、回调日志与模块日志。"""
@@ -109,7 +122,7 @@ class CodexGUIRegistrationEngine:
 
     def _build_flow_context(self, *, identity: CodexGUIIdentity, auth_url: str, email_adapter) -> CodexGUIFlowContext:
         """为 workflow 构建共享流程上下文。"""
-        return CodexGUIFlowContext(
+        ctx = CodexGUIFlowContext(
             identity=identity,
             auth_url=auth_url,
             auth_state="",
@@ -117,7 +130,12 @@ class CodexGUIRegistrationEngine:
             logger=self._log,
             extra_config=self.extra_config,
             oauth_login_completed=self._oauth_login_completed,
+            gui_variant=self._variant_resolution.effective_variant,
+            variant_requested=self._variant_resolution.requested_variant,
+            variant_fallback_reason=self._variant_resolution.fallback_reason,
         )
+        self._last_flow_context = ctx
+        return ctx
 
     def _log_identity_summary(self, identity: CodexGUIIdentity) -> None:
         """输出本次 GUI 注册/登录使用的身份摘要。"""
@@ -142,13 +160,14 @@ class CodexGUIRegistrationEngine:
         identity: CodexGUIIdentity,
         auth_state: str,
         auth_url: str,
+        ctx: CodexGUIFlowContext | None = None,
     ) -> RegistrationResult:
         """把成功执行后的身份与 OAuth 元信息写回结果对象。"""
         result.success = True
         result.email = identity.email
         result.password = identity.password
         result.account_id = identity.service_id or identity.email
-        result.metadata = {
+        metadata = {
             "codex_gui_register_completed": True,
             "codex_gui_login_completed": True,
             "codex_gui_oauth_login_completed": True,
@@ -156,8 +175,74 @@ class CodexGUIRegistrationEngine:
             "codex_gui_auth_url": auth_url,
             "codex_gui_full_name": identity.full_name,
             "codex_gui_age": identity.age,
+            "codex_gui_variant_requested": self._variant_resolution.requested_variant,
+            "codex_gui_variant": self._variant_resolution.effective_variant,
+            "codex_gui_variant_fallback_reason": self._variant_resolution.fallback_reason,
         }
+        if ctx is not None:
+            metadata.update(self._build_phase_metadata(ctx))
+        result.metadata = metadata
         return result
+
+    def _build_phase_metadata(self, ctx: CodexGUIFlowContext) -> dict[str, Any]:
+        workspace_enrolled = bool(
+            ctx.workspace_enroll_result.get("success")
+            or ctx.workspace_enroll_result.get("workspace_enroll_success")
+        )
+        workspace_cleanup_completed = bool(
+            ctx.workspace_cleanup_result.get("success")
+            or ctx.workspace_cleanup_result.get("workspace_cleanup_success")
+        )
+        return {
+            "codex_gui_official_signup_completed": bool(ctx.official_signup_completed),
+            "codex_gui_register_tail_completed": bool(ctx.register_tail_completed),
+            "codex_gui_workspace_enrolled": workspace_enrolled,
+            "codex_gui_workspace_enroll_result": dict(ctx.workspace_enroll_result),
+            "codex_gui_oauth_login_reuse_completed": bool(ctx.oauth_login_result.get("success")),
+            "codex_gui_oauth_login_reuse_result": dict(ctx.oauth_login_result),
+            "codex_gui_cleanup_required": bool(ctx.cleanup_required),
+            "codex_gui_workspace_cleanup_completed": workspace_cleanup_completed,
+            "codex_gui_workspace_cleanup_result": dict(ctx.workspace_cleanup_result),
+            "codex_gui_cleanup_retry_count": int(ctx.cleanup_retry_count or 0),
+            "codex_gui_cleanup_compensation_context": dict(ctx.cleanup_compensation_context),
+        }
+
+    def _build_base_metadata(self, *, auth_state: str = "", auth_url: str = "") -> dict[str, Any]:
+        return {
+            "codex_gui_variant_requested": self._variant_resolution.requested_variant,
+            "codex_gui_variant": self._variant_resolution.effective_variant,
+            "codex_gui_variant_fallback_reason": self._variant_resolution.fallback_reason,
+            "codex_gui_auth_state": auth_state,
+            "codex_gui_auth_url": auth_url,
+        }
+
+    def _attach_failure_metadata(
+        self,
+        result: RegistrationResult,
+        *,
+        error: Exception,
+        auth_state: str = "",
+        auth_url: str = "",
+    ) -> None:
+        metadata = self._build_base_metadata(auth_state=auth_state, auth_url=auth_url)
+        ctx = self._last_flow_context
+        if ctx is not None:
+            metadata.update(self._build_phase_metadata(ctx))
+        error_text = str(error)
+        if "工作空间清理阶段错误" in error_text:
+            failure_stage = "workspace_cleanup"
+        elif "工作空间加入阶段错误" in error_text:
+            failure_stage = "workspace_enroll"
+        elif "登录" in error_text or "oauth" in error_text.lower() or "login" in error_text.lower():
+            failure_stage = "oauth_login"
+        elif self._variant_resolution.effective_variant == CODEX_GUI_VARIANT_OFFICIAL_SIGNUP and ctx is not None and not ctx.official_signup_completed:
+            failure_stage = "official_signup"
+        else:
+            failure_stage = "registration"
+        metadata["codex_gui_failure_stage"] = failure_stage
+        metadata["codex_gui_primary_error"] = error_text
+        metadata["codex_gui_cleanup_error"] = error_text if failure_stage == "workspace_cleanup" else ""
+        result.metadata = metadata
 
     def _wait_timeout(self, key: str, default: int) -> int:
         """读取并规整等待超时配置。"""
@@ -559,9 +644,141 @@ class CodexGUIRegistrationEngine:
         if result.terminal_state:
             self._log(f"[登录] 终态: {result.terminal_state}")
 
+    def _run_login_workflow_with_context(self, ctx: CodexGUIFlowContext) -> None:
+        result = self._login_workflow.run(self, ctx)
+        self._oauth_login_completed = ctx.oauth_login_completed
+        terminal_state = getattr(result, "terminal_state", "") or ctx.terminal_state
+        if terminal_state:
+            self._log(f"[登录] 终态: {terminal_state}")
+        ctx.oauth_login_result = {
+            "success": bool(self._oauth_login_completed),
+            "stage": "oauth_login",
+            "terminal_state": terminal_state,
+            "detail": "oauth_login_completed" if self._oauth_login_completed else "oauth_login_not_completed",
+        }
+
+    def _team_workspace_id(self) -> str:
+        return str(
+            self.extra_config.get("chatgpt_team_workspace_id")
+            or self.extra_config.get("codex_gui_team_workspace_id")
+            or self.extra_config.get("team_workspace_id")
+            or ""
+        ).strip()
+
+    def _team_account_config(self) -> dict[str, Any]:
+        configured = self.extra_config.get("chatgpt_team_member_account") or self.extra_config.get(
+            "codex_gui_team_member_account"
+        )
+        if isinstance(configured, dict):
+            return dict(configured)
+        email = str(self.extra_config.get("chatgpt_team_member_email") or self.extra_config.get("codex_gui_team_member_email") or "").strip()
+        credential = str(
+            self.extra_config.get("chatgpt_team_member_credential")
+            or self.extra_config.get("codex_gui_team_member_credential")
+            or ""
+        ).strip()
+        return {"email": email, "credential": credential}
+
+    def _cleanup_retry_attempts(self) -> int:
+        value = self.extra_config.get("chatgpt_team_cleanup_max_attempts", self.extra_config.get("codex_gui_team_cleanup_max_attempts", 3))
+        try:
+            return max(1, int(value or 3))
+        except Exception:
+            return 3
+
+    def _cleanup_retry_delay_seconds(self) -> float:
+        value = self.extra_config.get("chatgpt_team_cleanup_retry_delay_seconds", self.extra_config.get("codex_gui_team_cleanup_retry_delay_seconds", 1.0))
+        try:
+            return max(0.0, float(value or 0.0))
+        except Exception:
+            return 1.0
+
+    def _enroll_team_workspace(self, ctx: CodexGUIFlowContext) -> ChatGPTTeamWorkspaceResult:
+        workspace_id = self._team_workspace_id()
+        team_account = self._team_account_config()
+        inviter = self.extra_config.get("chatgpt_team_workspace_inviter")
+        typed_inviter = cast(Callable[..., ChatGPTTeamWorkspaceResult] | None, inviter if callable(inviter) else None)
+        self._log_step("Team 工作空间", "加入新注册账号")
+        result = invite_chatgpt_team_member(
+            member_email=ctx.identity.email,
+            workspace_id=workspace_id,
+            team_account=team_account,
+            inviter=typed_inviter,
+            logger=self._log,
+        )
+        ctx.workspace_enroll_result = result.as_metadata("workspace_enroll")
+        if result.success:
+            ctx.cleanup_required = True
+        return result
+
+    def _cleanup_team_workspace_membership(self, ctx: CodexGUIFlowContext) -> ChatGPTTeamWorkspaceResult:
+        workspace_id = self._team_workspace_id()
+        team_account = self._team_account_config()
+        remover = self.extra_config.get("chatgpt_team_workspace_remover")
+        typed_remover = cast(Callable[..., ChatGPTTeamWorkspaceResult] | None, remover if callable(remover) else None)
+        self._log_step("Team 工作空间", "移除新注册账号")
+        result = remove_chatgpt_team_member_with_retry(
+            member_email=ctx.identity.email,
+            workspace_id=workspace_id,
+            team_account=team_account,
+            max_attempts=self._cleanup_retry_attempts(),
+            retry_delay_seconds=self._cleanup_retry_delay_seconds(),
+            remover=typed_remover,
+            logger=self._log,
+        )
+        ctx.workspace_cleanup_result = result.as_metadata("workspace_cleanup")
+        ctx.cleanup_retry_count = result.attempts
+        compensation_context = result.payload.get("compensation_context")
+        if isinstance(compensation_context, dict):
+            ctx.cleanup_compensation_context = dict(compensation_context)
+        return result
+
+    def _run_official_signup_flow(self, auth_url: str, identity: CodexGUIIdentity, adapter: EmailServiceAdapter) -> CodexGUIFlowContext:
+        ctx = self._build_flow_context(identity=identity, auth_url=auth_url, email_adapter=adapter)
+        self._official_signup_workflow.run(self, ctx)
+        tail_result = self._registration_workflow.run_tail_after_password(self, ctx)
+        self._oauth_login_completed = ctx.oauth_login_completed
+        tail_terminal_state = getattr(tail_result, "terminal_state", "") or ctx.terminal_state
+        if tail_terminal_state:
+            self._log(f"[注册] 终态: {tail_terminal_state}")
+        enroll_result = self._enroll_team_workspace(ctx)
+        if not enroll_result.success:
+            raise RuntimeError(f"工作空间加入阶段错误: {enroll_result.detail}")
+        login_error: Exception | None = None
+        try:
+            if not self._oauth_login_completed:
+                self._run_login_workflow_with_context(ctx)
+            else:
+                ctx.oauth_login_result = {
+                    "success": True,
+                    "stage": "oauth_login",
+                    "terminal_state": ctx.terminal_state,
+                    "detail": "completed_during_registration_tail",
+                }
+            if not self._oauth_login_completed:
+                raise RuntimeError("登录流程结束后未完成 OAuth 登录")
+        except Exception as exc:
+            login_error = exc
+            ctx.oauth_login_result = {
+                "success": False,
+                "stage": "oauth_login",
+                "terminal_state": ctx.terminal_state,
+                "detail": str(exc),
+            }
+        cleanup_result = self._cleanup_team_workspace_membership(ctx)
+        if not cleanup_result.success:
+            original_stage = "oauth_login" if login_error is not None else ""
+            detail = cleanup_result.detail or "workspace cleanup failed"
+            raise RuntimeError(f"工作空间清理阶段错误: {detail}; original_failure_stage={original_stage}")
+        if login_error is not None:
+            raise login_error
+        return ctx
+
     def run(self) -> RegistrationResult:
         """执行完整 GUI 注册/登录链路，并返回统一结果。"""
         result = self._initialize_run_result()
+        auth_url = ""
+        state = ""
         try:
             self._log_step("准备", "初始化 Codex GUI 注册/登录流程")
             identity = self._create_identity()
@@ -577,25 +794,38 @@ class CodexGUIRegistrationEngine:
 
             # 先走注册链路，只有在注册未完成 OAuth 时才进入登录补偿。
             self._oauth_login_completed = False
-            self._run_registration_flow(auth_url, identity, adapter)
+            ctx: CodexGUIFlowContext | None = None
+            if self._variant_resolution.effective_variant == CODEX_GUI_VARIANT_OFFICIAL_SIGNUP:
+                ctx = self._run_official_signup_flow(auth_url, identity, adapter)
+            else:
+                ctx = self._build_flow_context(identity=identity, auth_url=auth_url, email_adapter=adapter)
+                if self._variant_resolution.fallback_reason:
+                    self._log(
+                        f"[Codex GUI] 官网注册变体回退默认 GUI 链路: {self._variant_resolution.fallback_reason}"
+                    )
+                result_step = self._registration_workflow.run(self, ctx)
+                self._oauth_login_completed = ctx.oauth_login_completed
+                if result_step.terminal_state:
+                    self._log(f"[注册] 终态: {result_step.terminal_state}")
             if self._oauth_login_completed:
                 self._log("注册阶段完成，OAuth 登录已成功")
             else:
                 self._log("注册阶段完成，已到达 add-phone 页面")
-            if not self._oauth_login_completed:
-                self._run_login_flow(auth_url, identity, adapter)
+            if not self._oauth_login_completed and self._variant_resolution.effective_variant != CODEX_GUI_VARIANT_OFFICIAL_SIGNUP:
+                self._run_login_workflow_with_context(ctx)
                 if self._oauth_login_completed:
                     self._log("登录阶段完成，OAuth 登录已成功")
                 else:
                     # 登录补偿结束后仍未完成 OAuth，说明当前 GUI 方案整体失败。
                     raise RuntimeError("登录流程结束后未完成 OAuth 登录")
 
-            return self._finalize_success_result(result, identity=identity, auth_state=state, auth_url=auth_url)
+            return self._finalize_success_result(result, identity=identity, auth_state=state, auth_url=auth_url, ctx=ctx)
         except TaskInterruption:
             raise
         except Exception as exc:
             self._log(f"Codex GUI 注册/登录流程失败: {exc}", "error")
             result.error_message = str(exc)
+            self._attach_failure_metadata(result, error=exc, auth_state=state, auth_url=auth_url)
             return result
         finally:
             # 无论成功或失败，都尽量关闭 driver，避免遗留浏览器资源。

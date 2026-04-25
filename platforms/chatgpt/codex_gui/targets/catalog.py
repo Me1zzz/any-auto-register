@@ -12,6 +12,10 @@ def builtin_dom_target_strategies(name: str) -> list[tuple[str, str]]:
         "age_input": [("css", "input[placeholder*='年龄']"), ("css", "input[inputmode='numeric']")],
         "complete_account_button": [("role", "完成帐户创建"), ("text", "完成帐户创建")],
         "otp_login_button": [("text", "使用一次性验证码登录")],
+        "official_signup_register_button": [("text", "注册"), ("text", "Sign up")],
+        "official_signup_email_input": [("css", "input[type='email']"), ("css", "input[name='email']")],
+        "official_signup_password_input": [("css", "input[type='password']"), ("css", "input[name='password']")],
+        "official_signup_continue_button": [("role", "继续"), ("text", "继续"), ("text", "Continue")],
         "resend_email_button": [("text", "重新发送电子邮件")],
         "retry_button": [("text", "重试")],
     }
@@ -32,6 +36,10 @@ def builtin_uia_target_keywords(name: str) -> list[str]:
         "age_input": ["年龄", "age"],
         "complete_account_button": ["完成帐户创建", "完成账户创建"],
         "otp_login_button": ["使用一次性验证码登录"],
+        "official_signup_register_button": ["注册", "Sign up"],
+        "official_signup_email_input": ["电子邮件地址", "邮箱", "email"],
+        "official_signup_password_input": ["密码", "password"],
+        "official_signup_continue_button": ["继续", "Continue"],
         "resend_email_button": ["重新发送电子邮件", "重新发送邮件"],
         "retry_button": ["重试"],
     }
