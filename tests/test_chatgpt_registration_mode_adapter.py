@@ -57,6 +57,18 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
         self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
         self.assertEqual(resolution.fallback_reason, "")
 
+    def test_resolve_codex_gui_variant_accepts_cloudmail_team_account_email(self):
+        resolution = resolve_codex_gui_variant(
+            {
+                "codex_gui_variant": "official-signup",
+                "cloudmail_team_account_email": "manager@example.com",
+            }
+        )
+
+        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.fallback_reason, "")
+
     def test_resolve_codex_gui_variant_falls_back_when_team_config_missing(self):
         resolution = resolve_codex_gui_variant({"codex_gui_variant": "official_signup"})
 

@@ -33,6 +33,20 @@ from .utils import generate_random_age, generate_random_name, generate_random_pa
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_bool_config(value: Any, *, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
 class CodexGUIRegistrationEngine:
     """驱动 ChatGPT/Codex GUI 注册与登录补偿链路的兼容入口引擎。"""
 
@@ -505,6 +519,20 @@ class CodexGUIRegistrationEngine:
         self._oauth_login_completed = True
         self._log(f"[{prefix}] OAuth 成功标志页已命中")
 
+    def _click_consent_continue(self, *, prefix: str, stage: str) -> None:
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI 椹卞姩鏈垵濮嬪寲")
+        if self._should_select_personal_account_before_consent_continue():
+            self._run_action(
+                f"[{stage}] consent 页面选择个人帐户",
+                lambda: driver.click_named_target("personal_account_option"),
+            )
+        self._run_action(
+            f"[{stage}] 鍛戒腑 consent 椤甸潰锛岀偣鍑荤户缁畬鎴?OAuth 鐧诲綍",
+            lambda: driver.click_named_target("continue_button"),
+        )
+
     def _complete_oauth_if_on_consent(self, stage: str) -> bool:
         """如果当前就在 consent 页面，则直接点击继续完成 OAuth。"""
         driver = self._driver
@@ -514,6 +542,11 @@ class CodexGUIRegistrationEngine:
         # 只有真正命中 consent URL 才允许执行继续按钮，避免误点其它页面的 continue。
         if not self._is_consent_url(current_url):
             return False
+        if self._should_select_personal_account_before_consent_continue():
+            self._run_action(
+                f"[{stage}] consent 页面选择个人帐户",
+                lambda: driver.click_named_target("personal_account_option"),
+            )
         self._run_action(
             f"[{stage}] 命中 consent 页面，点击继续完成 OAuth 登录",
             lambda: driver.click_named_target("continue_button"),
@@ -671,13 +704,32 @@ class CodexGUIRegistrationEngine:
         )
         if isinstance(configured, dict):
             return dict(configured)
-        email = str(self.extra_config.get("chatgpt_team_member_email") or self.extra_config.get("codex_gui_team_member_email") or "").strip()
+        email = str(
+            self.extra_config.get("chatgpt_team_member_email")
+            or self.extra_config.get("codex_gui_team_member_email")
+            or self.extra_config.get("cloudmail_team_account_email")
+            or ""
+        ).strip()
         credential = str(
             self.extra_config.get("chatgpt_team_member_credential")
             or self.extra_config.get("codex_gui_team_member_credential")
+            or self.extra_config.get("cloudmail_team_account_password")
             or ""
         ).strip()
         return {"email": email, "credential": credential}
+
+    def _team_remove_after_login_enabled(self) -> bool:
+        return _parse_bool_config(
+            self.extra_config.get(
+                "chatgpt_team_remove_after_login",
+                self.extra_config.get("codex_gui_team_remove_after_login", True),
+            ),
+            default=True,
+        )
+
+    def _should_select_personal_account_before_consent_continue(self) -> bool:
+        team_account = self._team_account_config()
+        return self._team_remove_after_login_enabled() and bool(str(team_account.get("email") or "").strip())
 
     def _cleanup_retry_attempts(self) -> int:
         value = self.extra_config.get("chatgpt_team_cleanup_max_attempts", self.extra_config.get("codex_gui_team_cleanup_max_attempts", 3))
@@ -707,7 +759,7 @@ class CodexGUIRegistrationEngine:
             logger=self._log,
         )
         ctx.workspace_enroll_result = result.as_metadata("workspace_enroll")
-        if result.success:
+        if result.success and self._team_remove_after_login_enabled():
             ctx.cleanup_required = True
         return result
 
@@ -765,6 +817,16 @@ class CodexGUIRegistrationEngine:
                 "terminal_state": ctx.terminal_state,
                 "detail": str(exc),
             }
+        if not self._team_remove_after_login_enabled():
+            ctx.cleanup_required = False
+            ctx.workspace_cleanup_result = {
+                "workspace_cleanup_success": False,
+                "workspace_cleanup_skipped": True,
+                "workspace_cleanup_detail": "team_remove_after_login_disabled",
+            }
+            if login_error is not None:
+                raise login_error
+            return ctx
         cleanup_result = self._cleanup_team_workspace_membership(ctx)
         if not cleanup_result.success:
             original_stage = "oauth_login" if login_error is not None else ""

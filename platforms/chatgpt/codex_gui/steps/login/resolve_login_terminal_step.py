@@ -39,6 +39,12 @@ class ResolveLoginTerminalStep(BaseFlowStep):
         terminal_state = wait_for_terminal(engine, prefix="登录", timeout=wait_timeout)
         ctx.terminal_state = terminal_state
         if terminal_state == "consent":
+            if engine._should_select_personal_account_before_consent_continue():
+                run_named_action(
+                    engine,
+                    "[登录] consent 页面选择个人帐户",
+                    lambda: driver.click_named_target("personal_account_option"),
+                )
             run_named_action(
                 engine,
                 "[登录] 命中 consent 页面，点击继续完成 OAuth 登录",

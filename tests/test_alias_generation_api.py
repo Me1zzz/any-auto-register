@@ -654,6 +654,7 @@ class AliasGenerationApiTests(unittest.TestCase):
                         "cloudmail_team_account_email": "manager@example.com",
                         "cloudmail_team_account_password": "team-secret",
                         "cloudmail_team_otp_mailbox_email": "admin@example.com",
+                        "chatgpt_team_remove_after_login": False,
                     }
                 },
             )
@@ -665,6 +666,7 @@ class AliasGenerationApiTests(unittest.TestCase):
                 "cloudmail_team_account_email": "manager@example.com",
                 "cloudmail_team_account_password": "team-secret",
                 "cloudmail_team_otp_mailbox_email": "admin@example.com",
+                "chatgpt_team_remove_after_login": False,
             },
         )
 
@@ -674,6 +676,7 @@ class AliasGenerationApiTests(unittest.TestCase):
                 "cloudmail_team_account_email": "manager@example.com",
                 "cloudmail_team_account_password": "team-secret",
                 "cloudmail_team_otp_mailbox_email": "admin@example.com",
+                "chatgpt_team_remove_after_login": False,
             },
         ):
             get_resp = client.get("/api/config")
@@ -683,6 +686,7 @@ class AliasGenerationApiTests(unittest.TestCase):
         self.assertEqual(body["cloudmail_team_account_email"], "manager@example.com")
         self.assertEqual(body["cloudmail_team_account_password"], "")
         self.assertEqual(body["cloudmail_team_otp_mailbox_email"], "admin@example.com")
+        self.assertFalse(body["chatgpt_team_remove_after_login"])
 
     def test_alias_generation_test_api_returns_real_vend_probe_fields(self):
         client = TestClient(app)

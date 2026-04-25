@@ -415,6 +415,57 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertTrue(metadata["codex_gui_workspace_cleanup_completed"])
         self.assertTrue(metadata["codex_gui_cleanup_required"])
 
+    def test_official_signup_variant_can_skip_cleanup_after_login(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+        events = []
+
+        def inviter(**kwargs):
+            events.append("invite")
+            return ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="invite",
+                workspace_id=kwargs["workspace_id"],
+                member_email=kwargs["member_email"],
+                detail="invited",
+            )
+
+        def remover(**_kwargs):
+            events.append("remove")
+            self.fail("cleanup should be skipped when remove-after-login is disabled")
+
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_variant": "official_signup",
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_workspace_inviter": inviter,
+                "chatgpt_team_workspace_remover": remover,
+                "chatgpt_team_remove_after_login": False,
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+        engine._official_signup_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: events.append("official"))
+        engine._registration_workflow.run_tail_after_password = mock.Mock(side_effect=lambda _engine, ctx: events.append("tail"))
+        engine._login_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: (events.append("login"), setattr(ctx, "oauth_login_completed", True))[0])
+
+        result = engine.run()
+
+        self.assertTrue(result.success)
+        self.assertEqual(events, ["official", "tail", "invite", "login"])
+        metadata = result.metadata or {}
+        self.assertTrue(metadata["codex_gui_workspace_enrolled"])
+        self.assertFalse(metadata["codex_gui_cleanup_required"])
+        self.assertFalse(metadata["codex_gui_workspace_cleanup_completed"])
+        self.assertTrue(metadata["codex_gui_workspace_cleanup_result"]["workspace_cleanup_skipped"])
+
     def test_official_signup_missing_team_config_falls_back_to_default_gui_flow(self):
         email_service = _DummyEmailService(["111111", "222222"])
         driver = _FakeDriver()
@@ -772,6 +823,47 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(driver.current_url, "https://chatgpt.com/")
+
+    def test_login_consent_selects_personal_account_when_cleanup_enabled(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriverWithLoginConsentSuccess()
+        engine = self._make_engine(email_service, driver)
+        engine.extra_config.update(
+            {
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_remove_after_login": True,
+            }
+        )
+
+        result = engine.run()
+
+        self.assertTrue(result.success)
+        self.assertIn(("click", "personal_account_option"), driver.events)
+        personal_index = driver.events.index(("click", "personal_account_option"))
+        continue_after_personal = [
+            index
+            for index, event in enumerate(driver.events)
+            if index > personal_index and event == ("click", "continue_button")
+        ]
+        self.assertTrue(continue_after_personal)
+
+    def test_login_consent_skips_personal_account_when_cleanup_disabled(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriverWithLoginConsentSuccess()
+        engine = self._make_engine(email_service, driver)
+        engine.extra_config.update(
+            {
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_remove_after_login": False,
+            }
+        )
+
+        result = engine.run()
+
+        self.assertTrue(result.success)
+        self.assertNotIn(("click", "personal_account_option"), driver.events)
 
     def test_wait_for_stage_accepts_dom_match_when_url_has_not_updated(self):
         email_service = _DummyEmailService(["111111", "222222"])

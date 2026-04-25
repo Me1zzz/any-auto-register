@@ -51,19 +51,20 @@ def has_complete_team_workspace_config(extra: Optional[dict]) -> bool:
         or extra.get("team_workspace_id")
         or ""
     ).strip()
-    if not workspace_id:
-        return False
+    cloudmail_team_email = str(extra.get("cloudmail_team_account_email") or "").strip()
+    if cloudmail_team_email:
+        return True
     if _has_non_empty_mapping_value(extra, "chatgpt_team_member_account", ("email", "credential")):
-        return True
+        return bool(workspace_id)
     if _has_non_empty_mapping_value(extra, "codex_gui_team_member_account", ("email", "credential")):
-        return True
+        return bool(workspace_id)
     email = str(extra.get("chatgpt_team_member_email") or extra.get("codex_gui_team_member_email") or "").strip()
     credential = str(
         extra.get("chatgpt_team_member_credential")
         or extra.get("codex_gui_team_member_credential")
         or ""
     ).strip()
-    return bool(email and credential)
+    return bool(workspace_id and email and credential)
 
 
 def resolve_codex_gui_variant(extra: Optional[dict]) -> CodexGUIVariantResolution:

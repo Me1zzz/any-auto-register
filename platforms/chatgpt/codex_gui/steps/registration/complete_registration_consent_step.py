@@ -35,6 +35,12 @@ class CompleteRegistrationConsentStep(BaseFlowStep):
         if ctx.terminal_state != "consent":
             # 如果注册没有落到 consent，这个步骤是幂等空操作，直接透传当前终态。
             return FlowStepResult(success=True, stage_name=self.stage_name, terminal_state=ctx.terminal_state)
+        if engine._should_select_personal_account_before_consent_continue():
+            run_named_action(
+                engine,
+                "[注册] consent 页面选择个人帐户",
+                lambda: driver.click_named_target("personal_account_option"),
+            )
         run_named_action(
             engine,
             "[注册] 命中 consent 页面，点击继续完成 OAuth 登录",

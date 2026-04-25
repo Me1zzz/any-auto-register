@@ -67,6 +67,7 @@ CONFIG_KEYS = [
     "cloudmail_team_account_email",
     "cloudmail_team_account_password",
     "cloudmail_team_otp_mailbox_email",
+    "chatgpt_team_remove_after_login",
     "sources",
     "cloudmail_timeout",
     "mail_provider",
@@ -288,6 +289,8 @@ def get_config():
         all_cfg["luckmail_base_url"] = "https://mails.luckyous.com/"
     if not str(all_cfg.get("contribution_enabled", "") or "").strip():
         all_cfg["contribution_enabled"] = "0"
+    if "chatgpt_team_remove_after_login" not in all_cfg or all_cfg.get("chatgpt_team_remove_after_login") in (None, ""):
+        all_cfg["chatgpt_team_remove_after_login"] = True
     if not all_cfg.get("contribution_server_url"):
         all_cfg["contribution_server_url"] = "http://new.xem8k5.top:7317/"
     # 只返回已知 key，未设置的返回空字符串

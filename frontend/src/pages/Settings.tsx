@@ -211,6 +211,13 @@ const TAB_ITEMS = [
             placeholder: 'admin@example.com',
             description: 'Leave empty to use the current CloudMail admin inbox. OTP messages are matched by the Team account email.',
           },
+          {
+            key: 'chatgpt_team_remove_after_login',
+            label: '登录成功后是否移除',
+            type: 'boolean',
+            description: '开启时走邀请-登录-移除，并在 consent 页先选择个人帐户；关闭时登录后保留成员。',
+            hiddenUnlessKeyHasValue: 'cloudmail_team_account_email',
+          },
         ],
       },
       {
@@ -469,6 +476,7 @@ interface FieldConfig {
   description?: string
   type?: 'select' | 'input' | 'boolean' | 'textarea'
   secret?: boolean
+  hiddenUnlessKeyHasValue?: string
 }
 
 interface SectionConfig {
@@ -637,6 +645,7 @@ function formatDisplayPercent(value: number | null): string {
 
 function ConfigField({ field }: { field: FieldConfig }) {
   const [showSecret, setShowSecret] = useState(false)
+  const controllingValue = Form.useWatch(field.hiddenUnlessKeyHasValue || [])
   const options = SELECT_FIELDS[field.key]
   const isBooleanField = field.type === 'boolean'
   const isTextareaField = field.type === 'textarea'
@@ -644,6 +653,10 @@ function ConfigField({ field }: { field: FieldConfig }) {
     field.key === 'default_executor'
       ? '仅对支持的平台生效；ChatGPT、Cursor、Grok、Kiro、Tavily、Trae 支持浏览器模式，其中 GUI操控 仅对 ChatGPT 生效；OpenBlockLabs 仅支持纯协议。'
       : field.description
+
+  if (field.hiddenUnlessKeyHasValue && !String(controllingValue || '').trim()) {
+    return null
+  }
 
   return (
     <Form.Item
@@ -1983,6 +1996,7 @@ export default function Settings() {
       data.cfworker_random_subdomain = parseBooleanConfigValue(data.cfworker_random_subdomain)
       data.cfworker_random_name_subdomain = parseBooleanConfigValue(data.cfworker_random_name_subdomain)
       data.contribution_enabled = parseBooleanConfigValue(data.contribution_enabled)
+      data.chatgpt_team_remove_after_login = parseBooleanConfigValue(data.chatgpt_team_remove_after_login)
       data.mail_import_source = configMailProvider === 'applemail' ? 'applemail' : 'microsoft'
       data.mail_provider = isMailImportProvider ? 'mail_import' : configMailProvider
       form.setFieldsValue(data)
@@ -2054,6 +2068,7 @@ export default function Settings() {
       values.cfworker_random_subdomain = parseBooleanConfigValue(values.cfworker_random_subdomain)
       values.cfworker_random_name_subdomain = parseBooleanConfigValue(values.cfworker_random_name_subdomain)
       values.contribution_enabled = parseBooleanConfigValue(values.contribution_enabled)
+      values.chatgpt_team_remove_after_login = parseBooleanConfigValue(values.chatgpt_team_remove_after_login)
 
       await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
       const savedAliasServiceFields = deriveCloudmailAliasServiceFormValues({
