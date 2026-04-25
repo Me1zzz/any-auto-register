@@ -141,6 +141,19 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         """输出 driver 级调试日志。"""
         self.logger_fn(message)
 
+    def _refresh_pywinauto_page_state(self, reason: str) -> None:
+        if self._detector_kind() != "pywinauto":
+            return
+        refresher = getattr(self._target_detector, "refresh_page_state", None)
+        if not callable(refresher):
+            return
+        try:
+            refresher(reason=reason)
+        except Exception as exc:
+            if hasattr(self._target_detector, "_visible_controls_snapshot"):
+                self._target_detector._visible_controls_snapshot = None
+            self._log_debug(f"[UIA] 页面状态刷新失败（忽略）: reason={reason}, error={exc}")
+
     def _load_codex_gui_config(self) -> None:
         """在 pywinauto 模式下把 waits 配置同步回 driver extra_config。"""
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
@@ -365,13 +378,13 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             if self._is_password_target(name):
                 raise RuntimeError(f"[UIA] 输入确认失败: name={name}, text={target_text}")
             return
-        _strategy_kind, _strategy_value, box = self.peek_target(name)
-        expanded_box = self._expand_box(box)
+        self._refresh_pywinauto_page_state(f"before_input_verify:{name}")
         deadline = time.monotonic() + max(self._pywinauto_input_verify_timeout_seconds, 0.5)
         while time.monotonic() <= deadline:
-            # 先看焦点输入框，再看放大后的邻域文本，避免仅凭一次读取误判输入失败。
+            self._refresh_pywinauto_page_state(f"during_input_verify:{name}")
+            # 输入确认只验证输入值本身；不要重新按 placeholder/label 定位目标。
             focused = self._target_detector.focused_edit_candidate()
-            if focused and expanded_box and self._target_detector.boxes_intersect(focused.box, expanded_box):
+            if focused:
                 focused_text = self._normalize_visible_text(focused.text)
                 focused_matches = (
                     focused_text == normalized_target if self._is_password_target(name) else normalized_target in focused_text
@@ -381,19 +394,16 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
                 ):
                     self._log_debug(f"[UIA] 输入确认成功(焦点值): name={name}, text={target_text}, box={focused.box}")
                     return
-            if expanded_box:
-                for candidate in self._target_detector.text_candidates_in_region(expanded_box):
-                    candidate_text = self._normalize_visible_text(candidate.text)
-                    candidate_matches = (
-                        candidate_text == normalized_target
-                        if self._is_password_target(name)
-                        else normalized_target in candidate_text
-                    )
-                    if candidate_matches or (
-                        self._is_password_target(name) and self._contains_password_mask(candidate.text, len(target_text))
-                    ):
-                        self._log_debug(f"[UIA] 输入确认成功(区域交集): name={name}, text={target_text}, box={candidate.box}")
-                        return
+            for candidate in self._target_detector.visible_text_candidates():
+                candidate_text = self._normalize_visible_text(candidate.text)
+                candidate_matches = (
+                    candidate_text == normalized_target if self._is_password_target(name) else normalized_target in candidate_text
+                )
+                if candidate_matches or (
+                    self._is_password_target(name) and self._contains_password_mask(candidate.text, len(target_text))
+                ):
+                    self._log_debug(f"[UIA] 输入确认成功(可见值): name={name}, text={target_text}, box={candidate.box}")
+                    return
             time.sleep(0.25)
         raise RuntimeError(f"[UIA] 输入确认失败: name={name}, text={target_text}")
 
@@ -401,6 +411,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         """委派到底层 detector 执行 marker 匹配，并记录耗时。"""
         if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
             return False, None
+        self._refresh_pywinauto_page_state(f"before_page_marker:{stage}")
         started_at = time.perf_counter()
         result = self._target_detector.page_marker_matched(stage)
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -508,6 +519,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         started_at = time.perf_counter()
         if self._detector_kind() == "pywinauto":
             self._pre_click_blank_area_for_input_detection(name)
+            self._refresh_pywinauto_page_state(f"before_resolve_target:{name}")
         self._sync_components_from_facade()
         resolved = self._target_detector.resolve_target(name)
         self._sync_facade_from_components()
@@ -516,9 +528,11 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         return resolved
 
     def peek_target(self, name: str) -> tuple[str, str, dict[str, float] | None]:
+        self._refresh_pywinauto_page_state(f"before_peek_target:{name}")
         return self._target_detector.peek_target(name)
 
     def peek_target_with_timeout(self, name: str, timeout_ms: int) -> tuple[str, str, dict[str, float] | None]:
+        self._refresh_pywinauto_page_state(f"before_peek_target:{name}")
         return self._target_detector.peek_target(name, timeout_ms=timeout_ms)
 
     def _screen_point_from_box(self, name: str, box: dict[str, float] | None) -> tuple[int, int]:
@@ -556,6 +570,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             raise RuntimeError("当前检测器不支持 pywinauto 地址栏导航")
         pyautogui = self._import_pyautogui()
         started_at = time.perf_counter()
+        self._refresh_pywinauto_page_state("before_address_bar_navigation")
         locate_started_at = time.perf_counter()
         control, box = self._target_detector.locate_address_bar()
         locate_elapsed_ms = (time.perf_counter() - locate_started_at) * 1000
@@ -729,6 +744,7 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         if self._detector_kind() == "pywinauto":
             if not isinstance(self._target_detector, PywinautoCodexGUITargetDetector):
                 raise RuntimeError("当前检测器不支持 pywinauto 地址栏读取")
+            self._refresh_pywinauto_page_state("before_read_current_url")
             locate_started_at = time.perf_counter()
             control, _box = self._target_detector.locate_address_bar()
             locate_elapsed_ms = (time.perf_counter() - locate_started_at) * 1000

@@ -224,7 +224,7 @@ def boxes_intersect(first: dict[str, float], second: dict[str, float]) -> bool:
 
 def text_candidates_in_region(detector, region: dict[str, float]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for control, text, box in detector.iter_visible_controls():
+    for control, text, box in current_visible_controls(detector):
         if not boxes_intersect(box, region):
             continue
         value = value_from_control(control)
@@ -238,7 +238,7 @@ def text_candidates_in_region(detector, region: dict[str, float]) -> list[dict[s
 def visible_text_candidates(detector) -> list[dict[str, Any]]:
     started_at = time.perf_counter()
     candidates: list[dict[str, Any]] = []
-    for control, text, box in detector.iter_visible_controls():
+    for control, text, box in current_visible_controls(detector):
         value = value_from_control(control)
         candidate_text = value or str(text or "").strip()
         if not candidate_text:
@@ -292,7 +292,7 @@ def resolve_uia_target(detector, name: str) -> dict[str, Any]:
     if not keywords:
         raise RuntimeError(f"缺少 Codex GUI pywinauto 关键词定义: {name}")
     candidates: list[tuple[int, str, dict[str, float]]] = []
-    for _control, text, box in detector.iter_visible_controls():
+    for _control, text, box in current_visible_controls(detector):
         if not text:
             continue
         lowered_text = text.lower()
@@ -325,6 +325,26 @@ def find_edge_window(detector):
         raise RuntimeError(f"没有找到标题包含 {title_keyword!r} 的已打开浏览器窗口")
     app = Application(backend="uia").connect(handle=handles[0])
     return app.window(handle=handles[0])
+
+
+def refresh_page_state(detector, *, reason: str = "") -> None:
+    started_at = time.perf_counter()
+    controls = list(detector.iter_visible_controls())
+    detector._visible_controls_snapshot = controls
+    detector._visible_controls_snapshot_reason = str(reason or "")
+    detector._visible_controls_snapshot_at = time.time()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    detector._log_debug(
+        f"[UIA] 页面状态刷新完成: reason={detector._visible_controls_snapshot_reason}, controls={len(controls)}, elapsed={elapsed_ms:.1f}ms"
+    )
+
+
+def current_visible_controls(detector):
+    snapshot = getattr(detector, "_visible_controls_snapshot", None)
+    if snapshot is not None:
+        yield from list(snapshot)
+        return
+    yield from detector.iter_visible_controls()
 
 
 def iter_visible_controls(detector):

@@ -6,9 +6,9 @@ from platforms.chatgpt.codex_gui.steps.official_signup import (
     ClickOfficialSignupFreeSignupStep,
     OpenOfficialSignupRuntimeProfileStep,
     SubmitOfficialSignupEmailStep,
-    SubmitOfficialSignupPasswordStep,
     TypeChatGPTHomeStep,
 )
+from platforms.chatgpt.codex_gui.steps.registration.submit_registration_password_step import SubmitRegistrationPasswordStep
 
 
 class OfficialSignupWorkflow:
@@ -20,7 +20,7 @@ class OfficialSignupWorkflow:
             TypeChatGPTHomeStep(),
             ClickOfficialSignupFreeSignupStep(),
             SubmitOfficialSignupEmailStep(),
-            SubmitOfficialSignupPasswordStep(),
+            SubmitRegistrationPasswordStep(),
         ]
 
     def run(self, engine, ctx: CodexGUIFlowContext) -> FlowStepResult:

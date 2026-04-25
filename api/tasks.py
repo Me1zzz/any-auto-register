@@ -151,7 +151,7 @@ def _start_alias_pool_snapshot_poller(
     pool_manager,
     stop_event: threading.Event,
     *,
-    interval_seconds: float = 3.0,
+    interval_seconds: float = 15.0,
 ) -> threading.Thread:
     def _poll() -> None:
         while not stop_event.wait(interval_seconds):
@@ -383,7 +383,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 task_id,
                 task_alias_pool,
                 alias_pool_snapshot_stop_event,
-                interval_seconds=3.0,
+                interval_seconds=15.0,
             )
 
         def _do_one(i: int):

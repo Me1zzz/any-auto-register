@@ -723,7 +723,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
 
         self.assertEqual(len(poller_calls), 1)
         self.assertEqual(poller_calls[0]["task_id"], task_id)
-        self.assertEqual(poller_calls[0]["interval_seconds"], 3.0)
+        self.assertEqual(poller_calls[0]["interval_seconds"], 15.0)
         self.assertTrue(poller_calls[0]["stop_event"].is_set())
 
     def test_run_register_enables_background_alias_pool_refill(self):

@@ -424,6 +424,53 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertTrue(metadata["codex_gui_workspace_cleanup_completed"])
         self.assertTrue(metadata["codex_gui_cleanup_required"])
 
+    def test_official_signup_team_invite_and_remove_receive_proxy_url(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriver()
+        engine = CodexGUIRegistrationEngine(
+            email_service=email_service,
+            proxy_url="http://proxy.local:8080",
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_variant": "official_signup",
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_cleanup_retry_delay_seconds": 0,
+            },
+        )
+        engine._build_driver = lambda: driver
+        engine._fetch_auth_payload = lambda: {
+            "state": "demo-state",
+            "url": "https://auth.openai.com/oauth/authorize?state=demo-state",
+        }
+        engine._official_signup_workflow.run = mock.Mock(return_value=None)
+        engine._registration_workflow.run_tail_after_password = mock.Mock(return_value=None)
+        engine._login_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: setattr(ctx, "oauth_login_completed", True))
+
+        with mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.invite_chatgpt_team_member",
+            return_value=ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="invite",
+                workspace_id="ws-demo",
+                member_email="user@example.com",
+            ),
+        ) as mock_invite, mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.remove_chatgpt_team_member_with_retry",
+            return_value=ChatGPTTeamWorkspaceResult(
+                success=True,
+                action="remove",
+                workspace_id="ws-demo",
+                member_email="user@example.com",
+            ),
+        ) as mock_remove:
+            result = engine.run()
+
+        self.assertTrue(result.success)
+        self.assertEqual(mock_invite.call_args.kwargs["proxy_url"], "http://proxy.local:8080")
+        self.assertEqual(mock_remove.call_args.kwargs["proxy_url"], "http://proxy.local:8080")
+
     def test_official_signup_variant_can_skip_cleanup_after_login(self):
         email_service = _DummyEmailService(["111111", "222222"])
         driver = _FakeDriver()
@@ -1479,6 +1526,130 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         driver._verify_pywinauto_input.assert_called_once_with("email_input", "user@example.com")
 
+    def test_resolve_target_refreshes_pywinauto_state_before_detection(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=logs.append,
+        )
+        detector = PywinautoCodexGUITargetDetector(extra_config={}, logger_fn=logs.append, browser_session=mock.Mock())
+        detector.refresh_page_state = mock.Mock()
+
+        def resolve_target(name):
+            self.assertTrue(detector.refresh_page_state.called)
+            return CodexGUITargetResolution(
+                locator=mock.Mock(),
+                strategy_kind="uia_text",
+                strategy_value=name,
+                box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+            )
+
+        detector.resolve_target = mock.Mock(side_effect=resolve_target)
+        driver._target_detector = detector
+
+        driver._resolve_target_locator("continue_button")
+
+        detector.refresh_page_state.assert_called()
+
+    def test_page_marker_match_refreshes_pywinauto_state_before_matching(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=logs.append,
+        )
+        detector = PywinautoCodexGUITargetDetector(extra_config={}, logger_fn=logs.append, browser_session=mock.Mock())
+        detector.refresh_page_state = mock.Mock()
+
+        def page_marker_matched(stage):
+            self.assertTrue(detector.refresh_page_state.called)
+            return True, "ready"
+
+        detector.page_marker_matched = mock.Mock(side_effect=page_marker_matched)
+        driver._target_detector = detector
+
+        self.assertEqual(driver.page_marker_matched("stage"), (True, "ready"))
+        detector.refresh_page_state.assert_called()
+
+    def test_verify_pywinauto_input_refreshes_state_before_confirmation(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=logs.append,
+        )
+        detector = PywinautoCodexGUITargetDetector(extra_config={}, logger_fn=logs.append, browser_session=mock.Mock())
+        detector.refresh_page_state = mock.Mock()
+        detector.focused_edit_candidate = mock.Mock(return_value=mock.Mock(
+            text="user@example.com",
+            box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+        ))
+        detector.boxes_intersect = mock.Mock(return_value=True)
+        driver._target_detector = detector
+
+        def peek_target(name):
+            self.assertTrue(detector.refresh_page_state.called)
+            return "uia_text", name, {"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0}
+
+        driver.peek_target = mock.Mock(side_effect=peek_target)
+
+        driver._verify_pywinauto_input("email_input", "user@example.com")
+
+        detector.refresh_page_state.assert_called()
+
+    def test_verify_pywinauto_input_accepts_focused_value_when_placeholder_target_disappears(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+            logger_fn=logs.append,
+        )
+        detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
+        detector.focused_edit_candidate.return_value = mock.Mock(
+            text="user@example.com",
+            box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+        )
+        detector.visible_text_candidates.return_value = []
+        driver._target_detector = detector
+        driver.peek_target = mock.Mock(
+            side_effect=RuntimeError(
+                "无法在当前 Edge UIA 树中定位目标: official_signup_email_input "
+                "(keywords=['电子邮件地址', '邮箱', 'email'])"
+            )
+        )
+
+        driver._verify_pywinauto_input("official_signup_email_input", "user@example.com")
+
+        driver.peek_target.assert_not_called()
+        detector.text_candidates_in_region.assert_not_called()
+
+    def test_verify_pywinauto_input_scans_values_without_relocating_placeholder_target(self):
+        logs = []
+        driver = PyAutoGUICodexGUIDriver(
+            extra_config={
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_pywinauto_input_verify_timeout_seconds": 0.1,
+            },
+            logger_fn=logs.append,
+        )
+        detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
+        detector.focused_edit_candidate.return_value = None
+        detector.visible_text_candidates.return_value = [
+            mock.Mock(
+                text="user@example.com",
+                box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
+            )
+        ]
+        driver._target_detector = detector
+        driver.peek_target = mock.Mock(
+            side_effect=RuntimeError(
+                "无法在当前 Edge UIA 树中定位目标: official_signup_email_input "
+                "(keywords=['电子邮件地址', '邮箱', 'email'])"
+            )
+        )
+
+        driver._verify_pywinauto_input("official_signup_email_input", "user@example.com")
+
+        driver.peek_target.assert_not_called()
+        detector.visible_text_candidates.assert_called()
+
     def test_verify_pywinauto_input_prefers_focused_edit_value(self):
         logs = []
         driver = PyAutoGUICodexGUIDriver(
@@ -1491,7 +1662,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = []
+        detector.visible_text_candidates.return_value = []
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "邮箱", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 
@@ -1499,7 +1670,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         detector.text_candidates_in_region.assert_not_called()
 
-    def test_verify_pywinauto_input_falls_back_to_region_text_candidates(self):
+    def test_verify_pywinauto_input_falls_back_to_visible_text_candidates(self):
         logs = []
         driver = PyAutoGUICodexGUIDriver(
             extra_config={"codex_gui_target_detector": "pywinauto"},
@@ -1511,7 +1682,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = [
+        detector.visible_text_candidates.return_value = [
             mock.Mock(text="user@example.com", box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
         ]
         driver._target_detector = detector
@@ -1519,7 +1690,8 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         driver._verify_pywinauto_input("email_input", "user@example.com")
 
-        detector.text_candidates_in_region.assert_called_once()
+        driver.peek_target.assert_not_called()
+        detector.visible_text_candidates.assert_called_once()
 
     def test_verify_pywinauto_password_accepts_masked_focused_value(self):
         logs = []
@@ -1534,7 +1706,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = []
+        detector.visible_text_candidates.return_value = []
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 
@@ -1555,7 +1727,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = [
+        detector.visible_text_candidates.return_value = [
             mock.Mock(text="•" * len(password), box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
         ]
         driver._target_detector = detector
@@ -1563,7 +1735,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
 
         driver._verify_pywinauto_input("password_input", password)
 
-        detector.text_candidates_in_region.assert_called_once()
+        detector.visible_text_candidates.assert_called_once()
 
     def test_verify_pywinauto_password_rejects_shorter_masked_focused_value(self):
         logs = []
@@ -1581,7 +1753,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = []
+        detector.visible_text_candidates.return_value = []
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 
@@ -1606,7 +1778,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = [
+        detector.visible_text_candidates.return_value = [
             mock.Mock(text="•" * (len(password) + 1), box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
         ]
         driver._target_detector = detector
@@ -1642,7 +1814,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = []
+        detector.visible_text_candidates.return_value = []
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "密码", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 
@@ -1666,7 +1838,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             box={"x": 100.0, "y": 100.0, "width": 120.0, "height": 24.0},
         )
         detector.boxes_intersect.return_value = True
-        detector.text_candidates_in_region.return_value = [
+        detector.visible_text_candidates.return_value = [
             mock.Mock(text="prefix-super-secret-password-suffix", box={"x": 102.0, "y": 103.0, "width": 130.0, "height": 20.0})
         ]
         driver._target_detector = detector
@@ -1688,7 +1860,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         )
         detector = mock.Mock(spec=PywinautoCodexGUITargetDetector)
         detector.focused_edit_candidate.return_value = None
-        detector.text_candidates_in_region.return_value = []
+        detector.visible_text_candidates.return_value = []
         driver._target_detector = detector
         driver.peek_target = mock.Mock(return_value=("uia_text", "邮箱", {"x": 110.0, "y": 105.0, "width": 100.0, "height": 20.0}))
 

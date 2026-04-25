@@ -115,6 +115,12 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
             ],
         )
 
+    def test_default_workflow_reuses_original_registration_password_step(self):
+        workflow = OfficialSignupWorkflow()
+
+        self.assertEqual(workflow._steps[3].step_id, "official_signup.submit_email")
+        self.assertEqual(workflow._steps[4].step_id, "registration.submit_password")
+
     def test_open_runtime_profile_step_initializes_new_profile_browser(self):
         driver = _FakeDriver()
         engine = _FakeEngine(driver)

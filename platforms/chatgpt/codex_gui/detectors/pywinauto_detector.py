@@ -22,6 +22,9 @@ class PywinautoCodexGUITargetDetector(CodexGUIConfigMixin, CodexGUITargetDetecto
         self._locator = NullCodexGUILocator()
         self._codex_gui_config_cache: dict[str, Any] | None = None
         self._address_bar_cache: tuple[Any, dict[str, float]] | None = None
+        self._visible_controls_snapshot: list[tuple[Any, str, dict[str, float]]] | None = None
+        self._visible_controls_snapshot_reason = ""
+        self._visible_controls_snapshot_at = 0.0
 
     def _log_debug(self, message: str) -> None:
         self.logger_fn(message)
@@ -83,6 +86,9 @@ class PywinautoCodexGUITargetDetector(CodexGUIConfigMixin, CodexGUITargetDetecto
 
     def builtin_target_keywords(self, name: str) -> list[str]:
         return builtin_uia_target_keywords(name)
+
+    def refresh_page_state(self, *, reason: str = "") -> None:
+        uia_runtime.refresh_page_state(self, reason=reason)
 
     def _find_edge_window(self):
         return uia_runtime.find_edge_window(self)

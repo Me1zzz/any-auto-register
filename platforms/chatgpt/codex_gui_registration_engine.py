@@ -814,6 +814,7 @@ class CodexGUIRegistrationEngine:
             team_account=team_account,
             inviter=typed_inviter,
             logger=self._log,
+            proxy_url=self.proxy_url,
         )
         ctx.workspace_enroll_result = result.as_metadata("workspace_enroll")
         if result.success and self._team_remove_after_login_enabled():
@@ -834,6 +835,7 @@ class CodexGUIRegistrationEngine:
             retry_delay_seconds=self._cleanup_retry_delay_seconds(),
             remover=typed_remover,
             logger=self._log,
+            proxy_url=self.proxy_url,
         )
         ctx.workspace_cleanup_result = result.as_metadata("workspace_cleanup")
         ctx.cleanup_retry_count = result.attempts
