@@ -35,14 +35,17 @@ class CompleteRegistrationStep(BaseFlowStep):
         wait_timeout = resolve_wait_timeout(engine)
         # 完成账户创建后，下一步的关键不是 URL，而是终态（consent / add-phone）。
         run_named_action(engine, "[注册] 完成帐户创建", lambda: driver.click_named_target("complete_account_button"))
-        terminal_state = wait_for_terminal(engine, prefix="注册", timeout=wait_timeout)
+        if ctx.gui_variant == "official_signup" and getattr(engine, "_is_pywinauto_mode", lambda: False)():
+            terminal_state = engine._wait_for_registration_profile_disappear_or_terminal(timeout=wait_timeout)
+        else:
+            terminal_state = wait_for_terminal(engine, prefix="注册", timeout=wait_timeout)
         ctx.terminal_state = terminal_state
         return FlowStepResult(success=True, stage_name=self.stage_name, terminal_state=terminal_state)
 
     def verify(self, engine, ctx, result) -> None:
         """验证终态属于注册链路允许的状态集合。"""
         verify_success(result, step_id=self.step_id)
-        verify_terminal_state(ctx, {"consent", "add-phone"}, step_id=self.step_id)
+        verify_terminal_state(ctx, {"consent", "add-phone", "created"}, step_id=self.step_id)
 
     def on_error(self, engine, ctx, error: Exception):
         """终态解析失败时优先重放最后动作。"""

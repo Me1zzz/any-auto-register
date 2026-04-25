@@ -283,12 +283,14 @@ class CodexGUIRegistrationEngine:
     def _expected_dom_targets_for_stage(self, stage: str) -> list[str]:
         """给每个阶段提供一个用于辅助命中的 DOM target 列表。"""
         mapping = {
+            "官网注册-首页": ["official_signup_free_signup_button"],
             "注册-打开登录页": ["register_button", "continue_button"],
             "注册-创建账户页": ["email_input"],
             "注册-密码页": ["password_input"],
             "注册-验证码页": ["verification_code_input"],
             "注册-about-you": ["fullname_input", "age_input"],
             "注册-终态判断": ["complete_account_button"],
+            "官网注册-登录或注册弹窗": ["official_signup_email_input", "official_signup_continue_button"],
             "登录-打开登录页": ["continue_button"],
             "登录-密码页": ["otp_login_button"],
             "登录-验证码页": ["verification_code_input"],
@@ -351,6 +353,30 @@ class CodexGUIRegistrationEngine:
             time.sleep(self._stage_probe_interval_seconds())
         joined = ", ".join(normalized)
         raise RuntimeError(f"[{stage}] 等待页面超时，未进入目标地址片段: {joined}")
+
+    def _wait_for_stage_ready(self, stage: str, *, timeout: int) -> str:
+        """等待阶段文本 marker 或目标控件命中，不用 URL 命中提前放行。"""
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI 驱动未初始化")
+        self._log_step(stage, "等待页面阶段就绪")
+        started_at = time.perf_counter()
+        deadline = time.time() + max(1, timeout)
+        while time.time() <= deadline:
+            dom_matched, matched_target = self._stage_dom_matched(stage)
+            if dom_matched:
+                current_url = ""
+                if not self._is_pywinauto_mode():
+                    current_url = str(driver.read_current_url() or "").strip()
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(
+                    f"[{stage}] 页面阶段就绪: target={matched_target}, current_url={current_url}, elapsed={elapsed_ms:.1f}ms"
+                )
+                return current_url
+            self._retry_page_from_url_after_marker_window(stage, started_at=started_at)
+            driver.wander_while_waiting(stage)
+            time.sleep(self._stage_probe_interval_seconds())
+        raise RuntimeError(f"[{stage}] 等待页面阶段就绪超时")
 
     def _wait_for_url(self, fragment: str, *, timeout: int, stage: str) -> str:
         """统一等待页面切换；pywinauto 模式使用 marker，Playwright 模式优先 URL。"""
@@ -497,6 +523,32 @@ class CodexGUIRegistrationEngine:
             driver.wander_while_waiting(f"{prefix}-终态判断")
             time.sleep(self._stage_probe_interval_seconds())
         raise RuntimeError(f"[{prefix}-终态判断] 等待终态页面超时")
+
+    def _wait_for_registration_profile_disappear_or_terminal(self, *, timeout: int) -> str:
+        """官网注册中，about-you 的年龄提示消失即可视为账号创建完成。"""
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI 驱动未初始化")
+        self._log_step("注册-资料提交后判定", "等待年龄提示消失或终态页面命中")
+        started_at = time.perf_counter()
+        deadline = time.time() + max(1, timeout)
+        while time.time() <= deadline:
+            if self._page_marker_match("注册-终态判断-consent"):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-资料提交后判定] consent 命中: elapsed={elapsed_ms:.1f}ms")
+                return "consent"
+            if self._page_marker_match("注册-终态判断-add/phone"):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-资料提交后判定] add-phone 命中: elapsed={elapsed_ms:.1f}ms")
+                return "add-phone"
+            if not self._page_marker_match("注册-about-you"):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                self._log(f"[注册-资料提交后判定] 年龄提示已消失，账号创建完成: elapsed={elapsed_ms:.1f}ms")
+                return "created"
+            self._retry_page_from_url_after_marker_window("注册-资料提交后判定", started_at=started_at)
+            driver.wander_while_waiting("注册-资料提交后判定")
+            time.sleep(self._stage_probe_interval_seconds())
+        raise RuntimeError("[注册-资料提交后判定] 等待年龄提示消失超时")
 
     def _wait_for_oauth_success_page(self, prefix: str, *, timeout: int) -> None:
         """等待 OAuth 成功标志页并标记登录完成。"""

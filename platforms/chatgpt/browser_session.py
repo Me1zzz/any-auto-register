@@ -97,6 +97,42 @@ class PlaywrightEdgeBrowserSession:
         self._log_debug(f"[浏览器] 真实 Edge 启动参数: {args}")
         return args
 
+    def build_edge_process_only_args(self) -> list[str]:
+        edge_command = self._resolve_edge_command()
+        configured_user_data_dir = str(self.extra_config.get("codex_gui_edge_user_data_dir") or "").strip()
+        user_data_dir = self.prepare_edge_runtime_user_data_dir(configured_user_data_dir)
+        self._edge_user_data_dir = user_data_dir
+        args = [
+            edge_command,
+            f"--user-data-dir={user_data_dir}",
+            "--start-maximized",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        profile_directory = str(self.extra_config.get("codex_gui_edge_profile_directory") or "").strip()
+        if profile_directory:
+            args.append(f"--profile-directory={profile_directory}")
+        proxy_value = str(self.extra_config.get("proxy") or self.extra_config.get("proxy_url") or "").strip()
+        if proxy_value:
+            args.append(f"--proxy-server={proxy_value}")
+        startup_url = str(self.extra_config.get("codex_gui_edge_startup_url") or "about:blank").strip() or "about:blank"
+        args.append(startup_url)
+        self._log_debug(
+            f"[浏览器] process-only Edge 启动参数: codex_gui_edge_user_data_dir={user_data_dir}, "
+            f"codex_gui_edge_profile_directory={profile_directory or '(default)'}, args={args}"
+        )
+        return args
+
+    def launch_edge_process_only(self):
+        if self._edge_process is not None:
+            return self._edge_process
+        self._log_debug("[浏览器] 开始: 仅启动 Edge 进程，不初始化 Playwright/CDP")
+        ensure_browser_display_available(False)
+        launch_args = self.build_edge_process_only_args()
+        self._edge_process = subprocess.Popen(launch_args)
+        time.sleep(max(0.1, self._browser_settle_seconds))
+        return self._edge_process
+
     def is_real_edge_profile_path(self, path: str) -> bool:
         normalized = str(path or "").strip().lower().replace("/", "\\")
         return "\\microsoft\\edge\\user data" in normalized and normalized.endswith("user data")
