@@ -20,6 +20,14 @@ from .target_detector import (
 class CodexGUIDriver:
     """Codex GUI 驱动抽象接口。"""
 
+    def open_new_profile_browser(self) -> None:
+        """打开使用 runtime profile 的浏览器会话。"""
+        raise NotImplementedError
+
+    def navigate_with_address_bar(self, url: str) -> None:
+        """识别地址栏并输入目标地址进行导航。"""
+        raise NotImplementedError
+
     def open_url(self, url: str, *, reuse_current: bool = False) -> None:
         """打开指定 URL。"""
         raise NotImplementedError
@@ -582,6 +590,15 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         self._log_debug(f"[耗时] 地址栏导航完成: elapsed={elapsed_ms:.1f}ms")
 
+    @staticmethod
+    def _url_for_playwright_navigation(url: str) -> str:
+        target = str(url or "").strip()
+        if not target:
+            raise RuntimeError("缺少要打开的 URL")
+        if "://" in target:
+            return target
+        return f"https://{target}"
+
     def _random_page_hover_point(self) -> tuple[int, int]:
         if self._detector_kind() == "pywinauto":
             pyautogui = self._import_pyautogui()
@@ -639,6 +656,23 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
             return
         self._sync_components_from_facade()
         self._browser_session.open_url(url, reuse_current=reuse_current)
+        self._sync_facade_from_components()
+
+    def open_new_profile_browser(self) -> None:
+        self._log_debug("[浏览器] 开始打开 runtime profile 浏览器")
+        self._sync_components_from_facade()
+        if self._detector_kind() == "pywinauto":
+            self._browser_session.launch_edge_process_only()
+        else:
+            self._browser_session.ensure_browser_session()
+        self._sync_facade_from_components()
+
+    def navigate_with_address_bar(self, url: str) -> None:
+        if self._detector_kind() == "pywinauto":
+            self._navigate_with_address_bar(url)
+            return
+        self._sync_components_from_facade()
+        self._browser_session.open_url(self._url_for_playwright_navigation(url), reuse_current=True)
         self._sync_facade_from_components()
 
     def click_named_target(self, name: str) -> None:

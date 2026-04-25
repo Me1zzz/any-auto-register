@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from platforms.chatgpt.codex_gui.models import FlowStepResult
 from platforms.chatgpt.codex_gui.steps.base import BaseFlowStep
-from platforms.chatgpt.codex_gui.steps.common import input_and_click_then_wait, require_driver, require_non_empty, resolve_wait_timeout, set_current_stage, verify_success
+from platforms.chatgpt.codex_gui.steps.common import input_and_click_then_wait, require_driver, require_non_empty, resolve_wait_timeout, run_named_action, set_current_stage, verify_success
 from platforms.chatgpt.codex_gui.steps.metadata import StepMetadata
 from platforms.chatgpt.codex_gui.steps.recovery import retry_step_or_abort
 
@@ -30,6 +30,11 @@ class SubmitOfficialSignupEmailStep(BaseFlowStep):
     def execute(self, engine, ctx):
         driver = require_driver(engine)
         wait_timeout = resolve_wait_timeout(engine)
+        if getattr(engine, "_is_pywinauto_mode", lambda: False)():
+            run_named_action(engine, "[官网注册] 输入邮箱地址", lambda: driver.input_text("official_signup_email_input", ctx.identity.email))
+            run_named_action(engine, "[官网注册] 提交邮箱", lambda: driver.click_named_target("official_signup_continue_button"))
+            engine._wait_for_stage_marker("注册-密码页", timeout=wait_timeout)
+            return FlowStepResult(success=True, stage_name=self.stage_name, matched_url="/password")
         matched_url = input_and_click_then_wait(
             engine,
             driver,

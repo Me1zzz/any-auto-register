@@ -3,10 +3,11 @@ from __future__ import annotations
 from platforms.chatgpt.codex_gui.context import CodexGUIFlowContext
 from platforms.chatgpt.codex_gui.models import FlowStepResult
 from platforms.chatgpt.codex_gui.steps.official_signup import (
-    NavigateOfficialSignupStep,
-    OpenOfficialSignupEntryStep,
+    ClickOfficialSignupFreeSignupStep,
+    OpenOfficialSignupRuntimeProfileStep,
     SubmitOfficialSignupEmailStep,
     SubmitOfficialSignupPasswordStep,
+    TypeChatGPTHomeStep,
 )
 
 
@@ -15,8 +16,9 @@ class OfficialSignupWorkflow:
 
     def __init__(self, steps=None):
         self._steps = list(steps) if steps is not None else [
-            OpenOfficialSignupEntryStep(),
-            NavigateOfficialSignupStep(),
+            OpenOfficialSignupRuntimeProfileStep(),
+            TypeChatGPTHomeStep(),
+            ClickOfficialSignupFreeSignupStep(),
             SubmitOfficialSignupEmailStep(),
             SubmitOfficialSignupPasswordStep(),
         ]

@@ -2270,6 +2270,68 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         driver.peek_target_with_timeout.assert_called_once_with("email_input", 750)
         driver.peek_target.assert_not_called()
 
+    def test_wait_for_stage_ready_uses_homepage_target_without_url_shortcut(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={"codex_gui_stage_dom_probe_timeout_ms": 750},
+        )
+        driver = mock.Mock(spec=CodexGUIDriver)
+        driver.read_current_url.return_value = "https://chatgpt.com/"
+        driver.page_marker_matched.return_value = (False, None)
+        driver.peek_target_with_timeout.return_value = ("text", "免费注册", {"x": 1, "y": 1, "width": 2, "height": 2})
+        engine._driver = driver
+
+        matched_url = engine._wait_for_stage_ready("官网注册-首页", timeout=1)
+
+        self.assertEqual(matched_url, "https://chatgpt.com/")
+        driver.peek_target_with_timeout.assert_called_once_with("official_signup_free_signup_button", 750)
+
+    def test_wait_for_stage_ready_does_not_pass_on_url_match_without_stage_target(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={"codex_gui_stage_dom_probe_timeout_ms": 750},
+        )
+        driver = mock.Mock(spec=CodexGUIDriver)
+        driver.read_current_url.return_value = "https://chatgpt.com/"
+        driver.page_marker_matched.return_value = (False, None)
+        driver.peek_target_with_timeout.side_effect = RuntimeError("target not visible")
+        engine._driver = driver
+
+        time_values = iter([100.0, 100.0, 101.2])
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=lambda: next(time_values)), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.time.sleep"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "等待页面阶段就绪超时"):
+                engine._wait_for_stage_ready("官网注册-首页", timeout=1)
+
+        driver.peek_target_with_timeout.assert_called_once_with("official_signup_free_signup_button", 750)
+
+    def test_wait_for_stage_ready_in_pywinauto_mode_does_not_read_url_before_marker_window(self):
+        logs = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService(["111111"]),
+            callback_logger=logs.append,
+            extra_config={"codex_gui_target_detector": "pywinauto"},
+        )
+        driver = mock.Mock(spec=CodexGUIDriver)
+        driver.page_marker_matched.side_effect = [(False, None), (True, "免费注册")]
+        driver.read_current_url.side_effect = AssertionError("address bar should not be read before marker window")
+        engine._driver = driver
+
+        perf_values = iter([0.0, 1.0])
+        time_values = iter([100.0, 100.0, 100.1])
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.perf_counter", side_effect=lambda: next(perf_values)), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=lambda: next(time_values)
+        ), mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.sleep"):
+            matched_url = engine._wait_for_stage_ready("官网注册-首页", timeout=1)
+
+        self.assertEqual(matched_url, "")
+        driver.read_current_url.assert_not_called()
+
     def test_wait_timeout_defaults_to_60_for_codex_gui_flows(self):
         engine = CodexGUIRegistrationEngine(
             email_service=_DummyEmailService(["111111"]),
