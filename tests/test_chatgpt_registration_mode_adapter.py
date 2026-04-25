@@ -41,6 +41,26 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
             CHATGPT_REGISTRATION_MODE_CODEX_GUI,
         )
 
+    def test_resolve_uses_cloudmail_team_account_email_as_codex_gui_override(self):
+        self.assertEqual(
+            resolve_chatgpt_registration_mode(
+                {
+                    "chatgpt_registration_mode": "refresh_token",
+                    "cloudmail_team_account_email": "manager@example.com",
+                }
+            ),
+            CHATGPT_REGISTRATION_MODE_CODEX_GUI,
+        )
+
+    def test_resolve_codex_gui_variant_auto_official_for_cloudmail_team_account_email(self):
+        resolution = resolve_codex_gui_variant(
+            {"cloudmail_team_account_email": "manager@example.com"}
+        )
+
+        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.fallback_reason, "")
+
     def test_resolve_codex_gui_variant_requires_explicit_request_and_team_config(self):
         resolution = resolve_codex_gui_variant(
             {

@@ -319,6 +319,15 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertIs(CodexGUIDriver, SplitCodexGUIDriver)
         self.assertIs(PyAutoGUICodexGUIDriver, SplitPyAutoGUICodexGUIDriver)
 
+    def test_engine_defaults_to_pywinauto_when_cloudmail_team_account_email_configured(self):
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService([]),
+            callback_logger=lambda _msg: None,
+            extra_config={"cloudmail_team_account_email": "manager@example.com"},
+        )
+
+        self.assertEqual(engine.extra_config["codex_gui_target_detector"], "pywinauto")
+
     def _make_engine(self, email_service, driver):
         engine = CodexGUIRegistrationEngine(
             email_service=email_service,

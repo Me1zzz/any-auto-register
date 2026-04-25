@@ -436,7 +436,7 @@ export default function RegisterTaskPage() {
                 <Input placeholder="admin@example.com" />
               </Form.Item>
               <Form.Item name="cloudmail_admin_password" label="管理员密码" rules={[{ required: true, message: '请输入 CloudMail 管理员密码' }]}>
-                <Input.Password placeholder="admin password" />
+                <Input placeholder="admin password" />
               </Form.Item>
               <Form.Item name="cloudmail_domain" label="邮箱域名（可选）" extra="支持单个域名，或逗号分隔多个域名">
                 <Input placeholder="mail.example.com,mail2.example.com" />

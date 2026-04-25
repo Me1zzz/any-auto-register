@@ -68,6 +68,11 @@ class CodexGUIRegistrationEngine:
         self.task_uuid = task_uuid
         self.max_retries = max(1, int(max_retries or 1))
         self.extra_config = dict(extra_config or {})
+        if (
+            str(self.extra_config.get("cloudmail_team_account_email") or "").strip()
+            and not str(self.extra_config.get("codex_gui_target_detector") or "").strip()
+        ):
+            self.extra_config["codex_gui_target_detector"] = "pywinauto"
 
         self.email: Optional[str] = None
         self.password: Optional[str] = None
