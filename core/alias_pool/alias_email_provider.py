@@ -34,6 +34,9 @@ class AliasEmailProvider(InteractiveAliasProviderBase):
         finally:
             self._active_policy = previous_policy
 
+    def rotates_service_account_after_alias_cap(self) -> bool:
+        return True
+
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
         persisted_state = self._state_repository.load()
         fresh_service_account = bool(getattr(self._active_policy, "fresh_service_account", False))

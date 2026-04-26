@@ -41,7 +41,7 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
             CHATGPT_REGISTRATION_MODE_CODEX_GUI,
         )
 
-    def test_resolve_uses_cloudmail_team_account_email_as_codex_gui_override(self):
+    def test_resolve_keeps_selected_mode_when_cloudmail_team_account_email_exists(self):
         self.assertEqual(
             resolve_chatgpt_registration_mode(
                 {
@@ -49,16 +49,16 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
                     "cloudmail_team_account_email": "manager@example.com",
                 }
             ),
-            CHATGPT_REGISTRATION_MODE_CODEX_GUI,
+            CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
         )
 
-    def test_resolve_codex_gui_variant_auto_official_for_cloudmail_team_account_email(self):
+    def test_resolve_codex_gui_variant_does_not_auto_official_for_cloudmail_team_account_email(self):
         resolution = resolve_codex_gui_variant(
             {"cloudmail_team_account_email": "manager@example.com"}
         )
 
-        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
-        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_DEFAULT)
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_DEFAULT)
         self.assertEqual(resolution.fallback_reason, "")
 
     def test_resolve_codex_gui_variant_requires_explicit_request_and_team_config(self):
@@ -89,15 +89,12 @@ class ChatGPTRegistrationModeAdapterTests(unittest.TestCase):
         self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
         self.assertEqual(resolution.fallback_reason, "")
 
-    def test_resolve_codex_gui_variant_falls_back_when_team_config_missing(self):
+    def test_resolve_codex_gui_variant_allows_official_signup_without_team_config(self):
         resolution = resolve_codex_gui_variant({"codex_gui_variant": "official_signup"})
 
         self.assertEqual(resolution.requested_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
-        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_DEFAULT)
-        self.assertEqual(
-            resolution.fallback_reason,
-            "missing_or_incomplete_team_workspace_config",
-        )
+        self.assertEqual(resolution.effective_variant, CODEX_GUI_VARIANT_OFFICIAL_SIGNUP)
+        self.assertEqual(resolution.fallback_reason, "")
 
     def test_resolve_codex_gui_variant_defaults_without_request(self):
         resolution = resolve_codex_gui_variant({})

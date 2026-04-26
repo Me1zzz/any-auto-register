@@ -6,7 +6,7 @@ from core.alias_pool.myalias_pro_provider import MyAliasProProvider
 from core.alias_pool.alias_email_provider import AliasEmailProvider
 from core.alias_pool.alias_email_runtime import AliasEmailRuntimeResult
 from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase, InteractiveAliasProviderBase
-from core.alias_pool.base import AliasEmailLease
+from core.alias_pool.base import AliasEmailLease, AliasSourceState
 from core.alias_pool.interactive_provider_models import (
     AliasCreatedRecord,
     AliasDomainOption,
@@ -131,6 +131,45 @@ class _DuplicateInteractiveProvider(_FakeInteractiveProvider):
         if alias_index == 2:
             return AliasCreatedRecord(email="first@example.com")
         return AliasCreatedRecord(email="created-3@example.com")
+
+
+class _AutoServiceAccountProvider(InteractiveAliasProviderBase):
+    source_kind = "auto_service_account"
+
+    def __init__(self, *, spec, context):
+        super().__init__(spec=spec, context=context)
+        self.context_index = 0
+        self.created_aliases = []
+
+    def rotates_service_account_after_alias_cap(self) -> bool:
+        return True
+
+    def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
+        state = self._account_selection_state
+        service_account_email = str(getattr(state, "service_account_email", "") or "").strip().lower()
+        if not service_account_email:
+            self.context_index += 1
+            service_account_email = f"service-{self.context_index}@example.com"
+        username = service_account_email.split("@", 1)[0]
+        return AuthenticatedProviderContext(
+            service_account_email=service_account_email,
+            confirmation_inbox_email=service_account_email,
+            real_mailbox_email=service_account_email,
+            service_password=f"{username}-pass",
+            username=username,
+        )
+
+    def discover_alias_domains(self, context):
+        return [AliasDomainOption(key="example.com", domain="example.com", label="@example.com")]
+
+    def list_existing_aliases(self, context):
+        return []
+
+    def create_alias(self, *, context, domain, alias_index):
+        local_part = str(context.service_account_email or "").split("@", 1)[0]
+        email = f"{local_part}-{alias_index}@example.com"
+        self.created_aliases.append((context.service_account_email, email))
+        return AliasCreatedRecord(email=email)
 
 
 class _PoolManager:
@@ -491,8 +530,42 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
 
         self.assertEqual(
             [lease.alias_email for lease in pool_manager.leases],
-            ["first@example.com", "created-3@example.com"],
+            ["created-3@example.com", "first@example.com"],
         )
+
+    def test_auto_service_provider_reuses_account_until_cap_then_rotates(self):
+        provider = _AutoServiceAccountProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="auto-primary",
+                provider_type="auto_service_account",
+                state_key="auto-primary",
+                desired_alias_count=2,
+            ),
+            context=AliasProviderBootstrapContext(task_id="task-auto", purpose="task_pool"),
+        )
+        pool_manager = _PoolManager()
+
+        provider.ensure_available(pool_manager, minimum_count=1)
+        provider.ensure_available(pool_manager, minimum_count=1)
+        provider.ensure_available(pool_manager, minimum_count=1)
+
+        self.assertEqual(
+            provider.created_aliases,
+            [
+                ("service-1@example.com", "service-1-1@example.com"),
+                ("service-1@example.com", "service-1-2@example.com"),
+                ("service-2@example.com", "service-2-1@example.com"),
+            ],
+        )
+        self.assertEqual(
+            [lease.alias_email for lease in pool_manager.leases],
+            [
+                "service-1-1@example.com",
+                "service-1-2@example.com",
+                "service-2-1@example.com",
+            ],
+        )
+        self.assertEqual(provider.state(), AliasSourceState.ACTIVE)
 
     def test_loaded_state_seeds_authenticated_context_when_not_fresh(self):
         loaded_state = InteractiveProviderState(
@@ -789,6 +862,64 @@ class InteractiveProviderContractTests(unittest.TestCase):
         self.assertEqual(context.confirmation_inbox_email, "real@example.com")
         self.assertEqual(context.real_mailbox_email, "real@example.com")
         self.assertNotEqual(context.service_account_email, context.confirmation_inbox_email)
+
+    def test_myalias_pro_reuses_saved_service_account_when_under_cap(self):
+        fake_runtime = _FakeMyAliasRuntime()
+        store = _MemoryStore(
+            InteractiveProviderState(
+                state_key="myalias-primary",
+                service_account_email="saved-service@example.com",
+                confirmation_inbox_email="real@example.com",
+                real_mailbox_email="real@example.com",
+                service_password="saved-pass",
+                username="saved-service",
+                session_state={"authenticated": True},
+                known_aliases=["myalias-existing@myalias.pro"],
+            )
+        )
+        pool_manager = _PoolManager()
+
+        with mock.patch("core.alias_pool.myalias_pro_provider.CloudMailMailbox") as cloudmail_cls:
+            provider = MyAliasProProvider(
+                spec=AliasProviderSourceSpec(
+                    source_id="myalias-primary",
+                    provider_type="myalias_pro",
+                    state_key="myalias-primary",
+                    desired_alias_count=2,
+                    confirmation_inbox_config={
+                        "api_base": "https://mailbox.example",
+                        "admin_email": "admin@example.com",
+                        "admin_password": "mail-pass",
+                        "account_email": "real@example.com",
+                        "account_password": "mail-pass",
+                        "match_email": "real@example.com",
+                        "domain": "example.com",
+                    },
+                    provider_config={
+                        "signup_url": "https://myalias.pro/signup/",
+                        "login_url": "https://myalias.pro/login/",
+                        "alias_url": "https://myalias.pro/aliases/",
+                    },
+                ),
+                context=AliasProviderBootstrapContext(
+                    task_id="alias-test",
+                    purpose="task_pool",
+                    runtime_builder=lambda source: (fake_runtime, None),
+                    state_store_factory=lambda state_key: store,
+                    confirmation_reader=mock.Mock(
+                        fetch_confirmation=mock.Mock(
+                            return_value=type("_Result", (), {"confirm_url": "https://myalias.pro/verify/token-1", "error": ""})()
+                        )
+                    ),
+                ),
+            )
+
+            provider.ensure_available(pool_manager, minimum_count=1)
+
+        cloudmail_cls.assert_not_called()
+        self.assertEqual(store.saved[-1].service_account_email, "saved-service@example.com")
+        self.assertEqual(len(pool_manager.leases), 1)
+        self.assertRegex(pool_manager.leases[0].alias_email, r"^[a-z0-9]+@myalias\.pro$")
 
     def test_myalias_pro_shared_loop_maps_requirement_to_verify_account_email_stage(self):
         fake_runtime = _FakeMyAliasRuntime()
@@ -1400,6 +1531,16 @@ class InteractiveStateRepositoryTests(unittest.TestCase):
         self.assertEqual(state.known_aliases, [])
         self.assertEqual(state.current_stage, {"code": "", "label": ""})
         self.assertEqual(state.state_key, "interactive-state-key")
+
+    def test_repository_without_store_keeps_saved_state_in_memory(self):
+        repository = InteractiveStateRepository(state_key="interactive-state-key")
+        state = InteractiveProviderState(service_account_email="service@example.com")
+
+        repository.save(state)
+        loaded = repository.load()
+
+        self.assertIs(loaded, state)
+        self.assertEqual(loaded.state_key, "interactive-state-key")
 
     def test_repository_save_passes_state_to_store(self):
         store = _MemoryStore()

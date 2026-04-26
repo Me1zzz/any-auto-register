@@ -1029,6 +1029,34 @@ class AliasPoolManagerTests(unittest.TestCase):
         self.assertEqual(lease.alias_email, "second@example.com")
         self.assertEqual(lease.status, AliasLeaseStatus.LEASED)
 
+    def test_consumed_alias_is_not_readded_to_task_pool(self):
+        manager = AliasEmailPoolManager(task_id="task-consumed-dedup")
+        manager.add_lease(
+            AliasEmailLease(
+                alias_email="used@example.com",
+                real_mailbox_email="real@example.com",
+                source_kind="vend_email",
+                source_id="vend-email-primary",
+                source_session_id="session-1",
+            )
+        )
+
+        first = manager.acquire_alias()
+        manager.add_lease(
+            AliasEmailLease(
+                alias_email="USED@example.com",
+                real_mailbox_email="real@example.com",
+                source_kind="vend_email",
+                source_id="vend-email-primary",
+                source_session_id="session-1",
+            )
+        )
+
+        self.assertEqual(first.alias_email, "used@example.com")
+        self.assertEqual(manager.available_count_for_source("vend-email-primary"), 0)
+        with self.assertRaises(AliasPoolStarvedError):
+            manager.acquire_alias(wait_timeout_seconds=0, poll_interval_seconds=0.1)
+
     @mock.patch("core.alias_pool.manager.time.sleep")
     @mock.patch("core.alias_pool.manager.time.monotonic")
     def test_acquire_alias_waits_then_times_out_when_pool_stays_empty(self, mock_monotonic, mock_sleep):
@@ -1276,6 +1304,46 @@ class AliasPoolManagerSourceStateTests(unittest.TestCase):
         self.assertTrue(produced)
         self.assertEqual(producer.calls, [3])
         self.assertEqual(manager.available_count_for_source("simplelogin-primary"), 3)
+
+    def test_global_refill_does_not_push_source_past_its_watermark(self):
+        manager = AliasEmailPoolManager(task_id="task-source-watermark-cap")
+
+        class _WatermarkProducer:
+            source_id = "myalias-pro-primary"
+            source_kind = "myalias_pro"
+            low_watermark = 2
+
+            def __init__(self):
+                self._state = AliasSourceState.IDLE
+                self.calls = []
+                self.next_index = 1
+
+            def state(self):
+                return self._state
+
+            def ensure_available(self, pool_manager, *, minimum_count: int = 1):
+                self.calls.append(minimum_count)
+                self._state = AliasSourceState.ACTIVE
+                for _ in range(minimum_count):
+                    pool_manager.add_lease(
+                        AliasEmailLease(
+                            alias_email=f"alias-{self.next_index}@example.com",
+                            real_mailbox_email="real@example.com",
+                            source_kind=self.source_kind,
+                            source_id=self.source_id,
+                            source_session_id="session-1",
+                        )
+                    )
+                    self.next_index += 1
+
+        producer = _WatermarkProducer()
+        manager.register_source(producer)
+
+        manager._refill_to_source_watermarks()
+        manager._refill_to_minimum(10)
+
+        self.assertEqual(producer.calls, [2])
+        self.assertEqual(manager.available_count_for_source("myalias-pro-primary"), 2)
 
 
 class _MemoryInteractiveStateStore:
@@ -1873,6 +1941,9 @@ class VendEmailStateTests(unittest.TestCase):
                 "last_login_at": "2026-04-16T20:00:00Z",
                 "last_verified_at": "2026-04-16T20:05:00Z",
                 "known_aliases": ["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
+                "created_alias_count": 2,
+                "alias_limit": 0,
+                "exhausted": False,
                 "last_capture_summary": [
                     {
                         "name": "login",
@@ -1948,6 +2019,21 @@ class VendEmailStateTests(unittest.TestCase):
                     {"stageCode": "", "stageLabel": "", "reason": ""},
                 )
                 self.assertEqual(restored.last_error, "456")
+
+    def test_service_state_persists_created_alias_counter_fields(self):
+        state = VendEmailServiceState(
+            state_key="vend-1",
+            known_aliases=["created-001@serf.me", "created-002@serf.me"],
+            created_alias_count=2,
+            alias_limit=9,
+            exhausted=False,
+        )
+
+        restored = VendEmailServiceState.from_dict(state.to_dict())
+
+        self.assertEqual(restored.created_alias_count, 2)
+        self.assertEqual(restored.alias_limit, 9)
+        self.assertFalse(restored.exhausted)
 
     def test_file_state_store_persists_and_restores_spec_state_shape(self):
         with TemporaryDirectory() as temp_dir:
@@ -3231,6 +3317,141 @@ class VendAliasProviderAutomationTestTests(unittest.TestCase):
         self.assertEqual(result.account_identity.confirmation_inbox_email, "")
         self.assertEqual(result.account_identity.real_mailbox_email, "")
 
+    def test_task_refill_rotates_to_new_vend_account_after_account_cap(self):
+        from core.alias_pool.vend_provider import VendAliasProvider
+        from core.alias_pool.vend_telemetry import VendTelemetryRecorder
+
+        full_state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="old-service@example.com",
+            mailbox_email="confirm@example.com",
+            service_password="old-pass",
+            known_aliases=["old-001@serf.me", "old-002@serf.me"],
+        )
+        fresh_state = VendEmailServiceState(state_key="vend-email-primary")
+        state_repository = mock.Mock()
+        state_repository.load.return_value = full_state
+        state_repository.new_state.return_value = fresh_state
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=[False, True],
+            register_ok=True,
+            confirm_ok=True,
+            aliases=[],
+            created_aliases=["new-001@serf.me", "new-002@serf.me"],
+        )
+        provider = VendAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="vend-email-primary",
+                provider_type="vend_email",
+                raw_source={
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_domain": "example.com",
+                    "confirmation_inbox": {
+                        "provider": "cloudmail",
+                        "account_email": "confirm@example.com",
+                        "match_email": "confirm@example.com",
+                    },
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 2,
+                    "state_key": "vend-email-primary",
+                },
+                desired_alias_count=2,
+                state_key="vend-email-primary",
+                alias_domain_id="42",
+                confirmation_inbox_config={
+                    "provider": "cloudmail",
+                    "account_email": "confirm@example.com",
+                    "match_email": "confirm@example.com",
+                },
+            ),
+            state_repository=state_repository,
+            runtime=runtime,
+            confirmation_reader=mock.Mock(),
+            telemetry=VendTelemetryRecorder(),
+        )
+        manager = AliasEmailPoolManager(task_id="task-vend-rotate")
+
+        with mock.patch(
+            "core.alias_pool.vend_provider.build_service_email",
+            return_value="fresh-service@example.com",
+        ), mock.patch(
+            "core.alias_pool.vend_provider.build_service_password",
+            return_value="fresh-pass",
+        ):
+            provider.ensure_available(manager, minimum_count=1)
+
+        state_repository.new_state.assert_called_once_with()
+        saved_state = state_repository.save.call_args.args[0]
+        self.assertIs(saved_state, fresh_state)
+        self.assertEqual(saved_state.service_email, "fresh-service@example.com")
+        self.assertEqual(saved_state.known_aliases, ["new-001@serf.me"])
+        self.assertEqual(manager.available_count_for_source("vend-email-primary"), 1)
+        self.assertIn("create_aliases:1", runtime.calls)
+        self.assertEqual(provider.state(), AliasSourceState.ACTIVE)
+
+    def test_vend_provider_only_adds_newly_created_aliases_to_task_pool(self):
+        from core.alias_pool.vend_provider import VendAliasProvider
+        from core.alias_pool.vend_telemetry import VendTelemetryRecorder
+
+        state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="service@example.com",
+            mailbox_email="confirm@example.com",
+            service_password="service-pass",
+            known_aliases=["old-001@serf.me"],
+            created_alias_count=1,
+            alias_limit=3,
+        )
+        state_repository = mock.Mock()
+        state_repository.load.return_value = state
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=True,
+            login_ok=False,
+            register_ok=False,
+            aliases=["old-002@serf.me"],
+            created_aliases=["new-001@serf.me"],
+        )
+        provider = VendAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="vend-email-primary",
+                provider_type="vend_email",
+                raw_source={
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 3,
+                    "state_key": "vend-email-primary",
+                },
+                desired_alias_count=3,
+                state_key="vend-email-primary",
+                alias_domain_id="42",
+            ),
+            state_repository=state_repository,
+            runtime=runtime,
+            confirmation_reader=mock.Mock(),
+            telemetry=VendTelemetryRecorder(),
+        )
+        manager = AliasEmailPoolManager(task_id="task-vend-new-only")
+
+        provider.ensure_available(manager, minimum_count=1)
+
+        lease = manager.acquire_alias()
+        self.assertEqual(lease.alias_email, "new-001@serf.me")
+        with self.assertRaises(AliasPoolStarvedError):
+            manager.acquire_alias(wait_timeout_seconds=0, poll_interval_seconds=0.1)
+        self.assertNotIn("list_aliases", runtime.calls)
+        self.assertIn("create_aliases:1", runtime.calls)
+        saved_state = state_repository.save.call_args.args[0]
+        self.assertEqual(saved_state.known_aliases, ["old-001@serf.me", "new-001@serf.me"])
+        self.assertEqual(saved_state.created_alias_count, 2)
+        self.assertEqual(saved_state.alias_limit, 3)
+
     def test_compatibility_builder_delegates_old_producer_load_into_to_provider(self):
         from core.alias_pool.vend_email_service import VendEmailAliasServiceProducer
 
@@ -3283,7 +3504,8 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             login_ok=[False, True],
             register_ok=True,
             confirm_ok=True,
-            aliases=["vendcapdemo20260417@serf.me"],
+            aliases=[],
+            created_aliases=["vendcapdemo20260417@serf.me"],
             captures=[],
         )
 
@@ -3370,7 +3592,8 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             restore_ok=False,
             login_ok=True,
             register_ok=False,
-            aliases=["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
+            aliases=[],
+            created_aliases=["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
             captures=captures,
         )
 
@@ -3395,7 +3618,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         producer.load_into(manager)
 
         self.assertEqual(runtime.calls[:2], ["restore", "login"])
-        self.assertEqual(producer.state(), AliasSourceState.EXHAUSTED)
+        self.assertEqual(producer.state(), AliasSourceState.ACTIVE)
 
         lease1 = manager.acquire_alias()
         lease2 = manager.acquire_alias()
@@ -3431,7 +3654,8 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             restore_ok=True,
             login_ok=False,
             register_ok=False,
-            aliases=["vendcapdemo20260417@serf.me"],
+            aliases=[],
+            created_aliases=["vendcapdemo20260417@serf.me"],
             captures=[],
         )
 
@@ -3553,9 +3777,9 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             confirm_ok=True,
             aliases=["vendcapexisting20260417@serf.me"],
             created_aliases=[
-                "vendcapexisting20260417@serf.me",
                 "vendcapdemo20260417@serf.me",
                 "vendcapdemo20260418@serf.me",
+                "vendcapdemo20260419@serf.me",
             ],
             captures=captures,
         )
@@ -3589,15 +3813,15 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
                 "login",
             ],
         )
-        self.assertIn("list_aliases", runtime.calls)
-        self.assertIn("create_aliases:2", runtime.calls)
+        self.assertNotIn("list_aliases", runtime.calls)
+        self.assertIn("create_aliases:3", runtime.calls)
         leases = [manager.acquire_alias(), manager.acquire_alias(), manager.acquire_alias()]
         self.assertCountEqual(
             [lease.alias_email for lease in leases],
             [
-                "vendcapexisting20260417@serf.me",
                 "vendcapdemo20260417@serf.me",
                 "vendcapdemo20260418@serf.me",
+                "vendcapdemo20260419@serf.me",
             ],
         )
         self.assertEqual(
@@ -3633,9 +3857,9 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
         self.assertEqual(
             getattr(saved_state, "known_aliases", None),
             [
-                "vendcapexisting20260417@serf.me",
                 "vendcapdemo20260417@serf.me",
                 "vendcapdemo20260418@serf.me",
+                "vendcapdemo20260419@serf.me",
             ],
         )
         self.assertEqual(
@@ -3643,8 +3867,8 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             {"code": "aliases_ready", "label": "别名预览已生成"},
         )
         self.assertEqual(
-            saved_state.stage_history,
-            [
+            [item.get("code") for item in saved_state.stage_history],
+            [item.get("code") for item in [
                 {"code": "register_submit", "label": "注册表单提交", "status": "completed"},
                 {
                     "code": "fetch_confirmation_mail",
@@ -3676,7 +3900,7 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
                     "detail": "预览共 3 个别名",
                 },
                 {"code": "save_state", "label": "保存预览状态", "status": "completed"},
-            ],
+            ] if item.get("code") != "list_aliases"],
         )
         self.assertEqual(
             saved_state.last_failure,
@@ -3851,17 +4075,17 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
 
         producer.load_into(manager)
 
-        leases = [manager.acquire_alias(), manager.acquire_alias(), manager.acquire_alias()]
+        leases = [manager.acquire_alias(), manager.acquire_alias()]
         self.assertCountEqual(
             [lease.alias_email for lease in leases],
-            ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],
+            ["dup@cxwsss.online", "new@cxwsss.online"],
         )
         saved_state = state_store.save.call_args.args[0]
         self.assertEqual(saved_state.service_email, "vendcap202604170108@cxwsss.online")
         self.assertEqual(saved_state.mailbox_email, "admin@cxwsss.online")
         self.assertEqual(
             getattr(saved_state, "known_aliases", None),
-            ["dup@cxwsss.online", "unique@cxwsss.online", "new@cxwsss.online"],
+            ["dup@cxwsss.online", "new@cxwsss.online"],
         )
 
     def test_producer_marks_failed_when_restore_login_register_all_fail(self):

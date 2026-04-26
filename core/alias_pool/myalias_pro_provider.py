@@ -62,7 +62,24 @@ class MyAliasProProvider(InteractiveAliasProviderBase):
         )
         return str(mailbox.get_email().email or "").strip().lower()
 
+    def rotates_service_account_after_alias_cap(self) -> bool:
+        return True
+
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
+        state = self._account_selection_state or self._state_repository.load()
+        persisted_service_email = str(state.service_account_email or "").strip().lower()
+        if persisted_service_email and not bool(dict(state.session_state or {}).get("requires_verification")):
+            inbox_email = str(state.confirmation_inbox_email or self._confirmation_lookup_email()).strip().lower()
+            return AuthenticatedProviderContext(
+                service_account_email=persisted_service_email,
+                confirmation_inbox_email=inbox_email,
+                real_mailbox_email=str(state.real_mailbox_email or inbox_email).strip().lower(),
+                service_password=str(state.service_password or ""),
+                username=str(state.username or persisted_service_email.split("@", 1)[0]),
+                session_state=dict(state.session_state or {}),
+                domain_options=self._domain_options_from_state(state),
+            )
+
         service_email = self._generate_service_account_email()
         inbox_email = self._confirmation_lookup_email()
         protocol_runtime, browser_runtime = self._build_runtimes()

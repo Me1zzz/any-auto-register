@@ -79,22 +79,14 @@ def resolve_codex_gui_variant(extra: Optional[dict]) -> CodexGUIVariantResolutio
         or extra.get("chatgpt_gui_oauth_variant")
         or extra.get("codex_gui_oauth_variant")
     )
-    if has_cloudmail_team_account_email(extra):
-        requested = CODEX_GUI_VARIANT_OFFICIAL_SIGNUP
     if requested != CODEX_GUI_VARIANT_OFFICIAL_SIGNUP:
         return CodexGUIVariantResolution(
             requested_variant=CODEX_GUI_VARIANT_DEFAULT,
             effective_variant=CODEX_GUI_VARIANT_DEFAULT,
         )
-    if has_complete_team_workspace_config(extra):
-        return CodexGUIVariantResolution(
-            requested_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
-            effective_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
-        )
     return CodexGUIVariantResolution(
         requested_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
-        effective_variant=CODEX_GUI_VARIANT_DEFAULT,
-        fallback_reason="missing_or_incomplete_team_workspace_config",
+        effective_variant=CODEX_GUI_VARIANT_OFFICIAL_SIGNUP,
     )
 
 
@@ -133,8 +125,6 @@ def normalize_chatgpt_registration_mode(value) -> str:
 
 def resolve_chatgpt_registration_mode(extra: Optional[dict]) -> str:
     extra = extra or {}
-    if has_cloudmail_team_account_email(extra):
-        return CHATGPT_REGISTRATION_MODE_CODEX_GUI
     if "chatgpt_registration_mode" in extra:
         return normalize_chatgpt_registration_mode(extra.get("chatgpt_registration_mode"))
     if "chatgpt_has_refresh_token_solution" in extra:

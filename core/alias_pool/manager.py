@@ -16,6 +16,7 @@ class AliasEmailPoolManager:
         self.task_id = task_id
         self._log_fn = log_fn
         self._available = deque()
+        self._seen_alias_emails = set()
         self._sources = {}
         self._lock = threading.RLock()
         self._refill_lock = threading.Lock()
@@ -87,9 +88,21 @@ class AliasEmailPoolManager:
                 for producer in self._sources.values()
             )
 
-    def add_lease(self, lease: AliasEmailLease) -> None:
+    @staticmethod
+    def _normalize_alias_email(value: object) -> str:
+        return str(value or "").strip().lower()
+
+    def add_lease(self, lease: AliasEmailLease) -> bool:
         with self._lock:
+            normalized_alias = self._normalize_alias_email(lease.alias_email)
+            if not normalized_alias:
+                return False
+            if normalized_alias in self._seen_alias_emails:
+                self._log(f"[AliasPool] skip duplicate alias: {normalized_alias}")
+                return False
+            self._seen_alias_emails.add(normalized_alias)
             self._available.append(lease)
+            return True
 
     def _live_sources_snapshot(self):
         with self._lock:
@@ -194,16 +207,26 @@ class AliasEmailPoolManager:
                 needed = max(target - current_available, 1)
                 for producer in live_sources:
                     before = self.available_count()
+                    source_id = str(getattr(producer, "source_id", "") or "")
+                    source_target = self._source_low_watermark(producer)
+                    if source_target > 0:
+                        source_available = self.available_count_for_source(source_id)
+                        source_needed = source_target - source_available
+                        if source_needed <= 0:
+                            continue
+                        requested = min(needed, source_needed)
+                    else:
+                        requested = needed
                     ensure_available = getattr(producer, "ensure_available", None)
                     self._log(
                         "[AliasPool] refill attempt: "
                         f"{self._format_source_kind(getattr(producer, 'source_kind', ''))} "
-                        f"source_id={getattr(producer, 'source_id', '')} "
-                        f"need={needed} available={before}"
+                        f"source_id={source_id} "
+                        f"need={requested} available={before}"
                     )
                     try:
                         if callable(ensure_available):
-                            ensure_available(self, minimum_count=needed)
+                            ensure_available(self, minimum_count=requested)
                         else:
                             producer.load_into(self)
                     except Exception as exc:
@@ -211,8 +234,8 @@ class AliasEmailPoolManager:
                         self._log(
                             "[AliasPool] refill failed: "
                             f"{self._format_source_kind(getattr(producer, 'source_kind', ''))} "
-                            f"source_id={getattr(producer, 'source_id', '')} "
-                            f"need={needed} error={exc}"
+                            f"source_id={source_id} "
+                            f"need={requested} error={exc}"
                         )
                         continue
                     after = self.available_count()
@@ -377,3 +400,4 @@ class AliasEmailPoolManager:
         self.stop_background_refill()
         with self._lock:
             self._available.clear()
+            self._seen_alias_emails.clear()

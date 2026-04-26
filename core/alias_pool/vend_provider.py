@@ -74,22 +74,49 @@ class VendAliasProvider:
         )
         state = self._state_repository.load()
         known_aliases_before = list(dict.fromkeys(list(getattr(state, "known_aliases", []) or [])))
-        if len(known_aliases_before) >= target_cap:
-            self._state = AliasSourceState.EXHAUSTED
-            return
+        created_alias_count = max(
+            int(getattr(state, "created_alias_count", 0) or len(known_aliases_before)),
+            len(known_aliases_before),
+        )
+        if (
+            bool(getattr(state, "exhausted", False))
+            or created_alias_count >= target_cap
+            or len(known_aliases_before) >= target_cap
+        ):
+            state = self._state_repository.new_state()
+            known_aliases_before = []
+            created_alias_count = 0
+        state.alias_limit = target_cap
 
         try:
             self._state = AliasSourceState.ACTIVE
             self._reset_run_state(state)
             self._ensure_session(state)
-            target_total = min(target_cap, len(known_aliases_before) + requested)
-            alias_items = self._load_alias_items(state, target_total)
+            remaining_capacity = max(target_cap - created_alias_count, 0)
+            create_count = min(requested, remaining_capacity)
+            alias_items = self._create_new_alias_items(
+                state,
+                create_count,
+                existing_aliases=known_aliases_before,
+            )
             state.last_capture_summary = self._capture_summary()
-            state.known_aliases = [
-                str(item.get("email") or "").strip().lower()
-                for item in alias_items
-                if str(item.get("email") or "").strip()
-            ]
+            state.known_aliases = list(
+                dict.fromkeys(
+                    [
+                        str(email or "").strip().lower()
+                        for email in known_aliases_before
+                        if str(email or "").strip()
+                    ]
+                    + [
+                        str(item.get("email") or "").strip().lower()
+                        for item in alias_items
+                        if str(item.get("email") or "").strip()
+                    ]
+                )
+            )
+            state.created_alias_count = max(created_alias_count + len(alias_items), len(state.known_aliases))
+            state.alias_limit = target_cap
+            state.exhausted = bool(state.created_alias_count >= target_cap)
             self._telemetry.record_stage(
                 state,
                 "aliases_ready",
@@ -114,11 +141,7 @@ class VendAliasProvider:
                         source_session_id=str(getattr(state, "state_key", "") or self._spec.state_key),
                     )
                 )
-            self._state = (
-                AliasSourceState.EXHAUSTED
-                if len(state.known_aliases) >= target_cap
-                else AliasSourceState.ACTIVE
-            )
+            self._state = AliasSourceState.ACTIVE
         except Exception as exc:
             self._state = AliasSourceState.FAILED
             stage_code = self._telemetry.resolve_failure_stage_code(state)
@@ -321,12 +344,21 @@ class VendAliasProvider:
         except Exception as exc:
             return exc
 
-    def _load_alias_items(self, state, minimum_alias_count: int) -> list[dict[str, str]]:
-        target = max(
-            int(self.source.get("alias_count") or self._spec.desired_alias_count or 0),
-            int(minimum_alias_count or 0),
-            0,
-        )
+    def _load_alias_items(
+        self,
+        state,
+        minimum_alias_count: int,
+        *,
+        target_alias_count: int | None = None,
+    ) -> list[dict[str, str]]:
+        if target_alias_count is None:
+            target = max(
+                int(self.source.get("alias_count") or self._spec.desired_alias_count or 0),
+                int(minimum_alias_count or 0),
+                0,
+            )
+        else:
+            target = max(int(target_alias_count or 0), 0)
         self._telemetry.record_stage(state, "list_aliases", status="pending")
         aliases = list(self.runtime.list_aliases(state, self.source))
         missing_count = max(target - len(aliases), 0)
@@ -381,6 +413,54 @@ class VendAliasProvider:
             )
 
         return [{"email": alias} for alias in unique_aliases[:target]]
+
+    def _create_new_alias_items(
+        self,
+        state,
+        requested_count: int,
+        *,
+        existing_aliases: list[str],
+    ) -> list[dict[str, str]]:
+        target = max(int(requested_count or 0), 0)
+        if target <= 0:
+            return []
+
+        existing_seen = {
+            str(alias or "").strip().lower()
+            for alias in existing_aliases
+            if str(alias or "").strip()
+        }
+        created_aliases: list[str] = []
+        self._telemetry.record_stage(state, "create_aliases", status="pending")
+        stalled_attempt_count = 0
+        max_stalled_attempts = max(target, 1)
+        while len(created_aliases) < target and stalled_attempt_count < max_stalled_attempts:
+            missing_count = target - len(created_aliases)
+            batch = list(self.runtime.create_aliases(state, self.source, missing_count))
+            if not batch:
+                break
+
+            made_progress = False
+            for alias in batch:
+                email = str(alias or "").strip().lower()
+                if not email or email in existing_seen:
+                    continue
+                existing_seen.add(email)
+                created_aliases.append(email)
+                made_progress = True
+
+            if not made_progress:
+                stalled_attempt_count += 1
+                continue
+            stalled_attempt_count = 0
+
+        self._telemetry.update_stage_status(
+            state,
+            "create_aliases",
+            status="completed",
+            detail=f"created {len(created_aliases)} aliases",
+        )
+        return [{"email": alias} for alias in created_aliases[:target]]
 
     def _capture_summary(self) -> list[VendEmailCaptureRecord]:
         capture_summary = getattr(self.runtime, "capture_summary", None)

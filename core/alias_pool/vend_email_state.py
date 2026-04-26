@@ -20,6 +20,20 @@ def _string_field(payload: dict[str, Any], key: str) -> str:
     return ""
 
 
+def _int_field(payload: dict[str, Any], key: str, default: int = 0) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return max(value, 0)
+    if isinstance(value, str):
+        try:
+            return max(int(value), 0)
+        except ValueError:
+            return default
+    return default
+
+
 def _stage_history_field(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
     value = payload.get(key)
     if not isinstance(value, list):
@@ -118,6 +132,9 @@ class VendEmailServiceState:
     last_login_at: str = ""
     last_verified_at: str = ""
     known_aliases: list[str] = field(default_factory=list)
+    created_alias_count: int = 0
+    alias_limit: int = 0
+    exhausted: bool = False
     last_capture_summary: list[VendEmailCaptureRecord] = field(default_factory=list)
     current_stage: dict[str, str] = field(default_factory=lambda: {"code": "", "label": ""})
     stage_history: list[dict[str, Any]] = field(default_factory=list)
@@ -125,6 +142,15 @@ class VendEmailServiceState:
         default_factory=lambda: {"stageCode": "", "stageLabel": "", "reason": ""}
     )
     last_error: str = ""
+
+    def __post_init__(self) -> None:
+        self.created_alias_count = max(
+            int(self.created_alias_count or 0),
+            len(list(self.known_aliases or [])),
+        )
+        self.alias_limit = max(int(self.alias_limit or 0), 0)
+        if self.alias_limit and self.created_alias_count >= self.alias_limit:
+            self.exhausted = True
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -137,6 +163,9 @@ class VendEmailServiceState:
             "last_login_at": self.last_login_at,
             "last_verified_at": self.last_verified_at,
             "known_aliases": list(self.known_aliases),
+            "created_alias_count": max(int(self.created_alias_count or 0), 0),
+            "alias_limit": max(int(self.alias_limit or 0), 0),
+            "exhausted": bool(self.exhausted),
             "last_capture_summary": [capture.to_dict() for capture in self.last_capture_summary],
             "current_stage": {
                 "code": str(self.current_stage.get("code") or ""),
@@ -171,6 +200,8 @@ class VendEmailServiceState:
             if isinstance(item, dict)
         ]
         known_aliases = [str(item) for item in raw_known_aliases if isinstance(item, str)]
+        created_alias_count = _int_field(payload, "created_alias_count", len(known_aliases))
+        alias_limit = _int_field(payload, "alias_limit", 0)
         return cls(
             state_key=_string_field(payload, "state_key"),
             service_email=_string_field(payload, "service_email"),
@@ -181,6 +212,9 @@ class VendEmailServiceState:
             last_login_at=_string_field(payload, "last_login_at"),
             last_verified_at=_string_field(payload, "last_verified_at"),
             known_aliases=known_aliases,
+            created_alias_count=created_alias_count,
+            alias_limit=alias_limit,
+            exhausted=bool(payload.get("exhausted")),
             last_capture_summary=capture_summary,
             current_stage=_stage_field(payload, "current_stage"),
             stage_history=_stage_history_field(payload, "stage_history"),

@@ -44,6 +44,9 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
         self._runtime: SecureInSecondsRuntime | None = None
         self._active_context_email: str = ""
 
+    def rotates_service_account_after_alias_cap(self) -> bool:
+        return True
+
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
         forwarding_email = self._forwarding_email()
         context = AuthenticatedProviderContext(

@@ -289,6 +289,14 @@ class _FakeDriverWithStrictMarkers(_FakeDriver):
 
 
 class _FakeDriverWithLoginConsentSuccess(_FakeDriver):
+    def peek_target(self, name: str):
+        if name == "personal_account_option":
+            return ("fake", name, {"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0})
+        raise RuntimeError(f"target not visible: {name}")
+
+    def peek_target_with_timeout(self, name: str, timeout_ms: int):
+        return self.peek_target(name)
+
     def input_text(self, name: str, text: str) -> None:
         super().input_text(name, text)
         if name == "verification_code_input" and any(event == ("click", "otp_login_button") for event in self.events):
@@ -311,6 +319,28 @@ class _FakeDriverWithRegisterConsentSuccess(_FakeDriverWithRegisterConsent):
         return False, None
 
 
+class _FakeDriverWithoutPersonalAccountOption:
+    def click_named_target(self, name: str) -> None:
+        if name == "personal_account_option":
+            raise AssertionError("personal account option should be skipped when absent")
+        super().click_named_target(name)
+
+    def peek_target(self, name: str):
+        if name == "personal_account_option":
+            raise RuntimeError("target not visible: personal_account_option")
+        return super().peek_target(name)
+
+    def peek_target_with_timeout(self, name: str, timeout_ms: int):
+        return self.peek_target(name)
+
+
+class _FakeDriverWithLoginConsentNoPersonalAccount(
+    _FakeDriverWithoutPersonalAccountOption,
+    _FakeDriverWithLoginConsentSuccess,
+):
+    pass
+
+
 class CodexGUIRegistrationEngineTests(unittest.TestCase):
     def test_engine_module_reexports_driver_classes(self):
         from platforms.chatgpt.codex_gui_driver import CodexGUIDriver as SplitCodexGUIDriver
@@ -319,14 +349,14 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertIs(CodexGUIDriver, SplitCodexGUIDriver)
         self.assertIs(PyAutoGUICodexGUIDriver, SplitPyAutoGUICodexGUIDriver)
 
-    def test_engine_defaults_to_pywinauto_when_cloudmail_team_account_email_configured(self):
+    def test_engine_does_not_change_detector_when_only_cloudmail_team_account_email_configured(self):
         engine = CodexGUIRegistrationEngine(
             email_service=_DummyEmailService([]),
             callback_logger=lambda _msg: None,
             extra_config={"cloudmail_team_account_email": "manager@example.com"},
         )
 
-        self.assertEqual(engine.extra_config["codex_gui_target_detector"], "pywinauto")
+        self.assertNotIn("codex_gui_target_detector", engine.extra_config)
 
     def _make_engine(self, email_service, driver):
         engine = CodexGUIRegistrationEngine(
@@ -522,7 +552,7 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertFalse(metadata["codex_gui_workspace_cleanup_completed"])
         self.assertTrue(metadata["codex_gui_workspace_cleanup_result"]["workspace_cleanup_skipped"])
 
-    def test_official_signup_missing_team_config_falls_back_to_default_gui_flow(self):
+    def test_official_signup_without_team_config_skips_workspace_operations(self):
         email_service = _DummyEmailService(["111111", "222222"])
         driver = _FakeDriver()
         engine = self._make_engine(email_service, driver)
@@ -531,18 +561,29 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             "platforms.chatgpt.chatgpt_registration_mode_adapter",
             fromlist=["resolve_codex_gui_variant"],
         ).resolve_codex_gui_variant(engine.extra_config)
-        engine._official_signup_workflow.run = mock.Mock(side_effect=AssertionError("official workflow should not run"))
+        events = []
+        engine._official_signup_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: events.append("official"))
+        engine._registration_workflow.run_tail_after_password = mock.Mock(side_effect=lambda _engine, ctx: events.append("tail"))
+        engine._login_workflow.run = mock.Mock(side_effect=lambda _engine, ctx: (events.append("login"), setattr(ctx, "oauth_login_completed", True))[0])
 
-        result = engine.run()
+        with mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.invite_chatgpt_team_member",
+            side_effect=AssertionError("team invite should be skipped without team account"),
+        ), mock.patch(
+            "platforms.chatgpt.codex_gui_registration_engine.remove_chatgpt_team_member_with_retry",
+            side_effect=AssertionError("team cleanup should be skipped without team account"),
+        ):
+            result = engine.run()
 
         self.assertTrue(result.success)
+        self.assertEqual(events, ["official", "tail", "login"])
         metadata = result.metadata or {}
-        self.assertEqual(metadata["codex_gui_variant"], "default")
-        self.assertEqual(
-            metadata["codex_gui_variant_fallback_reason"],
-            "missing_or_incomplete_team_workspace_config",
-        )
-        self.assertIn(("click", "register_button"), driver.events)
+        self.assertEqual(metadata["codex_gui_variant"], "official_signup")
+        self.assertEqual(metadata["codex_gui_variant_fallback_reason"], "")
+        self.assertFalse(metadata["codex_gui_workspace_enrolled"])
+        self.assertFalse(metadata["codex_gui_cleanup_required"])
+        self.assertTrue(metadata["codex_gui_workspace_enroll_result"]["workspace_enroll_skipped"])
+        self.assertTrue(metadata["codex_gui_workspace_cleanup_result"]["workspace_cleanup_skipped"])
 
     def test_official_signup_cleanup_failure_fails_successful_main_flow(self):
         email_service = _DummyEmailService(["111111", "222222"])
@@ -960,6 +1001,25 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
             if index > personal_index and event == ("click", "continue_button")
         ]
         self.assertTrue(continue_after_personal)
+
+    def test_login_consent_skips_missing_personal_account_when_cleanup_enabled(self):
+        email_service = _DummyEmailService(["111111", "222222"])
+        driver = _FakeDriverWithLoginConsentNoPersonalAccount()
+        engine = self._make_engine(email_service, driver)
+        engine.extra_config.update(
+            {
+                "chatgpt_team_member_account": {"email": "owner@example.com", "credential": "team-token"},
+                "chatgpt_team_workspace_id": "ws-demo",
+                "chatgpt_team_remove_after_login": True,
+            }
+        )
+
+        result = engine.run()
+
+        self.assertTrue(result.success)
+        self.assertNotIn(("click", "personal_account_option"), driver.events)
+        self.assertIn(("click", "continue_button"), driver.events)
+        self.assertEqual(driver.current_url, "https://chatgpt.com/")
 
     def test_login_consent_skips_personal_account_when_cleanup_disabled(self):
         email_service = _DummyEmailService(["111111", "222222"])

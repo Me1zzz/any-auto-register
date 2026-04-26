@@ -76,8 +76,14 @@ class InteractiveAliasProviderBase:
                     self._state = AliasSourceState.EXHAUSTED
                     return
             elif len(known_aliases_before) >= cap:
-                self._state = AliasSourceState.EXHAUSTED
-                return
+                if self.rotates_service_account_after_alias_cap():
+                    state = self._state_repository.new_state()
+                    self._account_selection_state = state
+                    has_multi_account_state = bool(self._build_accounts_state(state))
+                    known_aliases_before = self._flatten_known_aliases(state)
+                else:
+                    self._state = AliasSourceState.EXHAUSTED
+                    return
 
             self._state = AliasSourceState.ACTIVE
             target_total = (
@@ -106,11 +112,6 @@ class InteractiveAliasProviderBase:
 
                 aliases = self._dedupe_alias_items(
                     [{"email": email} for email in known_aliases_before]
-                    + [
-                        dict(item)
-                        for item in list(self.list_existing_aliases(context))
-                        if isinstance(item, dict)
-                    ]
                 )
 
                 creation_attempt_count = len(aliases)
@@ -157,11 +158,10 @@ class InteractiveAliasProviderBase:
                     else AliasSourceState.ACTIVE
                 )
             else:
-                self._state = (
-                    AliasSourceState.EXHAUSTED
-                    if len(known_aliases_after) >= cap
-                    else AliasSourceState.ACTIVE
-                )
+                if len(known_aliases_after) >= cap and not self.rotates_service_account_after_alias_cap():
+                    self._state = AliasSourceState.EXHAUSTED
+                else:
+                    self._state = AliasSourceState.ACTIVE
         except Exception:
             self._state = AliasSourceState.FAILED
             raise
@@ -412,13 +412,17 @@ class InteractiveAliasProviderBase:
             last_context = context
             last_domains = domains
 
-            account_aliases = self._dedupe_alias_items(
-                self._account_alias_items(account)
-                + [
+            listed_aliases = (
+                [
                     dict(item)
                     for item in list(self.list_existing_aliases(context))
                     if isinstance(item, Mapping)
                 ]
+                if mode != "task_pool"
+                else []
+            )
+            account_aliases = self._dedupe_alias_items(
+                self._account_alias_items(account) + listed_aliases
             )
 
             if self._account_is_full(self._alias_values_from_items(account_aliases)):
@@ -532,6 +536,14 @@ class InteractiveAliasProviderBase:
                 + [{"email": email} for email in known_aliases]
             )
             known_aliases = self._alias_values_from_items(alias_items)
+            try:
+                created_alias_count = max(
+                    int(persisted.get("created_alias_count") or len(known_aliases)),
+                    len(known_aliases),
+                )
+            except (TypeError, ValueError):
+                created_alias_count = len(known_aliases)
+            alias_limit = self._single_account_alias_cap()
             account_state = {
                 "email": email,
                 "password": str(persisted.get("password") or account["password"]).strip() or account["password"],
@@ -546,6 +558,8 @@ class InteractiveAliasProviderBase:
                 "domain_options": self._normalize_domain_state_items(persisted.get("domain_options")),
                 "known_aliases": known_aliases,
                 "alias_items": alias_items,
+                "created_alias_count": created_alias_count,
+                "alias_limit": alias_limit,
                 "exhausted": bool(persisted.get("exhausted")),
             }
             if self._account_is_full(known_aliases):
@@ -971,6 +985,15 @@ class InteractiveAliasProviderBase:
             active_account["domain_options"] = domain_state_items
             active_account["alias_items"] = self._dedupe_alias_items(aliases)
             active_account["known_aliases"] = self._dedupe_alias_values(alias_values)
+            try:
+                previous_created_count = int(active_account.get("created_alias_count") or 0)
+            except (TypeError, ValueError):
+                previous_created_count = 0
+            active_account["created_alias_count"] = max(
+                previous_created_count,
+                len(active_account["known_aliases"]),
+            )
+            active_account["alias_limit"] = self._single_account_alias_cap()
             if self._account_is_full(active_account["known_aliases"]):
                 active_account["exhausted"] = True
             self._sync_legacy_fields_from_account(state, active_account)
@@ -1022,6 +1045,9 @@ class InteractiveAliasProviderBase:
 
     def requires_alias_domain_options(self) -> bool:
         return True
+
+    def rotates_service_account_after_alias_cap(self) -> bool:
+        return False
 
     def list_existing_aliases(self, context: AuthenticatedProviderContext) -> list[dict[str, str]]:
         return []

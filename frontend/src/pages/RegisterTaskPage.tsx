@@ -12,6 +12,7 @@ import {
   Typography,
   Descriptions,
   Alert,
+  Switch,
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -206,8 +207,12 @@ export default function RegisterTaskPage() {
       yescaptcha_key: values.yescaptcha_key,
       solver_url: values.solver_url,
     }
+    const officialSignupEnabled =
+      values.platform === 'chatgpt' && Boolean(values.codex_gui_official_signup_enabled)
     const effectiveChatGPTRegistrationMode =
-      values.platform === 'chatgpt' && values.executor_type === GUI_CONTROL_EXECUTOR
+      officialSignupEnabled
+        ? CHATGPT_REGISTRATION_MODE_CODEX_GUI
+        : values.platform === 'chatgpt' && values.executor_type === GUI_CONTROL_EXECUTOR
         ? CHATGPT_REGISTRATION_MODE_CODEX_GUI
         : chatgptRegistrationMode
     const chatgptRegistrationRequestAdapter =
@@ -223,6 +228,9 @@ export default function RegisterTaskPage() {
     const adaptedRegisterExtra = chatgptRegistrationRequestAdapter
       ? chatgptRegistrationRequestAdapter.extendExtra(registerExtra)
       : registerExtra
+    const finalRegisterExtra = officialSignupEnabled
+      ? { ...adaptedRegisterExtra, codex_gui_variant: 'official_signup' }
+      : adaptedRegisterExtra
 
     const res = await apiFetch('/tasks/register', {
       method: 'POST',
@@ -236,7 +244,7 @@ export default function RegisterTaskPage() {
         proxy: values.proxy || null,
         executor_type: executorType,
         captcha_solver: values.captcha_solver,
-        extra: adaptedRegisterExtra,
+        extra: finalRegisterExtra,
       }),
     }) as RegisterTaskResponse
     setTask(res)
@@ -355,6 +363,15 @@ export default function RegisterTaskPage() {
                   mode={chatgptRegistrationMode}
                   onChange={setChatgptRegistrationMode}
                 />
+                <Form.Item
+                  name="codex_gui_official_signup_enabled"
+                  label="官方注册链路"
+                  valuePropName="checked"
+                  initialValue={false}
+                  style={{ marginBottom: 0 }}
+                >
+                  <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                </Form.Item>
                 {form.getFieldValue('executor_type') === GUI_CONTROL_EXECUTOR ? (
                   <>
                     <Alert

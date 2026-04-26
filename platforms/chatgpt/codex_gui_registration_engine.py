@@ -68,11 +68,6 @@ class CodexGUIRegistrationEngine:
         self.task_uuid = task_uuid
         self.max_retries = max(1, int(max_retries or 1))
         self.extra_config = dict(extra_config or {})
-        if (
-            str(self.extra_config.get("cloudmail_team_account_email") or "").strip()
-            and not str(self.extra_config.get("codex_gui_target_detector") or "").strip()
-        ):
-            self.extra_config["codex_gui_target_detector"] = "pywinauto"
 
         self.email: Optional[str] = None
         self.password: Optional[str] = None
@@ -580,11 +575,7 @@ class CodexGUIRegistrationEngine:
         driver = self._driver
         if driver is None:
             raise RuntimeError("Codex GUI 椹卞姩鏈垵濮嬪寲")
-        if self._should_select_personal_account_before_consent_continue():
-            self._run_action(
-                f"[{stage}] consent 页面选择个人帐户",
-                lambda: driver.click_named_target("personal_account_option"),
-            )
+        self._select_personal_account_before_consent_continue_if_available(stage)
         self._run_action(
             f"[{stage}] 鍛戒腑 consent 椤甸潰锛岀偣鍑荤户缁畬鎴?OAuth 鐧诲綍",
             lambda: driver.click_named_target("continue_button"),
@@ -599,11 +590,7 @@ class CodexGUIRegistrationEngine:
         # 只有真正命中 consent URL 才允许执行继续按钮，避免误点其它页面的 continue。
         if not self._is_consent_url(current_url):
             return False
-        if self._should_select_personal_account_before_consent_continue():
-            self._run_action(
-                f"[{stage}] consent 页面选择个人帐户",
-                lambda: driver.click_named_target("personal_account_option"),
-            )
+        self._select_personal_account_before_consent_continue_if_available(stage)
         self._run_action(
             f"[{stage}] 命中 consent 页面，点击继续完成 OAuth 登录",
             lambda: driver.click_named_target("continue_button"),
@@ -783,9 +770,39 @@ class CodexGUIRegistrationEngine:
             default=True,
         )
 
-    def _should_select_personal_account_before_consent_continue(self) -> bool:
+    def _team_workspace_operations_enabled(self) -> bool:
         team_account = self._team_account_config()
-        return self._team_remove_after_login_enabled() and bool(str(team_account.get("email") or "").strip())
+        return bool(str(team_account.get("email") or "").strip())
+
+    def _should_select_personal_account_before_consent_continue(self) -> bool:
+        return self._team_remove_after_login_enabled() and self._team_workspace_operations_enabled()
+
+    def _personal_account_probe_timeout_ms(self) -> int:
+        value = self.extra_config.get("codex_gui_personal_account_probe_timeout_ms", 1500)
+        try:
+            return max(1, int(value or 1500))
+        except Exception:
+            return 1500
+
+    def _select_personal_account_before_consent_continue_if_available(self, stage: str) -> bool:
+        if not self._should_select_personal_account_before_consent_continue():
+            return False
+        driver = self._driver
+        if driver is None:
+            raise RuntimeError("Codex GUI driver not initialized")
+        try:
+            driver.peek_target_with_timeout(
+                "personal_account_option",
+                timeout_ms=self._personal_account_probe_timeout_ms(),
+            )
+        except Exception as exc:
+            self._log(f"[{stage}] consent personal account option not found, skip selecting: {exc}")
+            return False
+        self._run_action(
+            f"[{stage}] consent 页面选择个人帐户",
+            lambda: driver.click_named_target("personal_account_option"),
+        )
+        return True
 
     def _cleanup_retry_attempts(self) -> int:
         value = self.extra_config.get("chatgpt_team_cleanup_max_attempts", self.extra_config.get("codex_gui_team_cleanup_max_attempts", 3))
@@ -851,9 +868,16 @@ class CodexGUIRegistrationEngine:
         tail_terminal_state = getattr(tail_result, "terminal_state", "") or ctx.terminal_state
         if tail_terminal_state:
             self._log(f"[注册] 终态: {tail_terminal_state}")
-        enroll_result = self._enroll_team_workspace(ctx)
-        if not enroll_result.success:
-            raise RuntimeError(f"工作空间加入阶段错误: {enroll_result.detail}")
+        if self._team_workspace_operations_enabled():
+            enroll_result = self._enroll_team_workspace(ctx)
+            if not enroll_result.success:
+                raise RuntimeError(f"工作空间加入阶段错误: {enroll_result.detail}")
+        else:
+            ctx.workspace_enroll_result = {
+                "workspace_enroll_success": False,
+                "workspace_enroll_skipped": True,
+                "workspace_enroll_detail": "team_account_not_configured",
+            }
         login_error: Exception | None = None
         try:
             if not self._oauth_login_completed:
@@ -875,6 +899,16 @@ class CodexGUIRegistrationEngine:
                 "terminal_state": ctx.terminal_state,
                 "detail": str(exc),
             }
+        if not self._team_workspace_operations_enabled():
+            ctx.cleanup_required = False
+            ctx.workspace_cleanup_result = {
+                "workspace_cleanup_success": False,
+                "workspace_cleanup_skipped": True,
+                "workspace_cleanup_detail": "team_account_not_configured",
+            }
+            if login_error is not None:
+                raise login_error
+            return ctx
         if not self._team_remove_after_login_enabled():
             ctx.cleanup_required = False
             ctx.workspace_cleanup_result = {

@@ -16,6 +16,7 @@ import {
   Typography,
   Alert,
   DatePicker,
+  Switch,
   theme,
 } from 'antd'
 import type { MenuProps } from 'antd'
@@ -816,8 +817,12 @@ export default function Accounts() {
     try {
       const cfg = await apiFetch('/config')
       const normalizedExecutor = normalizeExecutorForPlatform(currentPlatform, cfg.default_executor)
+      const officialSignupEnabled =
+        currentPlatform === 'chatgpt' && Boolean(values.codex_gui_official_signup_enabled)
       const effectiveMode =
-        currentPlatform === 'chatgpt' && normalizedExecutor === GUI_CONTROL_EXECUTOR
+        officialSignupEnabled
+          ? CHATGPT_REGISTRATION_MODE_CODEX_GUI
+          : currentPlatform === 'chatgpt' && normalizedExecutor === GUI_CONTROL_EXECUTOR
           ? CHATGPT_REGISTRATION_MODE_CODEX_GUI
           : chatgptRegistrationMode
       const executorType = resolveChatGPTExecutorType(
@@ -893,6 +898,9 @@ export default function Accounts() {
       const adaptedRegisterExtra = chatgptRegistrationRequestAdapter
         ? chatgptRegistrationRequestAdapter.extendExtra(registerExtra)
         : registerExtra
+      const finalRegisterExtra = officialSignupEnabled
+        ? { ...adaptedRegisterExtra, codex_gui_variant: 'official_signup' }
+        : adaptedRegisterExtra
 
       const res = await apiFetch('/tasks/register', {
         method: 'POST',
@@ -904,7 +912,7 @@ export default function Accounts() {
           executor_type: executorType,
           captcha_solver: cfg.default_captcha_solver || 'yescaptcha',
           proxy: null,
-          extra: adaptedRegisterExtra,
+          extra: finalRegisterExtra,
         }),
       })
       setTaskId(res.task_id)
@@ -1495,6 +1503,15 @@ export default function Accounts() {
                     mode={chatgptRegistrationMode}
                     onChange={setChatgptRegistrationMode}
                   />
+                  <Form.Item
+                    name="codex_gui_official_signup_enabled"
+                    label="官方注册链路"
+                    valuePropName="checked"
+                    initialValue={false}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                  </Form.Item>
                 </Space>
               </Form.Item>
             )}

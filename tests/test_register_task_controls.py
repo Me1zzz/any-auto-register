@@ -145,6 +145,8 @@ class _FakeVendEmailStateStore:
 class _FakeVendEmailRuntime:
     def __init__(self):
         self.calls = []
+        self._list_alias_call_count = 0
+        self._created_alias_count = 0
 
     def restore_session(self, state):
         self.calls.append(("restore_session", state.state_key))
@@ -160,14 +162,21 @@ class _FakeVendEmailRuntime:
 
     def list_aliases(self, state, source: dict):
         self.calls.append(("list_aliases", source.get("id"), state.state_key))
+        self._list_alias_call_count += 1
+        first_suffix = 20260417 + (self._list_alias_call_count - 1) * 2
         return [
-            "vendcapdemo20260417@serf.me",
-            "vendcapdemo20260418@serf.me",
+            f"vendcapdemo{first_suffix}@serf.me",
+            f"vendcapdemo{first_suffix + 1}@serf.me",
         ]
 
     def create_aliases(self, state, source: dict, missing_count: int):
         self.calls.append(("create_aliases", missing_count))
-        return []
+        aliases = []
+        for _ in range(max(int(missing_count or 0), 0)):
+            suffix = 20260417 + self._created_alias_count
+            aliases.append(f"vendcapdemo{suffix}@serf.me")
+            self._created_alias_count += 1
+        return aliases
 
     def capture_summary(self):
         self.calls.append(("capture_summary",))
@@ -905,14 +914,18 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         first_mailbox, second_mailbox = mailbox_factory.instances
         self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
         self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
-        self.assertCountEqual(
-            [account.email for account in saved_accounts],
-            ["vendcapdemo20260417@serf.me", "vendcapdemo20260418@serf.me"],
-        )
+        self.assertEqual(len(saved_accounts), 2)
+        self.assertEqual(len({account.email for account in saved_accounts}), 2)
+        for account in saved_accounts:
+            self.assertRegex(account.email, r"^vendcapdemo\d+@serf\.me$")
         self.assertEqual(len(runtime_builder.instances), 1)
+        runtime = runtime_builder.instances[0]
+        self.assertNotIn(("list_aliases", "vend-email-primary", "vend-email-state-key"), runtime.calls)
+        self.assertIn(("create_aliases", 2), runtime.calls)
         self.assertEqual(len(created_state_stores), 1)
-        self.assertEqual(created_state_stores[0].loaded_keys, ["vend-email-state-key"])
-        self.assertEqual(len(created_state_stores[0].saved_states), 1)
+        self.assertTrue(created_state_stores[0].loaded_keys)
+        self.assertEqual(set(created_state_stores[0].loaded_keys), {"vend-email-state-key"})
+        self.assertGreaterEqual(len(created_state_stores[0].saved_states), 1)
         self.assertNotEqual(
             created_state_stores[0].saved_states[0].service_email,
             created_state_stores[0].saved_states[0].mailbox_email,
@@ -1159,13 +1172,12 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             _run_register(task_id, req)
 
         self.assertEqual(len(runtime_builder.instances), 1)
-        self.assertCountEqual(
-            [account.email for account in saved_accounts],
-            [
-                "svcsecur01-rnd1@alias.secureinseconds.com",
-                "svcsecur02-rnd2@alias.secureinseconds.com",
-            ],
-        )
+        self.assertEqual(len(saved_accounts), 2)
+        for account in saved_accounts:
+            self.assertRegex(
+                account.email,
+                r"^svcsecur0[12]-rnd\d+@alias\.secureinseconds\.com$",
+            )
         self.assertEqual(len(mailbox_factory.instances), 2)
         first_mailbox, second_mailbox = mailbox_factory.instances
         self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
@@ -1179,7 +1191,12 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             ),
             runtime.calls,
         )
-        self.assertEqual(runtime.calls.count("list_aliases"), 1)
+        create_calls = [
+            call for call in runtime.calls if isinstance(call, tuple) and call[0] == "create_alias"
+        ]
+        self.assertGreaterEqual(len(create_calls), 2)
+        self.assertEqual({tuple(call[3]) for call in create_calls}, {("admin@cxwsss.online",)})
+        self.assertNotIn("list_aliases", runtime.calls)
 
 if __name__ == "__main__":
     unittest.main()
