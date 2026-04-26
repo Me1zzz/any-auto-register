@@ -210,7 +210,8 @@ class ChatGPTTeamWorkspaceTests(unittest.TestCase):
         self.assertEqual(context["failure_detail"], "remove failed")
         self.assertEqual(context["compensation_strategy"], "switch_team_account_cleanup")
 
-    def test_login_uses_cloudmail_admin_inbox_for_team_account_otp(self):
+    def test_login_uses_full_cloudmail_list_for_team_account_otp(self):
+        from platforms.chatgpt.codex_gui.services.email_code_service import EmailCodeServiceAdapter
         from platforms.chatgpt.team_workspace import login_chatgpt_team_account
 
         oauth_instance = mock.Mock()
@@ -244,9 +245,23 @@ class ChatGPTTeamWorkspaceTests(unittest.TestCase):
         mailbox.get_current_ids.assert_called_once()
         mailbox_account = mailbox.get_current_ids.call_args.args[0]
         self.assertEqual(mailbox_account.email, "manager@example.com")
-        self.assertEqual(mailbox_account.account_id, "admin@example.com")
+        self.assertEqual(mailbox_account.account_id, "")
+        self.assertEqual(
+            mailbox_account.extra,
+            {
+                "mailbox_alias": {
+                    "enabled": True,
+                    "alias_email": "manager@example.com",
+                    "mailbox_email": "",
+                }
+            },
+        )
         oauth_instance.login_and_get_tokens.assert_called_once()
         self.assertEqual(oauth_instance.login_and_get_tokens.call_args.args[:3], ("manager@example.com", "", ""))
+        skymail_client = oauth_instance.login_and_get_tokens.call_args.kwargs["skymail_client"]
+        self.assertIsInstance(skymail_client, EmailCodeServiceAdapter)
+        self.assertEqual(skymail_client.email, "manager@example.com")
+        self.assertTrue(skymail_client.uses_cloudmail_message_dedupe)
 
     def test_remove_deletes_joined_member_by_email(self):
         from platforms.chatgpt.team_workspace import (

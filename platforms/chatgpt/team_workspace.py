@@ -16,6 +16,7 @@ from core.base_mailbox import CloudMailMailbox, MailboxAccount
 from core.config_store import config_store
 from core.proxy_utils import build_requests_proxy_config
 
+from .codex_gui.services.email_code_service import EmailCodeServiceAdapter
 from .oauth_client import OAuthClient
 
 try:
@@ -99,19 +100,19 @@ class TeamWorkspaceEmailService:
         if not self._acct:
             self._acct = MailboxAccount(
                 email=self.team_email,
-                account_id=self.mailbox_email,
+                account_id="",
                 extra={
                     "mailbox_alias": {
                         "enabled": True,
                         "alias_email": self.team_email,
-                        "mailbox_email": self.mailbox_email,
+                        "mailbox_email": "",
                     }
                 },
             )
             get_current_ids = getattr(self.mailbox, "get_current_ids", None)
             if callable(get_current_ids):
                 self._before_ids = set(get_current_ids(self._acct) or [])
-        return {"email": self.team_email, "service_id": self.mailbox_email, "token": ""}
+        return {"email": self.team_email, "service_id": "", "token": ""}
 
     def remember_successful_code(self, code: str) -> None:
         code = str(code or "").strip()
@@ -553,6 +554,12 @@ def login_chatgpt_team_account(
     timeout_seconds = _read_int_config(config, "mailbox_otp_timeout_seconds", default=600, minimum=30, maximum=3600)
     email_service = TeamWorkspaceEmailService(mailbox, email, mailbox_email, timeout_seconds)
     email_service.create_email()
+    otp_log_fn = (
+        (lambda message: log_fn(f"[ChatGPT Team] {message}"))
+        if log_fn
+        else (lambda _message: None)
+    )
+    otp_adapter = EmailCodeServiceAdapter(email_service, email, otp_log_fn)
 
     oauth_client = OAuthClient(
         config,
@@ -568,7 +575,7 @@ def login_chatgpt_team_account(
         email,
         password,
         "",
-        skymail_client=email_service,
+        skymail_client=otp_adapter,
         prefer_passwordless_login=True,
         allow_phone_verification=False,
         force_new_browser=True,

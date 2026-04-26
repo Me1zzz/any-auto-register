@@ -1279,20 +1279,35 @@ class CloudMailMailbox(BaseMailbox):
     def _resolve_lookup_context(self, account: MailboxAccount) -> tuple[str, str, str]:
         mailbox_email = str(account.account_id or "").strip()
         account_email = str(account.email or "").strip()
+        normalized_mailbox = self._normalize_email_value(mailbox_email)
+        normalized_account = self._normalize_email_value(account_email)
+
+        extra = getattr(account, "extra", None)
+        alias_config = extra.get("mailbox_alias") if isinstance(extra, dict) else None
+        configured_alias = ""
+        if isinstance(alias_config, dict) and alias_config.get("enabled"):
+            configured_alias = self._normalize_email_value(
+                alias_config.get("alias_email") or account_email
+            )
+
+        alias_email = configured_alias
+        if not alias_email and normalized_account and normalized_account != normalized_mailbox:
+            alias_email = normalized_account
+
+        if alias_email:
+            return "", alias_email, f"recipient:{alias_email}"
 
         if mailbox_email:
-            alias_email = ""
-            if self._normalize_email_value(mailbox_email) != self._normalize_email_value(account_email):
-                alias_email = self._normalize_email_value(account_email)
-            if alias_email:
-                return alias_email, alias_email, mailbox_email
             return mailbox_email, alias_email, mailbox_email
 
-        alias_email = self._normalize_email_value(account_email)
+        alias_email = normalized_account
         seen_key = f"recipient:{alias_email}" if alias_email else ""
         return "", alias_email, seen_key
 
     def _resolve_lookup_targets(self, target: str, alias_email: str) -> list[str]:
+        if not self._normalize_email_value(target):
+            return [""]
+
         targets: list[str] = []
         for candidate in (alias_email, target):
             normalized = self._normalize_email_value(candidate)
@@ -1801,7 +1816,7 @@ class CloudMailMailbox(BaseMailbox):
         self._last_matched_message_id = ""
         target, alias_email, seen_key = self._resolve_lookup_context(account)
         mailbox_target = self._normalize_email_value(getattr(account, "account_id", ""))
-        allow_mailbox_fallback = self._should_allow_mailbox_fallback(
+        allow_mailbox_fallback = bool(target) and self._should_allow_mailbox_fallback(
             alias_email=alias_email,
             mailbox_target=mailbox_target,
             account=account,
