@@ -6,7 +6,6 @@ from platforms.chatgpt.codex_gui.steps.official_signup import (
     ClickOfficialSignupFreeSignupStep,
     OpenOfficialSignupRuntimeProfileStep,
     SubmitOfficialSignupEmailStep,
-    TypeChatGPTHomeStep,
 )
 from platforms.chatgpt.codex_gui.steps.registration.submit_registration_password_step import SubmitRegistrationPasswordStep
 
@@ -17,7 +16,6 @@ class OfficialSignupWorkflow:
     def __init__(self, steps=None):
         self._steps = list(steps) if steps is not None else [
             OpenOfficialSignupRuntimeProfileStep(),
-            TypeChatGPTHomeStep(),
             ClickOfficialSignupFreeSignupStep(),
             SubmitOfficialSignupEmailStep(),
             SubmitRegistrationPasswordStep(),

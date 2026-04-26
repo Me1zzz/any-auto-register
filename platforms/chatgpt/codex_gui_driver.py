@@ -20,7 +20,7 @@ from .target_detector import (
 class CodexGUIDriver:
     """Codex GUI 驱动抽象接口。"""
 
-    def open_new_profile_browser(self) -> None:
+    def open_new_profile_browser(self, startup_url: str | None = None) -> None:
         """打开使用 runtime profile 的浏览器会话。"""
         raise NotImplementedError
 
@@ -673,13 +673,14 @@ class PyAutoGUICodexGUIDriver(CodexGUIDriver):
         self._browser_session.open_url(url, reuse_current=reuse_current)
         self._sync_facade_from_components()
 
-    def open_new_profile_browser(self) -> None:
+    def open_new_profile_browser(self, startup_url: str | None = None) -> None:
         self._log_debug("[浏览器] 开始打开 runtime profile 浏览器")
         self._sync_components_from_facade()
+        resolved_startup_url = self._url_for_playwright_navigation(startup_url) if startup_url else None
         if self._detector_kind() == "pywinauto":
-            self._browser_session.launch_edge_process_only()
+            self._browser_session.launch_edge_process_only(startup_url=resolved_startup_url)
         else:
-            self._browser_session.ensure_browser_session()
+            self._browser_session.ensure_browser_session(startup_url=resolved_startup_url)
         self._sync_facade_from_components()
 
     def navigate_with_address_bar(self, url: str) -> None:

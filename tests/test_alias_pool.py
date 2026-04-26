@@ -2922,7 +2922,10 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         runtime = VendEmailContractRuntime(executor=executor)
 
         listed = runtime.list_forwarders(state, source)
-        with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("42", "serf.me")):
+        with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("42", "serf.me")), mock.patch(
+            "core.alias_pool.vend_email_service.secrets.choice",
+            side_effect=list("q1w2e3r4t5y6"),
+        ):
             aliases = runtime.create_aliases(state, source, 1)
 
         self.assertEqual(
@@ -2940,9 +2943,54 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertEqual(executor.calls[0]["request_body_excerpt"], "")
         self.assertEqual(executor.calls[1]["url"], "https://www.vend.email/forwarders/new")
         self.assertIn("authenticity_token=forwarder-auth-token", executor.calls[2]["request_body_excerpt"])
-        self.assertIn("forwarder[local_part]=vendcap202604170108", executor.calls[2]["request_body_excerpt"])
+        self.assertIn("forwarder[local_part]=q1w2e3r4t5y6", executor.calls[2]["request_body_excerpt"])
+        self.assertNotIn("forwarder[local_part]=vendcap202604170108", executor.calls[2]["request_body_excerpt"])
         self.assertIn("forwarder[domain_id]=42", executor.calls[2]["request_body_excerpt"])
         self.assertIn("forwarder[recipient]=admin%40cxwsss.online", executor.calls[2]["request_body_excerpt"])
+
+    def test_contract_create_aliases_uses_random_local_parts_instead_of_service_prefix(self):
+        state = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-secret",
+            mailbox_email="admin@cxwsss.online",
+        )
+        source = {
+            "register_url": "https://www.vend.email",
+            "mailbox_email": "admin@cxwsss.online",
+            "alias_domain": "serf.me",
+            "alias_domain_id": "42",
+            "alias_count": 2,
+        }
+        executor = _FakeVendEmailExecutor(
+            [
+                _html_execution(html=FORWARDERS_NEW_FORM_HTML, final_url="https://www.vend.email/forwarders/new"),
+                _html_execution(
+                    html="<html><body><h1>mx8q4t2p6z1a@serf.me</h1></body></html>",
+                    final_url="https://www.vend.email/forwarders/mx8q4t2p6z1a@serf.me",
+                    status=302,
+                ),
+                _html_execution(html=FORWARDERS_NEW_FORM_HTML, final_url="https://www.vend.email/forwarders/new"),
+                _html_execution(
+                    html="<html><body><h1>r9c3v7b5n0yh@serf.me</h1></body></html>",
+                    final_url="https://www.vend.email/forwarders/r9c3v7b5n0yh@serf.me",
+                    status=302,
+                ),
+            ]
+        )
+        runtime = VendEmailContractRuntime(executor=executor)
+
+        with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("42", "serf.me")), mock.patch(
+            "core.alias_pool.vend_email_service.secrets.choice",
+            side_effect=list("mx8q4t2p6z1ar9c3v7b5n0yh"),
+        ):
+            aliases = runtime.create_aliases(state, source, 2)
+
+        self.assertEqual(aliases, ["mx8q4t2p6z1a@serf.me", "r9c3v7b5n0yh@serf.me"])
+        self.assertIn("forwarder[local_part]=mx8q4t2p6z1a", executor.calls[1]["request_body_excerpt"])
+        self.assertIn("forwarder[local_part]=r9c3v7b5n0yh", executor.calls[3]["request_body_excerpt"])
+        for call in (executor.calls[1], executor.calls[3]):
+            self.assertNotIn("forwarder[local_part]=vendcap202604170108", call["request_body_excerpt"])
 
     def test_parse_forwarder_domain_options_reads_live_domain_selector_from_html(self):
         runtime = VendEmailContractRuntime(executor=_FakeVendEmailExecutor([]))

@@ -19,10 +19,11 @@ class _FakeDriver:
     def __init__(self):
         self.current_url = ""
         self.events = []
+        self.free_signup_visible = True
 
-    def open_new_profile_browser(self) -> None:
-        self.events.append(("open_new_profile_browser",))
-        self.current_url = "about:blank"
+    def open_new_profile_browser(self, startup_url: str | None = None) -> None:
+        self.events.append(("open_new_profile_browser", startup_url))
+        self.current_url = startup_url or "about:blank"
 
     def navigate_with_address_bar(self, url: str) -> None:
         self.events.append(("navigate_with_address_bar", url))
@@ -40,6 +41,12 @@ class _FakeDriver:
     def input_text(self, name: str, text: str) -> None:
         self.events.append(("input", name, text))
 
+    def peek_target_with_timeout(self, name: str, timeout_ms: int):
+        self.events.append(("peek", name, timeout_ms))
+        if name == "official_signup_free_signup_button" and self.free_signup_visible:
+            return ("text", "免费注册", {"x": 1, "y": 1, "width": 2, "height": 2})
+        raise RuntimeError("target not visible")
+
     def read_current_url(self) -> str:
         return self.current_url
 
@@ -53,12 +60,19 @@ class _FakeEngine:
         self.stage_markers = []
         self.stage_ready_calls = []
         self.profile_completion_calls = []
+        self.stage_ready_results = []
 
     def _log_step(self, stage: str, detail: str) -> None:
         self.logs.append((stage, detail))
 
+    def _log(self, message: str, level: str = "info") -> None:
+        self.logs.append((level, message))
+
     def _wait_timeout(self, key: str, default: int) -> int:
         return default
+
+    def _stage_dom_probe_timeout_ms(self) -> int:
+        return 750
 
     def _run_action(self, description: str, action) -> None:
         self.logs.append(("action", description))
@@ -72,6 +86,11 @@ class _FakeEngine:
 
     def _wait_for_stage_ready(self, stage: str, *, timeout: int) -> str:
         self.stage_ready_calls.append((stage, timeout))
+        if self.stage_ready_results:
+            result = self.stage_ready_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
         return self._driver.read_current_url()
 
     def _wait_for_registration_profile_disappear_or_terminal(self, *, timeout: int) -> str:
@@ -103,23 +122,23 @@ def _make_context(extra_config=None):
 
 
 class OfficialSignupStartupStepTests(unittest.TestCase):
-    def test_default_workflow_starts_with_runtime_profile_and_chatgpt_home_steps(self):
+    def test_default_workflow_starts_with_runtime_profile_home_and_skips_address_bar_step(self):
         workflow = OfficialSignupWorkflow()
 
         self.assertEqual(
             [step.step_id for step in workflow._steps[:3]],
             [
                 "official_signup.open_runtime_profile",
-                "official_signup.type_chatgpt_home",
                 "official_signup.click_free_signup",
+                "official_signup.submit_email",
             ],
         )
 
     def test_default_workflow_reuses_original_registration_password_step(self):
         workflow = OfficialSignupWorkflow()
 
-        self.assertEqual(workflow._steps[3].step_id, "official_signup.submit_email")
-        self.assertEqual(workflow._steps[4].step_id, "registration.submit_password")
+        self.assertEqual(workflow._steps[2].step_id, "official_signup.submit_email")
+        self.assertEqual(workflow._steps[3].step_id, "registration.submit_password")
 
     def test_open_runtime_profile_step_initializes_new_profile_browser(self):
         driver = _FakeDriver()
@@ -129,7 +148,9 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
         result = OpenOfficialSignupRuntimeProfileStep().run(engine, ctx)
 
         self.assertTrue(result.success)
-        self.assertEqual(driver.events, [("open_new_profile_browser",)])
+        self.assertEqual(driver.events, [("open_new_profile_browser", "https://chatgpt.com")])
+        self.assertEqual(result.matched_url, "https://chatgpt.com")
+        self.assertEqual(engine.stage_ready_calls, [("官网注册-首页", 60)])
         self.assertEqual(ctx.current_stage, "官网注册-打开 runtime profile 浏览器")
         self.assertIn("runtime profile", engine.logs[0][1])
 
@@ -198,6 +219,54 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
         self.assertEqual(engine.stage_ready_calls, [("官网注册-登录或注册弹窗", 60)])
         self.assertEqual(engine.waits, [])
 
+    def test_click_free_signup_step_retries_when_dialog_missing_and_home_button_still_visible(self):
+        driver = _FakeDriver()
+        engine = _FakeEngine(driver)
+        engine.stage_ready_results = [
+            RuntimeError("[官网注册-登录或注册弹窗] 等待页面阶段就绪超时"),
+            "https://chatgpt.com/",
+        ]
+        ctx = _make_context()
+
+        result = ClickOfficialSignupFreeSignupStep().run(engine, ctx)
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            driver.events,
+            [
+                ("click", "official_signup_free_signup_button"),
+                ("peek", "official_signup_free_signup_button", 750),
+                ("click", "official_signup_free_signup_button"),
+            ],
+        )
+        self.assertEqual(
+            engine.stage_ready_calls,
+            [
+                ("官网注册-登录或注册弹窗", 60),
+                ("官网注册-登录或注册弹窗", 60),
+            ],
+        )
+
+    def test_click_free_signup_step_does_not_retry_when_home_button_is_gone(self):
+        driver = _FakeDriver()
+        driver.free_signup_visible = False
+        engine = _FakeEngine(driver)
+        engine.stage_ready_results = [
+            RuntimeError("[官网注册-登录或注册弹窗] 等待页面阶段就绪超时"),
+        ]
+        ctx = _make_context()
+
+        with self.assertRaisesRegex(RuntimeError, "等待页面阶段就绪超时"):
+            ClickOfficialSignupFreeSignupStep().run(engine, ctx)
+
+        self.assertEqual(
+            driver.events,
+            [
+                ("click", "official_signup_free_signup_button"),
+                ("peek", "official_signup_free_signup_button", 750),
+            ],
+        )
+
     def test_submit_email_waits_for_password_page_marker_in_pywinauto_mode(self):
         driver = _FakeDriver()
         engine = _FakeEngine(driver, pywinauto=True)
@@ -234,9 +303,9 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
         driver = PyAutoGUICodexGUIDriver(extra_config={}, logger_fn=logs.append)
         driver._browser_session.ensure_browser_session = mock.Mock(return_value=object())
 
-        driver.open_new_profile_browser()
+        driver.open_new_profile_browser("https://chatgpt.com")
 
-        driver._browser_session.ensure_browser_session.assert_called_once()
+        driver._browser_session.ensure_browser_session.assert_called_once_with(startup_url="https://chatgpt.com")
         self.assertTrue(any("runtime profile" in entry for entry in logs))
 
     def test_driver_open_new_profile_browser_in_pywinauto_mode_does_not_start_playwright_session(self):
@@ -248,9 +317,9 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
         driver._browser_session.ensure_browser_session = mock.Mock(side_effect=AssertionError("must not attach playwright"))
         driver._browser_session.launch_edge_process_only = mock.Mock(return_value=object())
 
-        driver.open_new_profile_browser()
+        driver.open_new_profile_browser("https://chatgpt.com")
 
-        driver._browser_session.launch_edge_process_only.assert_called_once()
+        driver._browser_session.launch_edge_process_only.assert_called_once_with(startup_url="https://chatgpt.com")
         driver._browser_session.ensure_browser_session.assert_not_called()
 
     def test_driver_address_bar_navigation_normalizes_bare_domain_for_playwright_mode(self):
@@ -301,6 +370,29 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
         self.assertEqual(args[-1], "about:blank")
         self.assertIs(session._edge_process, process)
         self.assertEqual(session._edge_user_data_dir, r"D:\Temp\EdgeRuntime")
+
+    def test_browser_session_process_only_launch_uses_explicit_startup_url(self):
+        logs = []
+        session = PlaywrightEdgeBrowserSession(
+            extra_config={
+                "codex_gui_edge_profile_directory": "Default",
+                "codex_gui_edge_startup_url": "about:blank",
+            },
+            logger_fn=logs.append,
+            import_playwright=lambda: self.fail("playwright should not be imported"),
+            resolve_edge_command=lambda: r"C:\Edge\msedge.exe",
+        )
+        process = mock.Mock()
+        session.prepare_edge_runtime_user_data_dir = mock.Mock(return_value=r"D:\Temp\EdgeRuntime")
+
+        with mock.patch("platforms.chatgpt.browser_session.subprocess.Popen", return_value=process) as popen_mock, mock.patch(
+            "platforms.chatgpt.browser_session.time.sleep"
+        ):
+            launched = session.launch_edge_process_only(startup_url="https://chatgpt.com")
+
+        self.assertIs(launched, process)
+        args = popen_mock.call_args.args[0]
+        self.assertEqual(args[-1], "https://chatgpt.com")
 
 
 if __name__ == "__main__":

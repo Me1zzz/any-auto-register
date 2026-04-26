@@ -48,7 +48,7 @@ class PlaywrightEdgeBrowserSession:
             raise RuntimeError("Edge DOM 页面未初始化")
         return self._page
 
-    def ensure_browser_session(self):
+    def ensure_browser_session(self, *, startup_url: str | None = None):
         if self._page is not None:
             return self._page
         attach_mode = str(self.extra_config.get("codex_gui_browser_attach_mode") or "cdp").strip().lower()
@@ -57,8 +57,8 @@ class PlaywrightEdgeBrowserSession:
         sync_playwright = self._import_playwright()
         self._pw = sync_playwright().start()
         if attach_mode == "launch":
-            return self.ensure_playwright_launch_session()
-        return self.ensure_edge_cdp_session()
+            return self.ensure_playwright_launch_session(startup_url=startup_url)
+        return self.ensure_edge_cdp_session(startup_url=startup_url)
 
     def get_free_port(self) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -66,7 +66,11 @@ class PlaywrightEdgeBrowserSession:
             sock.listen(1)
             return int(sock.getsockname()[1])
 
-    def build_edge_launch_args(self) -> list[str]:
+    def _resolve_startup_url(self, startup_url: str | None = None) -> str:
+        configured = self.extra_config.get("codex_gui_edge_startup_url")
+        return str(startup_url or configured or "about:blank").strip() or "about:blank"
+
+    def build_edge_launch_args(self, *, startup_url: str | None = None) -> list[str]:
         edge_command = self._resolve_edge_command()
         args = [edge_command]
         cdp_port = self._cdp_port or self.get_free_port()
@@ -92,12 +96,11 @@ class PlaywrightEdgeBrowserSession:
         proxy_value = str(self.extra_config.get("proxy") or self.extra_config.get("proxy_url") or "").strip()
         if proxy_value:
             args.append(f"--proxy-server={proxy_value}")
-        startup_url = str(self.extra_config.get("codex_gui_edge_startup_url") or "about:blank").strip() or "about:blank"
-        args.append(startup_url)
+        args.append(self._resolve_startup_url(startup_url))
         self._log_debug(f"[浏览器] 真实 Edge 启动参数: {args}")
         return args
 
-    def build_edge_process_only_args(self) -> list[str]:
+    def build_edge_process_only_args(self, *, startup_url: str | None = None) -> list[str]:
         edge_command = self._resolve_edge_command()
         configured_user_data_dir = str(self.extra_config.get("codex_gui_edge_user_data_dir") or "").strip()
         user_data_dir = self.prepare_edge_runtime_user_data_dir(configured_user_data_dir)
@@ -115,20 +118,19 @@ class PlaywrightEdgeBrowserSession:
         proxy_value = str(self.extra_config.get("proxy") or self.extra_config.get("proxy_url") or "").strip()
         if proxy_value:
             args.append(f"--proxy-server={proxy_value}")
-        startup_url = str(self.extra_config.get("codex_gui_edge_startup_url") or "about:blank").strip() or "about:blank"
-        args.append(startup_url)
+        args.append(self._resolve_startup_url(startup_url))
         self._log_debug(
             f"[浏览器] process-only Edge 启动参数: codex_gui_edge_user_data_dir={user_data_dir}, "
             f"codex_gui_edge_profile_directory={profile_directory or '(default)'}, args={args}"
         )
         return args
 
-    def launch_edge_process_only(self):
+    def launch_edge_process_only(self, *, startup_url: str | None = None):
         if self._edge_process is not None:
             return self._edge_process
         self._log_debug("[浏览器] 开始: 仅启动 Edge 进程，不初始化 Playwright/CDP")
         ensure_browser_display_available(False)
-        launch_args = self.build_edge_process_only_args()
+        launch_args = self.build_edge_process_only_args(startup_url=startup_url)
         self._edge_process = subprocess.Popen(launch_args)
         time.sleep(max(0.1, self._browser_settle_seconds))
         return self._edge_process
@@ -247,11 +249,11 @@ class PlaywrightEdgeBrowserSession:
         )
         return self._page
 
-    def ensure_edge_cdp_session(self):
+    def ensure_edge_cdp_session(self, *, startup_url: str | None = None):
         if self._pw is None:
             raise RuntimeError("Playwright 未初始化，无法通过 CDP 附着 Edge")
         self.validate_profile_for_cdp()
-        launch_args = self.build_edge_launch_args()
+        launch_args = self.build_edge_launch_args(startup_url=startup_url)
         self._edge_process = subprocess.Popen(launch_args)
         try:
             cdp_base_url = self.wait_for_cdp_endpoint()
@@ -272,7 +274,7 @@ class PlaywrightEdgeBrowserSession:
         self._browser = pw.chromium.connect_over_cdp(cdp_base_url)
         return self.pick_cdp_page()
 
-    def ensure_playwright_launch_session(self):
+    def ensure_playwright_launch_session(self, *, startup_url: str | None = None):
         if self._pw is None:
             raise RuntimeError("Playwright 未初始化，无法启动 Edge")
         launch_opts: dict[str, Any] = {"headless": False, "channel": "msedge", "args": ["--start-maximized"]}
@@ -288,6 +290,9 @@ class PlaywrightEdgeBrowserSession:
         self._browser = pw.chromium.launch(**launch_opts)
         self._context = self._browser.new_context(no_viewport=True, ignore_https_errors=True)
         self._page = self._context.new_page()
+        resolved_startup_url = self._resolve_startup_url(startup_url)
+        if resolved_startup_url != "about:blank":
+            self._page.goto(resolved_startup_url, wait_until="domcontentloaded", timeout=self._timeout_ms)
         try:
             self._page.evaluate(
                 """

@@ -48,12 +48,12 @@ class _FakeAliasMailbox(_FakeMailbox):
     def __init__(self):
         self._last_account = MailboxAccount(
             email="alias@example.com",
-            account_id="real@example.com",
+            account_id="",
             extra={
                 "mailbox_alias": {
                     "enabled": True,
                     "alias_email": "alias@example.com",
-                    "mailbox_email": "real@example.com",
+                    "mailbox_email": "",
                     "alias_domain": "example.com",
                     "alias_prefix": "",
                     "alias_suffix": "",
@@ -519,13 +519,13 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertEqual(len(saved_accounts), 1)
         account = saved_accounts[0]
         self.assertEqual(account.email, "alias@example.com")
-        self.assertEqual(account.extra.get("mailbox_email"), "real@example.com")
+        self.assertIsNone(account.extra.get("mailbox_email"))
         self.assertEqual(
             account.extra.get("mailbox_alias"),
             {
                 "enabled": True,
                 "alias_email": "alias@example.com",
-                "mailbox_email": "real@example.com",
+                "mailbox_email": "",
                 "alias_domain": "example.com",
                 "alias_prefix": "",
                 "alias_suffix": "",

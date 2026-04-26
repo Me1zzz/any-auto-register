@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from platforms.chatgpt.codex_gui.models import FlowStepResult
 from platforms.chatgpt.codex_gui.steps.base import BaseFlowStep
-from platforms.chatgpt.codex_gui.steps.common import require_driver, set_current_stage, verify_success
+from platforms.chatgpt.codex_gui.steps.common import require_driver, resolve_wait_timeout, set_current_stage, verify_success
 from platforms.chatgpt.codex_gui.steps.metadata import StepMetadata
 from platforms.chatgpt.codex_gui.steps.recovery import retry_step_or_abort
 
@@ -40,12 +40,16 @@ class OpenOfficialSignupRuntimeProfileStep(BaseFlowStep):
 
     def execute(self, engine, ctx):
         driver = require_driver(engine)
-        engine._log_step("官网注册", "打开一次性 runtime profile 的 Edge 浏览器")
-        driver.open_new_profile_browser()
+        wait_timeout = resolve_wait_timeout(engine)
+        home_url = str(ctx.extra_config.get("codex_gui_official_signup_home_url") or "https://chatgpt.com").strip()
+        engine._log_step("官网注册", f"打开首页为 {home_url} 的一次性 runtime profile Edge 浏览器")
+        driver.open_new_profile_browser(home_url)
+        matched_url = engine._wait_for_stage_ready("官网注册-首页", timeout=wait_timeout)
         runtime_user_data_dir = str(getattr(driver, "_edge_user_data_dir", "") or "").strip()
         return FlowStepResult(
             success=True,
             stage_name=self.stage_name,
+            matched_url=matched_url,
             payload={"runtime_user_data_dir": runtime_user_data_dir},
         )
 

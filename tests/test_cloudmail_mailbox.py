@@ -193,7 +193,7 @@ class CloudMailMailboxTests(unittest.TestCase):
             account = mailbox.get_email()
 
         self.assertEqual(account.email, "lease@alias.example.com")
-        self.assertEqual(account.account_id, "lease-real@mail.example.com")
+        self.assertEqual(account.account_id, "")
         self.assertEqual(mailbox._last_alias_lease, lease)
         self.assertEqual(
             account.extra,
@@ -201,7 +201,7 @@ class CloudMailMailboxTests(unittest.TestCase):
                 "mailbox_alias": {
                     "enabled": True,
                     "alias_email": "lease@alias.example.com",
-                    "mailbox_email": "lease-real@mail.example.com",
+                    "mailbox_email": "",
                 }
             },
         )

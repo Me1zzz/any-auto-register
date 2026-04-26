@@ -10,6 +10,7 @@ import random
 import re
 import secrets
 import socket
+import string
 import time
 from urllib.parse import urlencode, quote_plus
 from urllib.parse import unquote, urlsplit
@@ -487,6 +488,12 @@ class VendEmailRuntimeProtocolError(RuntimeError):
     pass
 
 
+_ALIAS_LOCAL_START_ALPHABET = string.ascii_lowercase
+_ALIAS_LOCAL_ALPHABET = string.ascii_lowercase + string.digits
+_ALIAS_LOCAL_PART_LENGTH = 12
+_ALIAS_LOCAL_PART_RETRY_LIMIT = 20
+
+
 @dataclass(frozen=True)
 class VendEmailForwarderRecord:
     alias_email: str
@@ -752,12 +759,11 @@ class VendEmailContractRuntime:
             return []
 
         aliases: list[str] = []
-        base_local_part = self._service_local_part(state) or "vend"
-        attempt = 0
+        generated_local_parts: set[str] = set()
 
         while len(aliases) < missing_count:
-            local_part = base_local_part if attempt == 0 else f"{base_local_part}{attempt + 1}"
-            attempt += 1
+            local_part = self._build_alias_local_part(generated_local_parts)
+            generated_local_parts.add(local_part)
             created = self.create_forwarder(
                 state,
                 source,
@@ -770,6 +776,22 @@ class VendEmailContractRuntime:
             aliases.append(created.alias_email)
 
         return aliases
+
+    def _build_alias_local_part(self, seen_local_parts: set[str] | None = None) -> str:
+        seen = seen_local_parts or set()
+        for _ in range(_ALIAS_LOCAL_PART_RETRY_LIMIT):
+            local_part = self._random_alias_local_part()
+            if local_part not in seen:
+                return local_part
+        return self._random_alias_local_part()
+
+    def _random_alias_local_part(self) -> str:
+        first = secrets.choice(_ALIAS_LOCAL_START_ALPHABET)
+        remainder = "".join(
+            secrets.choice(_ALIAS_LOCAL_ALPHABET)
+            for _ in range(_ALIAS_LOCAL_PART_LENGTH - 1)
+        )
+        return f"{first}{remainder}"
 
     def capture_summary(self) -> list[VendEmailCaptureRecord]:
         return list(self._captures)
@@ -847,12 +869,6 @@ class VendEmailContractRuntime:
 
     def _service_email(self, state) -> str:
         return str(getattr(state, "service_email", "") or "").strip().lower()
-
-    def _service_local_part(self, state) -> str:
-        service_email = self._service_email(state)
-        if "@" not in service_email:
-            return service_email
-        return service_email.split("@", 1)[0]
 
     def _service_password(self, state) -> str:
         return str(getattr(state, "service_password", "") or "")

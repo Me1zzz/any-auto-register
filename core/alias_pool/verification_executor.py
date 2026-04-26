@@ -111,6 +111,8 @@ class _MailboxReceiptMatcher:
             return True
 
         for key in (
+            "toEmail",
+            "toName",
             "sendEmail",
             "sendName",
             "from",
@@ -199,19 +201,18 @@ class VerificationExecutor:
         receipt_matcher = _MailboxReceiptMatcher()
         while time.monotonic() < deadline:
             try:
-                messages = mailbox._list_mails(target_email)
-                if not messages:
-                    messages = mailbox._list_mails("")
+                messages = mailbox._list_mails("")
                 last_error = ""
             except Exception as exc:
                 last_error = str(exc).strip()
                 time.sleep(5)
                 continue
             for message in messages:
-                if not (
-                    receipt_matcher.match_mailbox_target(message, target_email)
-                    or mailbox._match_alias_receipt(message, target_email)
-                ):
+                try:
+                    cloudmail_match = mailbox._match_alias_receipt(message, target_email)
+                except Exception:
+                    cloudmail_match = False
+                if not cloudmail_match and not receipt_matcher.match_alias_receipt(message, target_email):
                     continue
                 content = " ".join(
                     [

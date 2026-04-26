@@ -1743,15 +1743,16 @@ class CloudMailMailbox(BaseMailbox):
             alias_email = self._pick_alias_email()
             mailbox_email = self._resolve_mailbox_email(alias_email)
         primary_email = alias_email or mailbox_email
+        account_id = "" if alias_email else mailbox_email
+        metadata_mailbox_email = "" if alias_email else mailbox_email
         account = MailboxAccount(
             email=primary_email,
-            account_id=mailbox_email,
-            extra=self._build_account_extra(primary_email, mailbox_email),
+            account_id=account_id,
+            extra=self._build_account_extra(primary_email, metadata_mailbox_email),
         )
         self._last_account = account
         if alias_email:
-            mailbox_display = mailbox_email or "<recipient-only>"
-            self._log(f"[CloudMail] 生成邮箱: alias={account.email} mailbox={mailbox_display}")
+            self._log(f"[CloudMail] 生成邮箱: alias={account.email} lookup=<full-list>")
         else:
             self._log(f"[CloudMail] 生成邮箱: {mailbox_email}")
         return account
