@@ -36,7 +36,20 @@ class ClickOfficialSignupFreeSignupStep(BaseFlowStep):
             "[官网注册] 点击免费注册",
             lambda: driver.click_named_target("official_signup_free_signup_button"),
         )
-        matched_url = engine._wait_for_stage_ready("官网注册-登录或注册弹窗", timeout=wait_timeout)
+        try:
+            matched_url = engine._wait_for_stage_ready("官网注册-登录或注册弹窗", timeout=wait_timeout)
+        except RuntimeError as wait_error:
+            probe_timeout_ms = engine._stage_dom_probe_timeout_ms()
+            try:
+                driver.peek_target_with_timeout("official_signup_free_signup_button", probe_timeout_ms)
+            except Exception:
+                raise wait_error
+            run_named_action(
+                engine,
+                "[官网注册] 重试点击免费注册",
+                lambda: driver.click_named_target("official_signup_free_signup_button"),
+            )
+            matched_url = engine._wait_for_stage_ready("官网注册-登录或注册弹窗", timeout=wait_timeout)
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url)
 
     def verify(self, engine, ctx, result) -> None:
