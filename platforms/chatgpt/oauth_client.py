@@ -65,6 +65,7 @@ class OAuthClient:
         self.ua = ""
         self.sec_ch_ua = ""
         self.impersonate = ""
+        self._last_passwordless_otp_sent_at = 0.0
 
         # 创建 session
         self.session = curl_requests.Session()
@@ -1030,6 +1031,7 @@ class OAuthClient:
                 kwargs["impersonate"] = impersonate
 
             self._browser_pause()
+            self._last_passwordless_otp_sent_at = time.time()
             r = self.session.post(request_url, **kwargs)
             self._log(f"/passwordless/send-otp -> {r.status_code}")
 
@@ -2961,7 +2963,18 @@ class OAuthClient:
         self._log("步骤4: 检测到邮箱 OTP 验证")
         # 记录 OTP 发送时间基线——必须在 sentinel token 等耗时操作之前，
         # 否则邮件 created_at 会早于 otp_cutoff 导致验证码被误判为旧邮件。
-        _otp_sent_at_baseline = time.time()
+        use_recorded_passwordless_time = bool(
+            prefer_passwordless_login
+            or allow_cached_code_retry
+            or self.config.get("prefer_passwordless_login")
+            or self.config.get("force_passwordless_login")
+        )
+        recorded_passwordless_sent_at = (
+            float(getattr(self, "_last_passwordless_otp_sent_at", 0.0) or 0.0)
+            if use_recorded_passwordless_time
+            else 0.0
+        )
+        _otp_sent_at_baseline = recorded_passwordless_sent_at or time.time()
 
         def _resend_email_otp() -> bool:
             prefer_passwordless = bool(

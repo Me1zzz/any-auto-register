@@ -621,6 +621,59 @@ class CloudMailMailboxTests(unittest.TestCase):
         self.assertEqual(code, "654321")
 
     @mock.patch("requests.post")
+    def test_wait_for_code_skips_mail_older_than_otp_request_by_create_time(self, mock_post):
+        request_time = 1_775_000_000.0
+        cloudmail_offset_seconds = 8 * 60 * 60
+        mock_post.side_effect = [
+            _json_response({"code": 200, "data": {"token": "tok-1"}}),
+            _json_response(
+                {
+                    "code": 200,
+                    "data": [
+                        {
+                            "emailId": "team-invite",
+                            "subject": "You were invited to ChatGPT Team",
+                            "recipient": "alias@myalias.pro",
+                            "content": "Invitation for alias@myalias.pro. Ref 123456.",
+                            "createTime": int((request_time - cloudmail_offset_seconds - 10) * 1000),
+                        },
+                        {
+                            "emailId": "login-otp",
+                            "subject": "OpenAI login code",
+                            "recipient": "alias@myalias.pro",
+                            "content": "Your verification code is 654321.",
+                            "createTime": int((request_time - cloudmail_offset_seconds + 5) * 1000),
+                        },
+                    ],
+                }
+            ),
+        ]
+        mailbox = create_mailbox(
+            "cloudmail",
+            extra={
+                "cloudmail_api_base": "https://cloudmail.example.com",
+                "cloudmail_admin_email": "admin@example.com",
+                "cloudmail_admin_password": "secret",
+            },
+        )
+        account = MailboxAccount(
+            email="alias@myalias.pro",
+            account_id="",
+            extra={
+                "mailbox_alias": {
+                    "enabled": True,
+                    "alias_email": "alias@myalias.pro",
+                    "mailbox_email": "",
+                }
+            },
+        )
+
+        code = mailbox.wait_for_code(account, timeout=5, otp_sent_at=request_time)
+
+        self.assertEqual(code, "654321")
+        self.assertEqual(mailbox._last_matched_message_id, "login-otp")
+
+    @mock.patch("requests.post")
     def test_get_current_ids_filters_by_recipient_from_full_list_for_alias(self, mock_post):
         mock_post.side_effect = [
             _json_response({"code": 200, "data": {"token": "tok-1"}}),

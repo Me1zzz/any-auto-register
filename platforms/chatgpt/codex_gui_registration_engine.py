@@ -657,6 +657,7 @@ class CodexGUIRegistrationEngine:
         if driver is None:
             raise RuntimeError("Codex GUI 驱动未初始化")
         detector_kind = str(self.extra_config.get("codex_gui_target_detector") or "").strip().lower()
+        otp_sent_at = time.time()
         if detector_kind == "pywinauto":
             # pywinauto 模式下无法像 DOM 那样快速探测页面状态，因此使用更长的重发与轮询策略。
             resend_wait_min = float(self.extra_config.get("codex_gui_otp_resend_wait_seconds_min", 5) or 5)
@@ -673,7 +674,7 @@ class CodexGUIRegistrationEngine:
                     code = adapter.wait_for_verification_code(
                         adapter.email,
                         timeout=max(1, int(round(wait_seconds))),
-                        otp_sent_at=time.time(),
+                        otp_sent_at=otp_sent_at,
                         exclude_codes=exclude_codes,
                     )
                 except TimeoutError as exc:
@@ -694,7 +695,6 @@ class CodexGUIRegistrationEngine:
             raise RuntimeError(f"[{stage}] 多次重发后仍未收到验证码，判定当前 OAuth 失败")
         resend_timeout = self._wait_timeout("codex_gui_otp_wait_seconds", 55)
         resend_attempts = self._wait_timeout("codex_gui_otp_max_resends", 1)
-        otp_sent_at = time.time()
         for attempt in range(resend_attempts + 1):
             # Playwright 路径按统一超时等待 OTP，并在必要时触发一次或多次重发。
             exclude_codes = adapter.build_exclude_codes()
@@ -715,7 +715,6 @@ class CodexGUIRegistrationEngine:
                     str(self.extra_config.get("codex_gui_resend_target") or "resend_email_button").strip()
                 ),
             )
-            otp_sent_at = time.time()
         raise RuntimeError(f"[{stage}] 等待验证码失败")
 
     def _run_registration_flow(self, auth_url: str, identity: CodexGUIIdentity, adapter: EmailServiceAdapter) -> None:

@@ -776,6 +776,63 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         resend_clicks = [event for event in driver.events if event == ("click", "resend_email_button")]
         self.assertEqual(len(resend_clicks), 1)
 
+    def test_collect_verification_code_pywinauto_keeps_original_otp_sent_at_after_resend(self):
+        driver = _FakeDriver()
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService([]),
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_target_detector": "pywinauto",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_otp_resend_wait_seconds_min": 5,
+                "codex_gui_otp_resend_wait_seconds_max": 5,
+                "codex_gui_otp_max_resends_min": 2,
+                "codex_gui_otp_max_resends_max": 2,
+            },
+        )
+        engine._driver = driver
+        adapter = mock.Mock(spec=EmailServiceAdapter)
+        adapter.email = "user@example.com"
+        adapter.build_exclude_codes.return_value = set()
+        adapter.wait_for_verification_code.side_effect = [TimeoutError("mail wait timed out"), "123456"]
+
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=[1000.0, 2000.0]):
+            code = engine._collect_verification_code(adapter, stage="login")
+
+        self.assertEqual(code, "123456")
+        otp_sent_values = [
+            call.kwargs["otp_sent_at"] for call in adapter.wait_for_verification_code.call_args_list
+        ]
+        self.assertEqual(otp_sent_values, [1000.0, 1000.0])
+
+    def test_collect_verification_code_keeps_original_otp_sent_at_after_resend(self):
+        driver = _FakeDriver()
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService([]),
+            callback_logger=lambda _msg: None,
+            extra_config={
+                "chatgpt_registration_mode": "codex_gui",
+                "codex_gui_resend_target": "resend_email_button",
+                "codex_gui_otp_wait_seconds": 5,
+                "codex_gui_otp_max_resends": 1,
+            },
+        )
+        engine._driver = driver
+        adapter = mock.Mock(spec=EmailServiceAdapter)
+        adapter.email = "user@example.com"
+        adapter.build_exclude_codes.return_value = set()
+        adapter.wait_for_verification_code.side_effect = [None, "123456"]
+
+        with mock.patch("platforms.chatgpt.codex_gui_registration_engine.time.time", side_effect=[1000.0, 2000.0]):
+            code = engine._collect_verification_code(adapter, stage="login")
+
+        self.assertEqual(code, "123456")
+        otp_sent_values = [
+            call.kwargs["otp_sent_at"] for call in adapter.wait_for_verification_code.call_args_list
+        ]
+        self.assertEqual(otp_sent_values, [1000.0, 1000.0])
+
     def test_collect_verification_code_pywinauto_propagates_non_timeout_error(self):
         email_service = _DummyEmailService([])
         driver = _FakeDriver()

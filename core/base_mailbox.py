@@ -1671,30 +1671,49 @@ class CloudMailMailbox(BaseMailbox):
             "time",
             "date",
             "created",
+            "createTime",
+            "createdTime",
             "createdAt",
             "created_at",
+            "created_time",
+            "receiveTime",
+            "receivedTime",
             "receivedAt",
             "received_at",
+            "received_time",
             "sendTime",
+            "sentTime",
+            "send_time",
+            "sent_at",
+            "sentAt",
+            "mailTime",
+            "mail_time",
+            "deliveryTime",
+            "deliveredAt",
+            "delivered_at",
+            "internalDate",
             "timestamp",
         ]
         for key in keys:
             value = message.get(key)
             if value in (None, ""):
                 continue
+            offset_seconds = 8 * 60 * 60 if key in {"createTime", "createdTime"} else 0
             if isinstance(value, (int, float)):
                 numeric = float(value)
-                return numeric / 1000 if numeric > 10_000_000_000 else numeric
+                parsed = numeric / 1000 if numeric > 10_000_000_000 else numeric
+                return parsed + offset_seconds
             text = str(value).strip()
             if not text:
                 continue
             try:
                 numeric = float(text)
-                return numeric / 1000 if numeric > 10_000_000_000 else numeric
+                parsed = numeric / 1000 if numeric > 10_000_000_000 else numeric
+                return parsed + offset_seconds
             except (TypeError, ValueError):
                 pass
             try:
-                return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() + offset_seconds
             except ValueError:
                 continue
         return None
@@ -1867,7 +1886,7 @@ class CloudMailMailbox(BaseMailbox):
                         self._remember_seen_id(seen_key, mid)
 
                     msg_ts = self._parse_message_timestamp(msg)
-                    if otp_sent_at and msg_ts and msg_ts < float(otp_sent_at):
+                    if otp_sent_at is not None and msg_ts is not None and msg_ts < float(otp_sent_at):
                         self._log_skip_reason_once(
                             skip_logged_message_ids,
                             mid,
