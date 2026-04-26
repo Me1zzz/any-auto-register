@@ -75,15 +75,25 @@ class InteractiveAliasProviderBase:
                 if self._all_accounts_exhausted(state):
                     self._state = AliasSourceState.EXHAUSTED
                     return
-            elif len(known_aliases_before) >= cap:
-                if self.rotates_service_account_after_alias_cap():
-                    state = self._state_repository.new_state()
-                    self._account_selection_state = state
-                    has_multi_account_state = bool(self._build_accounts_state(state))
-                    known_aliases_before = self._flatten_known_aliases(state)
-                else:
-                    self._state = AliasSourceState.EXHAUSTED
-                    return
+            else:
+                state.created_alias_count = max(
+                    self._coerce_nonnegative_int(getattr(state, "created_alias_count", 0)),
+                    len(known_aliases_before),
+                )
+                state.alias_limit = cap
+                state.exhausted = bool(state.exhausted or state.created_alias_count >= cap)
+                if state.exhausted or len(known_aliases_before) >= cap:
+                    if self.rotates_service_account_after_alias_cap():
+                        state = self._state_repository.new_state()
+                        self._account_selection_state = state
+                        has_multi_account_state = bool(self._build_accounts_state(state))
+                        known_aliases_before = self._flatten_known_aliases(state)
+                        state.created_alias_count = 0
+                        state.alias_limit = cap
+                        state.exhausted = False
+                    else:
+                        self._state = AliasSourceState.EXHAUSTED
+                        return
 
             self._state = AliasSourceState.ACTIVE
             target_total = (
@@ -492,6 +502,15 @@ class InteractiveAliasProviderBase:
             label = str(item.get("label") or item.get("username") or email.split("@")[0]).strip()
             configured_accounts.append({"email": email, "password": password, "label": label or email})
         return configured_accounts
+
+    @staticmethod
+    def _coerce_nonnegative_int(value: object, default: int = 0) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            return default
 
     def _single_account_alias_cap(self) -> int:
         raw_value = self._spec.provider_config.get("single_account_alias_count")
@@ -1001,6 +1020,12 @@ class InteractiveAliasProviderBase:
         else:
             state.domain_options = domain_state_items
             state.known_aliases = self._dedupe_alias_values(alias_values)
+            state.created_alias_count = max(
+                self._coerce_nonnegative_int(getattr(state, "created_alias_count", 0)),
+                len(state.known_aliases),
+            )
+            state.alias_limit = max(int(self._spec.desired_alias_count or 0), 1)
+            state.exhausted = bool(state.alias_limit and state.created_alias_count >= state.alias_limit)
         if timeline:
             last_stage = timeline[-1]
             state.current_stage = {"code": last_stage.code, "label": last_stage.label}

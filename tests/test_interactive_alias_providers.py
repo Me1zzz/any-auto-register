@@ -533,6 +533,30 @@ class InteractiveAliasProviderBaseTests(unittest.TestCase):
             ["created-3@example.com", "first@example.com"],
         )
 
+    def test_single_account_task_pool_persists_alias_counter_fields(self):
+        store = _MemoryStore()
+        provider = _FakeInteractiveProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="fake-provider",
+                provider_type="fake_interactive",
+                state_key="fake-provider",
+                desired_alias_count=2,
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="task-single-counter",
+                purpose="task_pool",
+                state_store_factory=lambda state_key: store,
+            ),
+        )
+        pool_manager = _PoolManager()
+
+        provider.ensure_available(pool_manager, minimum_count=1)
+
+        saved_state = store.saved[-1]
+        self.assertEqual(saved_state.created_alias_count, 1)
+        self.assertEqual(saved_state.alias_limit, 2)
+        self.assertFalse(saved_state.exhausted)
+
     def test_auto_service_provider_reuses_account_until_cap_then_rotates(self):
         provider = _AutoServiceAccountProvider(
             spec=AliasProviderSourceSpec(
