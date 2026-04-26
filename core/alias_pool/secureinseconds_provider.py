@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from typing import Any, cast
+
+from core.base_mailbox import CloudMailMailbox
 
 from .interactive_provider_base import InteractiveAliasProviderBase
 from .interactive_provider_models import (
@@ -20,6 +23,7 @@ from .secureinseconds_service import (
     SecureInSecondsRuntime,
     build_secureinseconds_service_email,
     build_secureinseconds_service_password,
+    extract_secureinseconds_forwarding_verify_link,
 )
 
 
@@ -48,7 +52,8 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
         return True
 
     def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
-        forwarding_email = self._forwarding_email()
+        state = self._account_selection_state or self._state_repository.load()
+        forwarding_email = self._ensure_forwarding_email(state=state)
         context = AuthenticatedProviderContext(
             confirmation_inbox_email=forwarding_email,
             real_mailbox_email=forwarding_email,
@@ -75,16 +80,17 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
         if requirement.kind != "forwarding_email":
             return context
 
-        forwarding_email = self._forwarding_email()
+        forwarding_email = self._context_forwarding_email(context) or self._ensure_forwarding_email()
         if not forwarding_email:
             raise RuntimeError("secureinseconds forwarding email is required")
 
-        mailbox_email = self._mailbox_email()
-        mailbox_password = self._mailbox_password()
-        if not mailbox_email or not mailbox_password:
-            raise RuntimeError("secureinseconds confirmation inbox credentials are required")
-
+        context = replace(
+            context,
+            confirmation_inbox_email=forwarding_email,
+            real_mailbox_email=forwarding_email,
+        )
         context = self._ensure_runtime_for_context(context, bootstrap_if_missing=True)
+        forwarding_email = self._context_forwarding_email(context) or forwarding_email
         runtime = self._require_runtime()
 
         forwarding_items = runtime.list_forwarding_emails()
@@ -101,24 +107,12 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
             raise RuntimeError("secureinseconds forwarding email was not returned after add")
 
         if not bool(matched.get("verified")):
-            verify_link = runtime.fetch_forwarding_verify_link(
-                mailbox_email=mailbox_email,
-                mailbox_password=mailbox_password,
-                match_email=forwarding_email,
-                timeout_seconds=self._mailbox_timeout_seconds(),
-                link_anchor=self._forwarding_verify_anchor(),
-            )
+            verify_link = self._fetch_forwarding_verify_link(runtime=runtime, forwarding_email=forwarding_email)
             if not verify_link:
                 resent, resend_message = runtime.resend_forwarding_verification(forwarding_email)
                 if not resent:
                     raise RuntimeError(resend_message)
-                verify_link = runtime.fetch_forwarding_verify_link(
-                    mailbox_email=mailbox_email,
-                    mailbox_password=mailbox_password,
-                    match_email=forwarding_email,
-                    timeout_seconds=self._mailbox_timeout_seconds(),
-                    link_anchor=self._forwarding_verify_anchor(),
-                )
+                verify_link = self._fetch_forwarding_verify_link(runtime=runtime, forwarding_email=forwarding_email)
             if not verify_link:
                 raise RuntimeError("secureinseconds forwarding verification mail did not contain a verification link")
             verified, message = runtime.verify_forwarding_email(verify_link)
@@ -280,8 +274,6 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
                 service_account_email=service_account_email,
                 service_password=service_password,
                 username=self._username_from_email(service_account_email),
-                confirmation_inbox_email=self._forwarding_email(),
-                real_mailbox_email=self._forwarding_email(),
                 session_state=runtime.export_session_state(),
             )
         raise RuntimeError("secureinseconds failed to create a unique service account")
@@ -292,12 +284,118 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
         base = compact[:8] or "securein"
         return f"{base}{alias_index:02d}"
 
-    def _forwarding_email(self) -> str:
-        return str(
-            self._spec.confirmation_inbox_config.get("match_email")
-            or self._spec.confirmation_inbox_config.get("account_email")
+    def _ensure_forwarding_email(self, *, state=None) -> str:
+        state = state if state is not None else self._account_selection_state
+        forwarding_email = self._state_forwarding_email(state) or self._configured_forwarding_email()
+        if not forwarding_email:
+            forwarding_email = self._generate_forwarding_email()
+        if state is not None and forwarding_email:
+            state.confirmation_inbox_email = forwarding_email
+            state.real_mailbox_email = forwarding_email
+        return forwarding_email
+
+    def _state_forwarding_email(self, state) -> str:
+        if state is None:
+            return ""
+        for value in (
+            getattr(state, "real_mailbox_email", ""),
+            getattr(state, "confirmation_inbox_email", ""),
+        ):
+            email = str(value or "").strip().lower()
+            if email and not self._is_cloudmail_admin_email(email):
+                return email
+        return ""
+
+    def _configured_forwarding_email(self) -> str:
+        inbox = dict(self._spec.confirmation_inbox_config or {})
+        explicit_email = str(
+            inbox.get("forwarding_email")
+            or inbox.get("real_mailbox_email")
+            or inbox.get("destination_email")
+            or self._provider_config().get("forwarding_email")
             or ""
         ).strip().lower()
+        if explicit_email:
+            return explicit_email
+
+        for key in ("match_email", "account_email"):
+            email = str(inbox.get(key) or "").strip().lower()
+            if email and not self._is_cloudmail_admin_email(email):
+                return email
+        return ""
+
+    def _context_forwarding_email(self, context: AuthenticatedProviderContext) -> str:
+        return str(context.real_mailbox_email or context.confirmation_inbox_email or "").strip().lower()
+
+    def _is_cloudmail_admin_email(self, email: str) -> bool:
+        normalized_email = str(email or "").strip().lower()
+        admin_email = str(self._spec.confirmation_inbox_config.get("admin_email") or "").strip().lower()
+        return bool(normalized_email and admin_email and normalized_email == admin_email)
+
+    def _generate_forwarding_email(self) -> str:
+        account = self._build_cloudmail_mailbox().get_email()
+        return str(account.account_id or account.email or "").strip().lower()
+
+    def _build_cloudmail_mailbox(self) -> CloudMailMailbox:
+        inbox = dict(self._spec.confirmation_inbox_config or {})
+        return CloudMailMailbox(
+            api_base=str(inbox.get("api_base") or inbox.get("base_url") or "").strip(),
+            admin_email=str(inbox.get("admin_email") or "").strip(),
+            admin_password=str(inbox.get("admin_password") or "").strip(),
+            domain=inbox.get("domain") or "",
+            subdomain=str(inbox.get("subdomain") or "").strip(),
+            timeout=self._mailbox_timeout_seconds(),
+        )
+
+    def _fetch_forwarding_verify_link(
+        self,
+        *,
+        runtime: SecureInSecondsRuntime,
+        forwarding_email: str,
+    ) -> str:
+        mailbox_email = self._mailbox_email()
+        mailbox_password = self._mailbox_password()
+        if (
+            mailbox_email
+            and mailbox_password
+            and mailbox_email == str(forwarding_email or "").strip().lower()
+            and not self._is_cloudmail_admin_email(mailbox_email)
+        ):
+            return runtime.fetch_forwarding_verify_link(
+                mailbox_email=mailbox_email,
+                mailbox_password=mailbox_password,
+                match_email=forwarding_email,
+                timeout_seconds=self._mailbox_timeout_seconds(),
+                link_anchor=self._forwarding_verify_anchor(),
+            )
+        return self._fetch_forwarding_verify_link_via_cloudmail(forwarding_email)
+
+    def _fetch_forwarding_verify_link_via_cloudmail(self, forwarding_email: str) -> str:
+        mailbox = self._build_cloudmail_mailbox()
+        timeout_seconds = self._mailbox_timeout_seconds()
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            messages: list[dict[str, Any]] = []
+            for lookup_email in (forwarding_email, ""):
+                try:
+                    items = mailbox._list_mails(lookup_email)
+                except Exception:
+                    continue
+                messages.extend([item for item in list(items or []) if isinstance(item, dict)])
+                if lookup_email and messages:
+                    break
+            link = extract_secureinseconds_forwarding_verify_link(
+                messages,
+                forwarding_email=forwarding_email,
+                link_anchor=self._forwarding_verify_anchor(),
+            )
+            if link:
+                return link
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(3, remaining))
+        return ""
 
     def _mailbox_email(self) -> str:
         return str(

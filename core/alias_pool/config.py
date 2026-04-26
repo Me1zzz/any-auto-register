@@ -166,20 +166,27 @@ def _build_interactive_confirmation_inbox_config(
     )
     if source_type == "alias_email":
         _set_if_missing("base_url", _parse_string(normalized.get("api_base")))
+    admin_email_source = confirmation_inbox.get("admin_email")
+    if source_type != "secureinseconds":
+        admin_email_source = admin_email_source or confirmation_inbox.get("account_email")
     _set_if_missing(
         "admin_email",
-        _parse_string(confirmation_inbox.get("admin_email") or confirmation_inbox.get("account_email"))
+        _parse_string(admin_email_source)
         or _parse_string(item.get("cloudmail_admin_email"))
         or _parse_string(payload.get("cloudmail_admin_email")),
     )
-    _set_if_missing("account_email", _parse_string(normalized.get("admin_email")))
+    admin_password_source = confirmation_inbox.get("admin_password")
+    if source_type != "secureinseconds":
+        admin_password_source = admin_password_source or confirmation_inbox.get("account_password")
     _set_if_missing(
         "admin_password",
-        _parse_string(confirmation_inbox.get("admin_password") or confirmation_inbox.get("account_password"))
+        _parse_string(admin_password_source)
         or _parse_string(item.get("cloudmail_admin_password"))
         or _parse_string(payload.get("cloudmail_admin_password")),
     )
-    _set_if_missing("account_password", _parse_string(normalized.get("admin_password")))
+    if source_type != "secureinseconds":
+        _set_if_missing("account_email", _parse_string(normalized.get("admin_email")))
+        _set_if_missing("account_password", _parse_string(normalized.get("admin_password")))
     _set_if_missing(
         "domain",
         confirmation_inbox.get("domain")

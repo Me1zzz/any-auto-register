@@ -247,11 +247,8 @@ class _VendEmailRuntimeBuilder:
 class _FakeSecureInSecondsRuntime:
     def __init__(self):
         self.calls = []
-        self._forwarding_sequences = [
-            [],
-            [{"email": "admin@cxwsss.online", "verified": False, "verifiedAt": "", "isPrimary": False}],
-            [{"email": "admin@cxwsss.online", "verified": True, "verifiedAt": "2026-04-22T12:56:20.242Z", "isPrimary": False}],
-        ]
+        self._forwarding_email = ""
+        self._forwarding_verified = False
         self._created_alias_count = 0
 
     def export_session_state(self):
@@ -281,12 +278,21 @@ class _FakeSecureInSecondsRuntime:
 
     def list_forwarding_emails(self):
         self.calls.append("list_forwarding_emails")
-        if self._forwarding_sequences:
-            return list(self._forwarding_sequences.pop(0))
-        return [{"email": "admin@cxwsss.online", "verified": True, "verifiedAt": "2026-04-22T12:56:20.242Z", "isPrimary": False}]
+        if not self._forwarding_email:
+            return []
+        return [
+            {
+                "email": self._forwarding_email,
+                "verified": self._forwarding_verified,
+                "verifiedAt": "2026-04-22T12:56:20.242Z" if self._forwarding_verified else "",
+                "isPrimary": False,
+            }
+        ]
 
     def add_forwarding_email(self, email):
         self.calls.append(("add_forwarding_email", email))
+        self._forwarding_email = email
+        self._forwarding_verified = False
         return True, "Email added successfully. Please check your inbox for verification."
 
     def resend_forwarding_verification(self, email):
@@ -308,6 +314,7 @@ class _FakeSecureInSecondsRuntime:
 
     def verify_forwarding_email(self, verify_url):
         self.calls.append(("verify_forwarding_email", verify_url))
+        self._forwarding_verified = True
         return True, "Email verified successfully."
 
     def list_aliases(self):
@@ -338,6 +345,33 @@ class _SecureInSecondsRuntimeBuilder:
         runtime = _FakeSecureInSecondsRuntime()
         self.instances.append(runtime)
         return runtime
+
+
+class _FakeSecureInSecondsCloudMailMailbox:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = dict(kwargs)
+        self.list_calls = []
+        _FakeSecureInSecondsCloudMailMailbox.instances.append(self)
+
+    def get_email(self):
+        return MailboxAccount(
+            email="secure-forward@mx.cxwsss.online",
+            account_id="secure-forward@mx.cxwsss.online",
+        )
+
+    def _list_mails(self, email):
+        self.list_calls.append(email)
+        return [
+            {
+                "toEmail": "secure-forward@mx.cxwsss.online",
+                "text": (
+                    "Verify your SecureAlias email: "
+                    "https://alias.secureinseconds.com/api/user/emails/verify?token=abc123"
+                ),
+            }
+        ]
 
 
 class _FakePlatform(BasePlatform):
@@ -1134,9 +1168,13 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                         "state_key": "secureinseconds-primary",
                         "confirmation_inbox": {
                             "provider": "cloudmail",
-                            "account_email": "real@example.com",
+                            "api_base": "https://cxwsss.online",
+                            "admin_email": "admin@cxwsss.online",
+                            "account_email": "admin@cxwsss.online",
+                            "admin_password": "mail-pass",
                             "account_password": "mail-pass",
-                            "match_email": "admin@cxwsss.online",
+                            "domain": "cxwsss.online",
+                            "subdomain": "mx",
                         },
                         "provider_config": {
                             "register_url": "https://alias.secureinseconds.com/auth/register",
@@ -1168,7 +1206,12 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                 "core.alias_pool.secureinseconds_provider.build_secureinseconds_service_password",
                 return_value="SisA1@TestPass",
             ),
+            patch(
+                "core.alias_pool.secureinseconds_provider.CloudMailMailbox",
+                _FakeSecureInSecondsCloudMailMailbox,
+            ),
         ):
+            _FakeSecureInSecondsCloudMailMailbox.instances.clear()
             _run_register(task_id, req)
 
         self.assertEqual(len(runtime_builder.instances), 1)
@@ -1183,7 +1226,8 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertIs(first_mailbox._task_alias_pool, second_mailbox._task_alias_pool)
         self.assertIsInstance(first_mailbox._task_alias_pool, AliasEmailPoolManager)
         runtime = runtime_builder.instances[0]
-        self.assertIn(("add_forwarding_email", "admin@cxwsss.online"), runtime.calls)
+        self.assertIn(("add_forwarding_email", "secure-forward@mx.cxwsss.online"), runtime.calls)
+        self.assertNotIn(("add_forwarding_email", "admin@cxwsss.online"), runtime.calls)
         self.assertIn(
             (
                 "verify_forwarding_email",
@@ -1195,8 +1239,14 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
             call for call in runtime.calls if isinstance(call, tuple) and call[0] == "create_alias"
         ]
         self.assertGreaterEqual(len(create_calls), 2)
-        self.assertEqual({tuple(call[3]) for call in create_calls}, {("admin@cxwsss.online",)})
+        self.assertEqual({tuple(call[3]) for call in create_calls}, {("secure-forward@mx.cxwsss.online",)})
+        self.assertNotIn("fetch_forwarding_verify_link", runtime.calls)
         self.assertNotIn("list_aliases", runtime.calls)
+        self.assertTrue(_FakeSecureInSecondsCloudMailMailbox.instances)
+        self.assertEqual(
+            _FakeSecureInSecondsCloudMailMailbox.instances[0].kwargs["admin_email"],
+            "admin@cxwsss.online",
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -1544,6 +1544,152 @@ class EmailShieldAndSimpleLoginTests(unittest.TestCase):
             ],
         )
 
+    def test_secureinseconds_generates_forwarding_email_instead_of_reusing_cloudmail_admin(self):
+        class _Runtime:
+            def __init__(self):
+                self.calls = []
+                self.forwarding_email = ""
+                self.forwarding_verified = False
+                self.created_alias_count = 0
+
+            def export_session_state(self):
+                return {"session": "secure-test"}
+
+            def restore_session(self, _session_state, _service_account_email):
+                return False
+
+            def register_account(self, email, password):
+                self.calls.append(("register_account", email, password))
+                return True, ""
+
+            def login_account(self, email, password):
+                self.calls.append(("login_account", email, password))
+                return True
+
+            def list_forwarding_emails(self):
+                self.calls.append("list_forwarding_emails")
+                if not self.forwarding_email:
+                    return []
+                return [{"email": self.forwarding_email, "verified": self.forwarding_verified}]
+
+            def add_forwarding_email(self, email):
+                self.calls.append(("add_forwarding_email", email))
+                self.forwarding_email = email
+                self.forwarding_verified = False
+                return True, ""
+
+            def resend_forwarding_verification(self, email):
+                self.calls.append(("resend_forwarding_verification", email))
+                return True, ""
+
+            def fetch_forwarding_verify_link(self, **_kwargs):
+                self.calls.append("fetch_forwarding_verify_link")
+                raise AssertionError("generated CloudMail forwarding inbox should not use mailbox-login verification")
+
+            def verify_forwarding_email(self, verify_link):
+                self.calls.append(("verify_forwarding_email", verify_link))
+                self.forwarding_verified = True
+                return True, ""
+
+            def list_aliases(self):
+                self.calls.append("list_aliases")
+                return []
+
+            def create_alias(self, *, prefix, description, forward_to_emails):
+                self.created_alias_count += 1
+                self.calls.append(("create_alias", prefix, description, list(forward_to_emails)))
+                return {
+                    "alias": f"{prefix}@alias.secureinseconds.com",
+                    "_id": f"alias-{self.created_alias_count}",
+                    "description": description,
+                    "forwardToEmails": list(forward_to_emails),
+                }
+
+            def capture_summary(self):
+                return []
+
+        class _GeneratedMailbox:
+            email = "forward-1@mx.example.com"
+            account_id = "forward-1@mx.example.com"
+
+        class _CloudMailMailbox:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.kwargs = dict(kwargs)
+                self.list_calls = []
+                _CloudMailMailbox.instances.append(self)
+
+            def get_email(self):
+                return _GeneratedMailbox()
+
+            def _list_mails(self, email):
+                self.list_calls.append(email)
+                return [
+                    {
+                        "toEmail": "forward-1@mx.example.com",
+                        "text": (
+                            "Verify your SecureAlias email: "
+                            "https://alias.secureinseconds.com/api/user/emails/verify?token=abc123"
+                        ),
+                    }
+                ]
+
+        runtime = _Runtime()
+        store = _MemoryStore()
+        pool_manager = _PoolManager()
+        provider = SecureInSecondsProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="secureinseconds-primary",
+                provider_type="secureinseconds",
+                state_key="secureinseconds-primary",
+                desired_alias_count=1,
+                confirmation_inbox_config={
+                    "provider": "cloudmail",
+                    "api_base": "https://mailbox.example",
+                    "admin_email": "admin@example.com",
+                    "account_email": "admin@example.com",
+                    "admin_password": "mail-pass",
+                    "account_password": "mail-pass",
+                    "domain": "example.com",
+                    "subdomain": "mx",
+                    "timeout": 15,
+                },
+                provider_config={
+                    "register_url": "https://alias.secureinseconds.com/auth/register",
+                    "login_url": "https://alias.secureinseconds.com/auth/signin",
+                },
+            ),
+            context=AliasProviderBootstrapContext(
+                task_id="alias-test",
+                purpose="task_pool",
+                runtime_builder=lambda *_args, **_kwargs: runtime,
+                state_store_factory=lambda _state_key: store,
+            ),
+        )
+
+        with (
+            mock.patch("core.alias_pool.secureinseconds_provider.CloudMailMailbox", _CloudMailMailbox),
+            mock.patch(
+                "core.alias_pool.secureinseconds_provider.build_secureinseconds_service_email",
+                return_value="svcsecure01@example.com",
+            ),
+            mock.patch(
+                "core.alias_pool.secureinseconds_provider.build_secureinseconds_service_password",
+                return_value="SisA1@TestPass",
+            ),
+        ):
+            provider.ensure_available(pool_manager, minimum_count=1)
+
+        self.assertIn(("add_forwarding_email", "forward-1@mx.example.com"), runtime.calls)
+        self.assertNotIn(("add_forwarding_email", "admin@example.com"), runtime.calls)
+        self.assertNotIn("fetch_forwarding_verify_link", runtime.calls)
+        create_calls = [call for call in runtime.calls if isinstance(call, tuple) and call[0] == "create_alias"]
+        self.assertEqual([call[3] for call in create_calls], [["forward-1@mx.example.com"]])
+        self.assertEqual(store.saved[-1].real_mailbox_email, "forward-1@mx.example.com")
+        self.assertEqual(pool_manager.leases[0].real_mailbox_email, "forward-1@mx.example.com")
+        self.assertEqual(_CloudMailMailbox.instances[0].kwargs["admin_email"], "admin@example.com")
+
 
 class InteractiveStateRepositoryTests(unittest.TestCase):
     def test_repository_load_returns_new_state_when_store_missing(self):
