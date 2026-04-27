@@ -13,6 +13,10 @@ from platforms.chatgpt.codex_gui.steps.metadata import StepMetadata
 from platforms.chatgpt.codex_gui.steps.recovery import retry_step_or_abort
 
 
+RESTART_STEP_ID = "official_signup.open_runtime_profile"
+DIALOG_STAGE = "官网注册-登录或注册弹窗"
+
+
 class ClickOfficialSignupFreeSignupStep(BaseFlowStep):
     step_id = "official_signup.click_free_signup"
     stage_name = "官网注册-点击免费注册"
@@ -30,26 +34,36 @@ class ClickOfficialSignupFreeSignupStep(BaseFlowStep):
 
     def execute(self, engine, ctx):
         driver = require_driver(engine)
-        wait_timeout = resolve_wait_timeout(engine)
+        wait_timeout = resolve_wait_timeout(
+            engine,
+            key="codex_gui_official_signup_dialog_timeout_seconds",
+            default=10,
+        )
         run_named_action(
             engine,
             "[官网注册] 点击免费注册",
             lambda: driver.click_named_target("official_signup_free_signup_button"),
         )
         try:
-            matched_url = engine._wait_for_stage_ready("官网注册-登录或注册弹窗", timeout=wait_timeout)
+            matched_url = engine._wait_for_stage_ready(DIALOG_STAGE, timeout=wait_timeout)
         except RuntimeError as wait_error:
-            probe_timeout_ms = engine._stage_dom_probe_timeout_ms()
-            try:
-                driver.peek_target_with_timeout("official_signup_free_signup_button", probe_timeout_ms)
-            except Exception:
-                raise wait_error
-            run_named_action(
-                engine,
-                "[官网注册] 重试点击免费注册",
-                lambda: driver.click_named_target("official_signup_free_signup_button"),
+            engine._log(
+                f"[官网注册] {wait_timeout}s 内未出现登录或注册弹窗，关闭浏览器并重新打开 runtime profile: {wait_error}"
             )
-            matched_url = engine._wait_for_stage_ready("官网注册-登录或注册弹窗", timeout=wait_timeout)
+            try:
+                driver.close()
+            except Exception as close_error:
+                engine._log(f"[官网注册] 关闭当前浏览器失败（忽略，继续重开）: {close_error}")
+            ctx.pending_step_id = RESTART_STEP_ID
+            return FlowStepResult(
+                success=True,
+                stage_name=self.stage_name,
+                payload={
+                    "restart_requested": True,
+                    "restart_step_id": RESTART_STEP_ID,
+                    "reason": str(wait_error),
+                },
+            )
         return FlowStepResult(success=True, stage_name=self.stage_name, matched_url=matched_url)
 
     def verify(self, engine, ctx, result) -> None:

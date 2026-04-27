@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from platforms.chatgpt.codex_gui.context import CodexGUIFlowContext
-from platforms.chatgpt.codex_gui.models import CodexGUIIdentity
+from platforms.chatgpt.codex_gui.models import CodexGUIIdentity, FlowStepResult
 from platforms.chatgpt.codex_gui.steps.official_signup import (
     ClickOfficialSignupFreeSignupStep,
     OpenOfficialSignupRuntimeProfileStep,
@@ -49,6 +49,9 @@ class _FakeDriver:
 
     def read_current_url(self) -> str:
         return self.current_url
+
+    def close(self) -> None:
+        self.events.append(("close",))
 
 
 class _FakeEngine:
@@ -103,6 +106,15 @@ class _FakeEngine:
         if any(fragment in current_url for fragment in fragments):
             return current_url
         raise RuntimeError(f"URL did not match: {fragments}")
+
+
+class _HistoryStep:
+    def __init__(self, step_id: str):
+        self.step_id = step_id
+
+    def run(self, _engine, ctx):
+        ctx.step_history.append(self.step_id)
+        return FlowStepResult(success=True, stage_name=self.step_id)
 
 
 def _make_context(extra_config=None):
@@ -204,7 +216,7 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(driver.events, [("click", "official_signup_free_signup_button")])
-        self.assertEqual(engine.stage_ready_calls, [("官网注册-登录或注册弹窗", 60)])
+        self.assertEqual(engine.stage_ready_calls, [("官网注册-登录或注册弹窗", 10)])
         self.assertEqual(engine.stage_markers, [])
 
     def test_click_free_signup_step_waits_for_dialog_even_when_chatgpt_url_matches(self):
@@ -216,15 +228,14 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(driver.events, [("click", "official_signup_free_signup_button")])
-        self.assertEqual(engine.stage_ready_calls, [("官网注册-登录或注册弹窗", 60)])
+        self.assertEqual(engine.stage_ready_calls, [("官网注册-登录或注册弹窗", 10)])
         self.assertEqual(engine.waits, [])
 
-    def test_click_free_signup_step_retries_when_dialog_missing_and_home_button_still_visible(self):
+    def test_click_free_signup_step_restarts_runtime_profile_when_dialog_missing(self):
         driver = _FakeDriver()
         engine = _FakeEngine(driver)
         engine.stage_ready_results = [
             RuntimeError("[官网注册-登录或注册弹窗] 等待页面阶段就绪超时"),
-            "https://chatgpt.com/",
         ]
         ctx = _make_context()
 
@@ -235,37 +246,68 @@ class OfficialSignupStartupStepTests(unittest.TestCase):
             driver.events,
             [
                 ("click", "official_signup_free_signup_button"),
-                ("peek", "official_signup_free_signup_button", 750),
+                ("close",),
+            ],
+        )
+        self.assertEqual(ctx.pending_step_id, "official_signup.open_runtime_profile")
+        self.assertEqual(
+            engine.stage_ready_calls,
+            [
+                ("官网注册-登录或注册弹窗", 10),
+            ],
+        )
+
+    def test_official_signup_workflow_reopens_browser_and_replays_flow_when_dialog_missing(self):
+        driver = _FakeDriver()
+        engine = _FakeEngine(driver)
+        engine.stage_ready_results = [
+            "https://chatgpt.com",
+            RuntimeError("[官网注册-登录或注册弹窗] 等待页面阶段就绪超时"),
+            "https://chatgpt.com",
+            "https://chatgpt.com/",
+        ]
+        ctx = _make_context()
+        workflow = OfficialSignupWorkflow(
+            steps=[
+                OpenOfficialSignupRuntimeProfileStep(),
+                ClickOfficialSignupFreeSignupStep(),
+                _HistoryStep("official_signup.submit_email"),
+            ]
+        )
+
+        result = workflow.run(engine, ctx)
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            driver.events,
+            [
+                ("open_new_profile_browser", "https://chatgpt.com"),
+                ("click", "official_signup_free_signup_button"),
+                ("close",),
+                ("open_new_profile_browser", "https://chatgpt.com"),
                 ("click", "official_signup_free_signup_button"),
             ],
         )
         self.assertEqual(
             engine.stage_ready_calls,
             [
-                ("官网注册-登录或注册弹窗", 60),
-                ("官网注册-登录或注册弹窗", 60),
+                ("官网注册-首页", 60),
+                ("官网注册-登录或注册弹窗", 10),
+                ("官网注册-首页", 60),
+                ("官网注册-登录或注册弹窗", 10),
             ],
         )
-
-    def test_click_free_signup_step_does_not_retry_when_home_button_is_gone(self):
-        driver = _FakeDriver()
-        driver.free_signup_visible = False
-        engine = _FakeEngine(driver)
-        engine.stage_ready_results = [
-            RuntimeError("[官网注册-登录或注册弹窗] 等待页面阶段就绪超时"),
-        ]
-        ctx = _make_context()
-
-        with self.assertRaisesRegex(RuntimeError, "等待页面阶段就绪超时"):
-            ClickOfficialSignupFreeSignupStep().run(engine, ctx)
-
         self.assertEqual(
-            driver.events,
+            ctx.step_history,
             [
-                ("click", "official_signup_free_signup_button"),
-                ("peek", "official_signup_free_signup_button", 750),
+                "official_signup.open_runtime_profile",
+                "official_signup.click_free_signup",
+                "official_signup.open_runtime_profile",
+                "official_signup.click_free_signup",
+                "official_signup.submit_email",
             ],
         )
+        self.assertTrue(ctx.official_signup_completed)
 
     def test_submit_email_waits_for_password_page_marker_in_pywinauto_mode(self):
         driver = _FakeDriver()
