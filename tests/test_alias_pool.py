@@ -16,7 +16,10 @@ from core.alias_pool.config import (
     build_alias_provider_source_specs,
     normalize_cloudmail_alias_pool_config,
 )
-from core.alias_pool.interactive_provider_base import ExistingAccountAliasProviderBase
+from core.alias_pool.interactive_provider_base import (
+    ExistingAccountAliasProviderBase,
+    InteractiveAliasProviderBase,
+)
 from core.alias_pool.interactive_provider_models import (
     AliasCreatedRecord,
     AliasDomainOption,
@@ -34,7 +37,7 @@ from core.alias_pool.provider_contracts import (
     AliasProviderSourceSpec,
     AliasProviderStage,
 )
-from core.alias_pool.vend_provider import VendAliasProvider
+from core.alias_pool.vend_provider import VendAliasProvider, is_cloudmail_domain_email
 from core.alias_pool.service_base import AliasServiceProducerBase
 from core.alias_pool.simple_generator import SimpleAliasGeneratorProducer
 from core.alias_pool.static_list import StaticAliasListProducer
@@ -1400,6 +1403,37 @@ class _MemoryInteractiveStateStore:
         self.state = state
 
 
+class _NewAccountLoggingProvider(InteractiveAliasProviderBase):
+    source_kind = "myalias_pro"
+
+    def __init__(self, *, spec, store, log_fn):
+        super().__init__(
+            spec=spec,
+            context=AliasProviderBootstrapContext(
+                task_id="task-new-account-log",
+                purpose="task_pool",
+                state_store_factory=lambda state_key: store,
+                log_fn=log_fn,
+            ),
+        )
+
+    def ensure_authenticated_context(self, mode: str) -> AuthenticatedProviderContext:
+        return AuthenticatedProviderContext(
+            service_account_email="service@example.com",
+            confirmation_inbox_email="confirm@example.com",
+            real_mailbox_email="real@example.com",
+            service_password="service-pass",
+            username="service-user",
+            session_state={"mode": mode},
+        )
+
+    def discover_alias_domains(self, context):
+        return [AliasDomainOption(key="example.com", domain="example.com", label="@example.com")]
+
+    def create_alias(self, *, context, domain, alias_index):
+        return AliasCreatedRecord(email=f"created-{alias_index}@example.com")
+
+
 class _RotatingExistingAccountProvider(ExistingAccountAliasProviderBase):
     source_kind = "simplelogin"
 
@@ -1444,6 +1478,91 @@ class _StallingFirstAccountProvider(_RotatingExistingAccountProvider):
             self.created_aliases.append((context.service_account_email, created_email))
             return AliasCreatedRecord(email=created_email)
         return super().create_alias(context=context, domain=domain, alias_index=alias_index)
+
+
+class AliasPoolServiceAccountLoggingTests(unittest.TestCase):
+    def test_cloudmail_domain_match_uses_configured_subdomain_for_vend_service_email(self):
+        source = {"cloudmail_domain": "sss.com", "cloudmail_subdomain": "abc"}
+
+        self.assertTrue(is_cloudmail_domain_email("user@abc.sss.com", source))
+        self.assertFalse(is_cloudmail_domain_email("user@sss.com", source))
+
+    def test_new_interactive_service_account_logs_credentials_after_success(self):
+        store = _MemoryInteractiveStateStore()
+        logs = []
+        provider = _NewAccountLoggingProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="myalias-pro-primary",
+                provider_type="myalias_pro",
+                state_key="myalias-pro-primary",
+                desired_alias_count=1,
+            ),
+            store=store,
+            log_fn=logs.append,
+        )
+        manager = AliasEmailPoolManager(task_id="task-new-account-log")
+
+        provider.ensure_available(manager, minimum_count=1)
+
+        joined_logs = "\n".join(logs)
+        self.assertIn("[AliasPool] myalias pro 服务账号注册成功:", joined_logs)
+        self.assertIn("email=service@example.com", joined_logs)
+        self.assertIn("password=service-pass", joined_logs)
+        self.assertIn("username=service-user", joined_logs)
+
+    def test_vend_service_account_logs_credentials_after_registration_success(self):
+        from core.alias_pool.vend_telemetry import VendTelemetryRecorder
+
+        logs = []
+        state = VendEmailServiceState(state_key="vend-email-primary")
+        state_repository = mock.Mock()
+        state_repository.load.return_value = state
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=[False, True],
+            register_ok=True,
+            confirm_ok=True,
+            aliases=[],
+            created_aliases=["new-001@serf.me"],
+        )
+        provider = VendAliasProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="vend-email-primary",
+                provider_type="vend_email",
+                raw_source={
+                    "id": "vend-email-primary",
+                    "type": "vend_email",
+                    "register_url": "https://www.vend.email/auth/register",
+                    "cloudmail_domain": "example.com",
+                    "alias_domain": "serf.me",
+                    "alias_domain_id": "42",
+                    "alias_count": 1,
+                    "state_key": "vend-email-primary",
+                },
+                desired_alias_count=1,
+                state_key="vend-email-primary",
+            ),
+            state_repository=state_repository,
+            runtime=runtime,
+            confirmation_reader=mock.Mock(),
+            telemetry=VendTelemetryRecorder(),
+            log_fn=logs.append,
+        )
+        manager = AliasEmailPoolManager(task_id="task-vend-log")
+
+        with mock.patch(
+            "core.alias_pool.vend_provider.build_service_email",
+            return_value="fresh-service@example.com",
+        ), mock.patch(
+            "core.alias_pool.vend_provider.build_service_password",
+            return_value="fresh-pass",
+        ):
+            provider.ensure_available(manager, minimum_count=1)
+
+        joined_logs = "\n".join(logs)
+        self.assertIn("[AliasPool] vend 服务账号注册成功:", joined_logs)
+        self.assertIn("email=fresh-service@example.com", joined_logs)
+        self.assertIn("password=fresh-pass", joined_logs)
 
 
 class AliasPoolInteractiveProviderRotationTests(unittest.TestCase):
@@ -4299,6 +4418,174 @@ class VendEmailAliasServiceProducerTests(unittest.TestCase):
             producer.load_into(manager)
 
         self.assertEqual(producer.state(), AliasSourceState.FAILED)
+
+    def test_producer_failure_reports_recent_vend_runtime_capture_details(self):
+        manager = AliasEmailPoolManager(task_id="task-vend-email-detailed-failure")
+        state_store = mock.Mock()
+        state_store.load.return_value = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-service-pass",
+        )
+        captures = [
+            VendEmailCaptureRecord(
+                name="login",
+                url="https://www.vend.email/auth/login",
+                method="POST",
+                request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
+                request_body_excerpt="user[email]=vendcap202604170108%40cxwsss.online",
+                response_status=403,
+                response_body_excerpt="Cloudflare challenge required",
+                captured_at="2026-04-16T10:01:00+08:00",
+            ),
+            VendEmailCaptureRecord(
+                name="register",
+                url="https://www.vend.email/auth",
+                method="POST",
+                request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
+                request_body_excerpt="user[email]=vendcap202604170108%40cxwsss.online",
+                response_status=422,
+                response_body_excerpt='{"errors":["Email has already been taken"]}',
+                captured_at="2026-04-16T10:02:00+08:00",
+            ),
+        ]
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=False,
+            register_ok=False,
+            aliases=[],
+            captures=captures,
+        )
+
+        producer = VendEmailAliasServiceProducer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://www.vend.email/auth/register",
+                "mailbox_base_url": "https://cxwsss.online/",
+                "mailbox_email": "admin@cxwsss.online",
+                "mailbox_password": "1103@Icity",
+                "alias_domain": "cxwsss.online",
+                "alias_count": 1,
+                "state_key": "vend-email-primary",
+            },
+            state_store=state_store,
+            runtime=runtime,
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            producer.load_into(manager)
+
+        error = str(raised.exception)
+        self.assertIn("vend.email session bootstrap failed:", error)
+        self.assertIn("login failed", error)
+        self.assertIn("status=403", error)
+        self.assertIn("Cloudflare challenge required", error)
+        self.assertIn("register failed", error)
+        self.assertIn("status=422", error)
+        self.assertIn("Email has already been taken", error)
+
+        saved_state = state_store.save.call_args.args[0]
+        self.assertEqual(saved_state.last_error, error)
+        self.assertIn("Cloudflare challenge required", saved_state.last_failure["reason"])
+
+    def test_producer_failure_extracts_vend_html_error_text(self):
+        manager = AliasEmailPoolManager(task_id="task-vend-email-html-failure")
+        state_store = mock.Mock()
+        state_store.load.return_value = VendEmailServiceState(
+            state_key="vend-email-primary",
+            service_email="vendcap202604170108@cxwsss.online",
+            service_password="vend-service-pass",
+        )
+        html_head = (
+            '<!DOCTYPE html><html class="h-full bg-gray-50" lang="en"><head>'
+            "<title>vend.email</title>"
+            + (" " * 300)
+            + "</head><body>"
+        )
+        captures = [
+            VendEmailCaptureRecord(
+                name="login_form",
+                url="https://www.vend.email/auth/login",
+                method="GET",
+                request_headers_whitelist={},
+                request_body_excerpt="",
+                response_status=200,
+                response_body_excerpt=html_head + "<main>Sign in to your account</main></body></html>",
+                captured_at="2026-04-16T10:01:00+08:00",
+            ),
+            VendEmailCaptureRecord(
+                name="login",
+                url="https://www.vend.email/auth/login",
+                method="POST",
+                request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
+                request_body_excerpt="user[email]=vendcap202604170108%40cxwsss.online",
+                response_status=422,
+                response_body_excerpt=(
+                    html_head
+                    + '<div class="rounded-md bg-red-50"><p>Invalid Email or password.</p></div>'
+                    + "</body></html>"
+                ),
+                captured_at="2026-04-16T10:02:00+08:00",
+            ),
+            VendEmailCaptureRecord(
+                name="register_form",
+                url="https://www.vend.email/auth/register",
+                method="GET",
+                request_headers_whitelist={},
+                request_body_excerpt="",
+                response_status=200,
+                response_body_excerpt=html_head + "<main>Sign up for a free account</main></body></html>",
+                captured_at="2026-04-16T10:03:00+08:00",
+            ),
+            VendEmailCaptureRecord(
+                name="register",
+                url="https://www.vend.email/auth",
+                method="POST",
+                request_headers_whitelist={"content-type": "application/x-www-form-urlencoded"},
+                request_body_excerpt="user[email]=vendcap202604170108%40cxwsss.online",
+                response_status=422,
+                response_body_excerpt=(
+                    html_head
+                    + '<div id="error_explanation"><ul><li>Email has already been taken</li></ul></div>'
+                    + "</body></html>"
+                ),
+                captured_at="2026-04-16T10:04:00+08:00",
+            ),
+        ]
+        runtime = _FakeVendEmailRuntime(
+            restore_ok=False,
+            login_ok=False,
+            register_ok=False,
+            aliases=[],
+            captures=captures,
+        )
+
+        producer = VendEmailAliasServiceProducer(
+            source={
+                "id": "vend-email-primary",
+                "type": "vend_email",
+                "register_url": "https://www.vend.email/auth/register",
+                "mailbox_base_url": "https://cxwsss.online/",
+                "mailbox_email": "admin@cxwsss.online",
+                "mailbox_password": "1103@Icity",
+                "alias_domain": "cxwsss.online",
+                "alias_count": 1,
+                "state_key": "vend-email-primary",
+            },
+            state_store=state_store,
+            runtime=runtime,
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            producer.load_into(manager)
+
+        error = str(raised.exception)
+        self.assertIn("login failed (login status=422 body=Invalid Email or password.)", error)
+        self.assertIn("register failed (register status=422 body=Email has already been taken)", error)
+        self.assertNotIn("login_form status=200", error)
+        self.assertNotIn("register_form status=200", error)
+        self.assertNotIn("<!DOCTYPE html>", error)
 
     def test_producer_requires_runtime_capture_summary_contract(self):
         manager = AliasEmailPoolManager(task_id="task-vend-email-missing-capture-summary")

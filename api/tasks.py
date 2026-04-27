@@ -12,6 +12,7 @@ from core.task_runtime import (
     SkipCurrentAttemptRequested,
     StopTaskRequested,
 )
+from services.proxy_switch import switch_proxy_after_account
 import time, json, asyncio, threading, logging, traceback, re
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -315,6 +316,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                         task_id=context.task_id,
                         state_store_factory=vend_state_store_factory,
                         runtime_builder=context.runtime_builder,
+                        log_fn=context.log_fn,
                     ),
                 )
 
@@ -374,6 +376,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 task_id=task_id,
                 purpose="task_pool",
                 state_store_factory=merged_extra.get("vend_email_state_store_factory"),
+                log_fn=lambda message: _log(task_id, message),
             )
             for spec in build_alias_provider_source_specs(pool_config):
                 source_context = AliasProviderBootstrapContext(
@@ -384,6 +387,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                     confirmation_reader=bootstrap_context.confirmation_reader,
                     telemetry_sink=bootstrap_context.telemetry_sink,
                     test_policy=bootstrap_context.test_policy,
+                    log_fn=bootstrap_context.log_fn,
                 )
                 producer = bootstrap.build(spec=spec, context=source_context)
                 manager.register_source(producer)
@@ -571,6 +575,14 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 )
                 return AttemptResult.failed(str(e))
             finally:
+                if attempt_id is not None:
+                    try:
+                        switch_proxy_after_account(
+                            task_merged_extra,
+                            log_fn=lambda message: _log(task_id, message),
+                        )
+                    except Exception as e:
+                        _log(task_id, f"[ProxySwitch] 代理切换异常: {e}")
                 control.finish_attempt(attempt_id)
 
         from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed

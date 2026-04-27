@@ -35,6 +35,7 @@ class AliasProviderBootstrapContext:
     confirmation_reader: Any = None
     telemetry_sink: Any = None
     test_policy: AliasAutomationTestPolicy | None = None
+    log_fn: Any = None
 
 
 @dataclass(frozen=True)

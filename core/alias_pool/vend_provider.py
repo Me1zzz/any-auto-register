@@ -1,13 +1,44 @@
 from __future__ import annotations
 
+from html import unescape
+import re
 import secrets
 from typing import Any, cast
 
+from core.alias_pool.account_logging import log_alias_service_account_registered
 from core.alias_pool.base import AliasEmailLease, AliasSourceState
 from core.base_mailbox import CloudMailMailbox
 from core.alias_pool.provider_contracts import AliasAutomationTestPolicy
 from core.alias_pool.vend_confirmation import ConfirmationReadResult
 from core.alias_pool.vend_email_state import VendEmailCaptureRecord
+
+
+_CAPTURE_DETAIL_LIMIT = 240
+_HTML_ERROR_BLOCK_PATTERN = re.compile(
+    r"<(?P<tag>div|section|article|p|span|ul)[^>]*"
+    r"(?:"
+    r"role=[\"']alert[\"']|"
+    r"id=[\"'][^\"']*(?:error|alert|flash|notice)[^\"']*[\"']|"
+    r"class=[\"'][^\"']*(?:error|alert|danger|red|invalid|flash|notice)[^\"']*[\"']"
+    r")[^>]*>"
+    r"(?P<body>.*?)"
+    r"</(?P=tag)>",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_FAILURE_KEYWORDS = (
+    "invalid",
+    "already",
+    "taken",
+    "required",
+    "error",
+    "failed",
+    "incorrect",
+    "unconfirmed",
+    "confirmation",
+    "too many",
+    "locked",
+    "captcha",
+)
 
 
 def build_service_email(source: dict) -> str:
@@ -30,16 +61,37 @@ def is_cloudmail_domain_email(value: str, source: dict) -> bool:
     email = str(value or "").strip().lower()
     if not email or "@" not in email:
         return False
-    expected_domain = str(source.get("cloudmail_domain") or "").strip().lower()
+    expected_domain = _effective_cloudmail_domain(source)
     if not expected_domain:
         return bool(email)
     return email.endswith(f"@{expected_domain}")
 
 
+def _effective_cloudmail_domain(source: dict) -> str:
+    base_domain = str(source.get("cloudmail_domain") or "").strip().lower().lstrip("@")
+    subdomain = str(source.get("cloudmail_subdomain") or "").strip().lower().strip(".")
+    if not subdomain:
+        return base_domain
+    if not base_domain:
+        return subdomain
+    if base_domain == subdomain or base_domain.startswith(f"{subdomain}."):
+        return base_domain
+    return f"{subdomain}.{base_domain}"
+
+
 class VendAliasProvider:
     source_kind = "vend_email"
 
-    def __init__(self, *, spec, state_repository, runtime, confirmation_reader, telemetry):
+    def __init__(
+        self,
+        *,
+        spec,
+        state_repository,
+        runtime,
+        confirmation_reader,
+        telemetry,
+        log_fn=None,
+    ):
         self._spec = spec
         provider_config = dict(getattr(spec, "provider_config", {}) or {})
         raw_source = dict(spec.raw_source or {})
@@ -57,6 +109,7 @@ class VendAliasProvider:
         self.runtime = runtime
         self._confirmation_reader = confirmation_reader
         self._telemetry = telemetry
+        self._log_fn = log_fn
         self._state = AliasSourceState.IDLE
 
     @property
@@ -283,24 +336,141 @@ class VendAliasProvider:
         if self.runtime.restore_session(state):
             self._telemetry.record_stage(state, "session_ready", status="completed")
             return
+        failure_details: list[str] = []
         if self.runtime.login(state, self.source):
             self._telemetry.record_stage(state, "session_ready", status="completed")
             return
+        failure_details.append(self._capture_failure_detail("login", "login_form", "login"))
         if self.runtime.register(state, self.source):
             self._telemetry.record_stage(state, "register_submit", status="completed")
             confirmation_bootstrap_available = callable(getattr(self.runtime, "confirm", None))
             confirmation_bootstrap_error = self._attempt_confirmation_bootstrap(state)
             if confirmation_bootstrap_error is None:
                 self._telemetry.record_stage(state, "session_ready", status="completed")
+                self._log_service_account_registered(state)
                 return
             if confirmation_bootstrap_available:
                 raise confirmation_bootstrap_error
             if not self.runtime.resend_confirmation(state, self.source):
-                raise RuntimeError("vend.email confirmation bootstrap failed")
+                raise self._bootstrap_error(
+                    "vend.email confirmation bootstrap failed",
+                    [self._capture_failure_detail("confirmation", "confirmation")],
+                )
             if self.runtime.login(state, self.source):
                 self._telemetry.record_stage(state, "session_ready", status="completed")
+                self._log_service_account_registered(state)
                 return
-        raise RuntimeError("vend.email session bootstrap failed")
+            raise self._bootstrap_error(
+                "vend.email login failed after confirmation bootstrap",
+                [self._capture_failure_detail("login", "login_form", "login")],
+            )
+        failure_details.append(self._capture_failure_detail("register", "register_form", "register"))
+        raise self._bootstrap_error("vend.email session bootstrap failed", failure_details)
+
+    def _log_service_account_registered(self, state) -> None:
+        log_alias_service_account_registered(
+            self._log_fn,
+            provider_type="vend",
+            email=str(getattr(state, "service_email", "") or ""),
+            password=str(getattr(state, "service_password", "") or ""),
+        )
+
+    def _bootstrap_error(self, message: str, details: list[str]) -> RuntimeError:
+        clean_details = list(dict.fromkeys(detail for detail in details if detail))
+        if not clean_details:
+            return RuntimeError(message)
+        return RuntimeError(f"{message}: {'; '.join(clean_details)}")
+
+    def _capture_failure_detail(self, label: str, *capture_names: str) -> str:
+        try:
+            records = self._capture_summary()
+        except Exception as exc:
+            return f"{label} failed (capture_summary unavailable: {exc})"
+
+        wanted = {str(name or "").strip() for name in capture_names if str(name or "").strip()}
+        matched_records = [
+            record
+            for record in records
+            if str(getattr(record, "name", "") or "").strip() in wanted
+        ]
+        if not matched_records:
+            return f"{label} failed"
+        submitted_records = [
+            record
+            for record in matched_records
+            if not str(getattr(record, "name", "") or "").strip().endswith("_form")
+        ]
+        if submitted_records:
+            matched_records = submitted_records
+        record_details = [
+            self._format_capture_failure_detail(record)
+            for record in matched_records[-1:]
+        ]
+        record_details = [detail for detail in record_details if detail]
+        if not record_details:
+            return f"{label} failed"
+        return f"{label} failed ({'; '.join(record_details)})"
+
+    def _format_capture_failure_detail(self, record: VendEmailCaptureRecord) -> str:
+        parts = []
+        name = str(getattr(record, "name", "") or "").strip()
+        if name:
+            parts.append(name)
+        status = int(getattr(record, "response_status", 0) or 0)
+        if status:
+            parts.append(f"status={status}")
+        response_body = self._capture_response_detail(
+            str(getattr(record, "response_body_excerpt", "") or "")
+        )
+        if response_body:
+            parts.append(f"body={response_body}")
+        return " ".join(parts)
+
+    def _capture_response_detail(self, value: str) -> str:
+        html_failure_text = self._extract_html_failure_text(value)
+        if html_failure_text:
+            return self._compact_capture_detail(html_failure_text)
+        return self._compact_capture_detail(value)
+
+    def _extract_html_failure_text(self, value: str) -> str:
+        raw = str(value or "")
+        if "<" not in raw or ">" not in raw:
+            return ""
+        body = re.sub(r"<head\b[^>]*>.*?</head>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
+        body = re.sub(r"<script\b[^>]*>.*?</script>", " ", body, flags=re.IGNORECASE | re.DOTALL)
+        body = re.sub(r"<style\b[^>]*>.*?</style>", " ", body, flags=re.IGNORECASE | re.DOTALL)
+
+        block_texts = []
+        for match in _HTML_ERROR_BLOCK_PATTERN.finditer(body):
+            text = self._html_to_text(match.group("body"))
+            if text:
+                block_texts.append(text)
+        unique_block_texts = list(dict.fromkeys(block_texts))
+        if unique_block_texts:
+            return " | ".join(unique_block_texts[:3])
+
+        plain_text = self._html_to_text(body)
+        if not plain_text:
+            return ""
+        for line in re.split(r"[\r\n]+|(?<=[.!?])\s+", plain_text):
+            candidate = line.strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if any(keyword in lowered for keyword in _HTML_FAILURE_KEYWORDS):
+                return candidate
+        return ""
+
+    def _html_to_text(self, value: str) -> str:
+        text = re.sub(r"<!--.*?-->", " ", str(value or ""), flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        return " ".join(unescape(text).split())
+
+    def _compact_capture_detail(self, value: str) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= _CAPTURE_DETAIL_LIMIT:
+            return text
+        return text[: _CAPTURE_DETAIL_LIMIT - 3].rstrip() + "..."
 
     def _attempt_confirmation_bootstrap(self, state) -> Exception | None:
         confirm = getattr(self.runtime, "confirm", None)

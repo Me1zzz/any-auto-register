@@ -194,6 +194,31 @@ const TAB_ITEMS = [
           { key: 'cloudmail_subdomain', label: '子域名（可选）', placeholder: 'pool-a' },
           { key: 'cloudmail_timeout', label: '请求超时秒数', placeholder: '30' },
           {
+            key: 'cloudmail_proxy_switch_enabled',
+            label: '账号结束后切换代理节点',
+            type: 'boolean',
+            description: '开启后，每个账号注册尝试结束时会从节点列表随机选择一个节点并更新本地 9097 代理。',
+          },
+          {
+            key: 'cloudmail_proxy_switch_proxy_name',
+            label: '代理名称 proxy_name',
+            placeholder: '例如 GLOBAL / Proxy / 节点选择',
+            description: '对应 PUT http://127.0.0.1:9097/proxies/{proxy_name} 中的代理名称。',
+          },
+          {
+            key: 'cloudmail_proxy_switch_token',
+            label: '代理切换密钥 token',
+            secret: true,
+            placeholder: 'Bearer token',
+          },
+          {
+            key: 'cloudmail_proxy_switch_nodes',
+            label: '可用节点名称列表',
+            type: 'textarea',
+            placeholder: 'proxy-node-a\nproxy-node-b',
+            description: '每行一个节点名；也支持英文逗号分隔。每次账号结束时随机选择一个写入 json={"name": "proxy_node"}。',
+          },
+          {
             key: 'cloudmail_team_account_email',
             label: 'ChatGPT Team account email',
             placeholder: 'manager@example.com',

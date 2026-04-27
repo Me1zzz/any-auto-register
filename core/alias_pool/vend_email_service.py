@@ -333,6 +333,7 @@ def build_vend_email_alias_service_producer(
     task_id: str,
     state_store_factory=None,
     runtime_builder=None,
+    log_fn=None,
 ) -> object:
     resolved_state_store_factory = cast(Any, state_store_factory)
     resolved_runtime_builder = cast(Any, runtime_builder)
@@ -456,6 +457,7 @@ def build_vend_email_alias_service_producer(
         runtime=runtime,
         confirmation_reader=VendConfirmationReader(runtime=runtime),
         telemetry=VendTelemetryRecorder(),
+        log_fn=log_fn,
     )
 
 

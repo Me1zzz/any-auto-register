@@ -13,6 +13,51 @@ from core.alias_pool.vend_email_state import VendEmailCaptureRecord, VendEmailSe
 
 
 class AliasGenerationApiTests(unittest.TestCase):
+    def test_config_api_round_trips_cloudmail_proxy_switch_fields(self):
+        client = TestClient(app)
+        saved_config = {
+            "cloudmail_proxy_switch_enabled": "1",
+            "cloudmail_proxy_switch_proxy_name": "proxy_name",
+            "cloudmail_proxy_switch_token": "secret-token",
+            "cloudmail_proxy_switch_nodes": "node-a\nnode-b",
+        }
+
+        with patch("core.config_store.config_store.get", return_value=""), patch(
+            "api.config.config_store.get_all",
+            return_value=saved_config,
+        ):
+            resp = client.get("/api/config")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["cloudmail_proxy_switch_enabled"], "1")
+        self.assertEqual(body["cloudmail_proxy_switch_proxy_name"], "proxy_name")
+        self.assertEqual(body["cloudmail_proxy_switch_token"], "secret-token")
+        self.assertEqual(body["cloudmail_proxy_switch_nodes"], "node-a\nnode-b")
+
+        with patch("api.config.config_store.set_many") as set_many:
+            resp = client.put(
+                "/api/config",
+                json={
+                    "data": {
+                        "cloudmail_proxy_switch_enabled": True,
+                        "cloudmail_proxy_switch_proxy_name": "proxy_name",
+                        "cloudmail_proxy_switch_token": "secret-token",
+                        "cloudmail_proxy_switch_nodes": "node-a\nnode-b",
+                    }
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        set_many.assert_called_once_with(
+            {
+                "cloudmail_proxy_switch_enabled": True,
+                "cloudmail_proxy_switch_proxy_name": "proxy_name",
+                "cloudmail_proxy_switch_token": "secret-token",
+                "cloudmail_proxy_switch_nodes": "node-a\nnode-b",
+            }
+        )
+
     def test_config_value_helpers_delegate_source_serialization_to_alias_pool_config(self):
         payload_sources = [{"id": "vend-1", "type": "vend_email", "alias_count": 2, "state_key": "vend-state", "alias_domain_id": "42"}]
 

@@ -55,12 +55,15 @@ class _VendEmailAliasProviderAdapter:
         self,
         policy: AliasAutomationTestPolicy,
     ) -> AliasAutomationTestResult:
-        producer = build_vend_email_alias_service_producer(
-            source=dict(self._spec.raw_source or {}),
-            task_id=self._context.task_id,
-            state_store_factory=self._context.state_store_factory,
-            runtime_builder=self._context.runtime_builder,
-        )
+        builder_kwargs = {
+            "source": dict(self._spec.raw_source or {}),
+            "task_id": self._context.task_id,
+            "state_store_factory": self._context.state_store_factory,
+            "runtime_builder": self._context.runtime_builder,
+        }
+        if getattr(self._context, "log_fn", None) is not None:
+            builder_kwargs["log_fn"] = self._context.log_fn
+        producer = build_vend_email_alias_service_producer(**builder_kwargs)
         return cast(AliasProvider, producer).run_alias_generation_test(policy)
 
 
@@ -123,6 +126,7 @@ class AliasAutomationTestService:
                 confirmation_reader=context.confirmation_reader,
                 telemetry_sink=context.telemetry_sink,
                 test_policy=policy,
+                log_fn=context.log_fn,
             )
 
         provider_type = str(spec.provider_type or "")

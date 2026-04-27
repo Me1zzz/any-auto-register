@@ -6,6 +6,7 @@ from typing import Mapping, Sequence
 
 from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.base import AliasSourceState
+from core.alias_pool.account_logging import log_alias_service_account_registered
 from core.alias_pool.interactive_provider_models import (
     AliasCreatedRecord,
     AliasDomainOption,
@@ -109,11 +110,19 @@ class InteractiveAliasProviderBase:
                     target_total=target_total,
                 )
             else:
+                previous_service_account_email = str(
+                    state.service_account_email or ""
+                ).strip().lower()
                 context = self.ensure_authenticated_context("task_pool")
                 context = self._seed_context_from_state(context, state)
 
                 for requirement in self.resolve_verification_requirements(context):
                     context = self.satisfy_verification_requirement(requirement, context)
+
+                self._log_new_service_account_registration(
+                    previous_service_account_email=previous_service_account_email,
+                    context=context,
+                )
 
                 domains = list(self.discover_alias_domains(context))
                 context = replace(context, domain_options=domains)
@@ -393,6 +402,28 @@ class InteractiveAliasProviderBase:
         if not policy.capture_enabled:
             return []
         return self.build_capture_summary()
+
+    def _log_new_service_account_registration(
+        self,
+        *,
+        previous_service_account_email: str,
+        context: AuthenticatedProviderContext,
+    ) -> None:
+        current_service_account_email = str(context.service_account_email or "").strip().lower()
+        if not current_service_account_email:
+            return
+        previous_email = str(previous_service_account_email or "").strip().lower()
+        if previous_email and previous_email == current_service_account_email:
+            return
+        if previous_email:
+            return
+        log_alias_service_account_registered(
+            getattr(self._context, "log_fn", None),
+            provider_type=self.provider_type,
+            email=context.service_account_email,
+            password=context.service_password,
+            username=context.username,
+        )
 
     def _ensure_available_across_accounts(
         self,

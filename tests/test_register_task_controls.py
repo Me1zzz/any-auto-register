@@ -396,6 +396,11 @@ class _FakePlatform(BasePlatform):
         return True
 
 
+class _FailingPlatform(_FakePlatform):
+    def register(self, email: str, password: str | None = None) -> Account:
+        raise RuntimeError("register failed")
+
+
 class _PoolAwarePlatform(_FakePlatform):
     def register(self, email: str, password: str | None = None) -> Account:
         assert self.mailbox is not None
@@ -603,6 +608,85 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
         self.assertEqual(account.extra.get("email_user"), "demo123")
         self.assertEqual(account.extra.get("domain"), "spam4.me")
         self.assertIsNone(account.extra.get("mailbox_email"))
+
+    def test_run_register_switches_cloudmail_proxy_after_each_successful_attempt(self):
+        task_id = "task-cloudmail-proxy-switch-success"
+        req = self._build_request(
+            count=2,
+            concurrency=1,
+            extra={
+                "mail_provider": "fake",
+                "cloudmail_proxy_switch_enabled": True,
+                "cloudmail_proxy_switch_proxy_name": "proxy_name",
+                "cloudmail_proxy_switch_token": "secret-token",
+                "cloudmail_proxy_switch_nodes": "node-a\nnode-b",
+            },
+        )
+        _create_task_record(task_id, req, "manual", None)
+        switch_calls = []
+
+        def _switch_proxy(config, log_fn):
+            switch_calls.append(dict(config))
+            log_fn("[ProxySwitch] called")
+
+        with (
+            patch("core.registry.get", return_value=_FakePlatform),
+            patch("core.base_mailbox.create_mailbox", return_value=_FakeAliasMailbox()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+            patch("api.tasks.switch_proxy_after_account", side_effect=_switch_proxy),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(switch_calls), 2)
+        self.assertTrue(all(call["cloudmail_proxy_switch_enabled"] for call in switch_calls))
+        self.assertEqual(
+            [call["cloudmail_proxy_switch_proxy_name"] for call in switch_calls],
+            ["proxy_name", "proxy_name"],
+        )
+        snapshot = _task_store.snapshot(task_id)
+        self.assertEqual(snapshot["success"], 2)
+        self.assertEqual(snapshot["errors"], [])
+        joined_logs = "\n".join(snapshot["logs"])
+        self.assertEqual(joined_logs.count("[ProxySwitch] called"), 2)
+
+    def test_run_register_switches_cloudmail_proxy_after_failed_attempt(self):
+        task_id = "task-cloudmail-proxy-switch-failure"
+        req = self._build_request(
+            extra={
+                "mail_provider": "fake",
+                "cloudmail_proxy_switch_enabled": True,
+                "cloudmail_proxy_switch_proxy_name": "proxy_name",
+                "cloudmail_proxy_switch_token": "secret-token",
+                "cloudmail_proxy_switch_nodes": "node-a\nnode-b",
+            },
+        )
+        _create_task_record(task_id, req, "manual", None)
+        switch_calls = []
+
+        def _switch_proxy(config, log_fn):
+            switch_calls.append(dict(config))
+            log_fn("[ProxySwitch] called")
+
+        with (
+            patch("core.registry.get", return_value=_FailingPlatform),
+            patch("core.base_mailbox.create_mailbox", return_value=_FakeMailbox()),
+            patch("core.config_store.config_store.get_all", return_value={}),
+            patch("core.proxy_pool.proxy_pool", new=self._proxy_pool_stub()),
+            patch("core.db.save_account", side_effect=lambda account: account),
+            patch("api.tasks._save_task_log"),
+            patch("api.tasks.switch_proxy_after_account", side_effect=_switch_proxy),
+        ):
+            _run_register(task_id, req)
+
+        self.assertEqual(len(switch_calls), 1)
+        snapshot = _task_store.snapshot(task_id)
+        self.assertEqual(snapshot["status"], "done")
+        self.assertEqual(snapshot["success"], 0)
+        self.assertEqual(snapshot["errors"], ["register failed"])
+        self.assertEqual("\n".join(snapshot["logs"]).count("[ProxySwitch] called"), 1)
 
     def test_run_register_reuses_one_task_alias_pool_across_attempts(self):
         task_id = "task-alias-pool-reuse"
