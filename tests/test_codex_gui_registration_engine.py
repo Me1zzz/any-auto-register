@@ -349,6 +349,49 @@ class CodexGUIRegistrationEngineTests(unittest.TestCase):
         self.assertIs(CodexGUIDriver, SplitCodexGUIDriver)
         self.assertIs(PyAutoGUICodexGUIDriver, SplitPyAutoGUICodexGUIDriver)
 
+    def test_debug_logs_do_not_reach_callback_or_result_logs_by_default(self):
+        captured_logs: list[str] = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService([]),
+            callback_logger=captured_logs.append,
+            extra_config={},
+        )
+
+        engine._log("[耗时] 可见控件枚举准备完成: elapsed=10.0ms", level="debug")
+
+        self.assertEqual(captured_logs, [])
+        self.assertEqual(engine.logs, [])
+
+    def test_debug_logs_can_be_enabled_for_callback_and_result_logs(self):
+        captured_logs: list[str] = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService([]),
+            callback_logger=captured_logs.append,
+            extra_config={"codex_gui_debug_logs": True},
+        )
+
+        engine._log("[耗时] 可见控件枚举准备完成: elapsed=10.0ms", level="debug")
+
+        self.assertEqual(len(captured_logs), 1)
+        self.assertIn("[耗时] 可见控件枚举准备完成", captured_logs[0])
+        self.assertEqual(engine.logs, captured_logs)
+
+    def test_driver_debug_logs_are_filtered_by_engine_default_logger(self):
+        captured_logs: list[str] = []
+        engine = CodexGUIRegistrationEngine(
+            email_service=_DummyEmailService([]),
+            callback_logger=captured_logs.append,
+            extra_config={},
+        )
+
+        driver = engine._build_driver()
+        captured_logs.clear()
+        engine.logs.clear()
+        driver._log_debug("[GUI] WindMouse 轨迹摘要: steps=12")
+
+        self.assertEqual(captured_logs, [])
+        self.assertEqual(engine.logs, [])
+
     def test_engine_does_not_change_detector_when_only_cloudmail_team_account_email_configured(self):
         engine = CodexGUIRegistrationEngine(
             email_service=_DummyEmailService([]),

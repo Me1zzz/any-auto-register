@@ -34,6 +34,25 @@ from .utils import generate_random_age, generate_random_name, generate_random_pa
 logger = logging.getLogger(__name__)
 
 
+_CODEX_GUI_DEFAULT_DEBUG_PREFIXES = (
+    "[耗时]",
+    "[GUI]",
+    "[DOM]",
+    "[坐标]",
+    "[节奏]",
+    "[等待]",
+    "[输入法]",
+)
+_CODEX_GUI_DEFAULT_DEBUG_UIA_PREFIXES = (
+    "[UIA] 页面状态刷新完成",
+    "[UIA] 页面文本未全部命中",
+    "[UIA] 页面文本全部命中",
+    "[UIA] 定位成功",
+    "[UIA] 随机点击点",
+    "[UIA] 复用已缓存地址栏控件",
+)
+
+
 def _parse_bool_config(value: Any, *, default: bool = False) -> bool:
     if value is None or value == "":
         return default
@@ -85,17 +104,43 @@ class CodexGUIRegistrationEngine:
         """统一写入内存日志、回调日志与模块日志。"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_message = f"[{timestamp}] {message}"
+        is_debug = level == "debug" or self._is_default_debug_log(message)
+        if is_debug and not self._debug_logs_enabled():
+            logger.debug(log_message)
+            return
         self.logs.append(log_message)
         if self.callback_logger:
             self.callback_logger(log_message)
         if level == "error":
             logger.error(log_message)
+        elif is_debug:
+            logger.debug(log_message)
         else:
             logger.info(log_message)
 
+    def _debug_logs_enabled(self) -> bool:
+        return _parse_bool_config(
+            self.extra_config.get("codex_gui_debug_logs"),
+            default=False,
+        ) or _parse_bool_config(
+            self.extra_config.get("codex_gui_verbose_logs"),
+            default=False,
+        )
+
+    def _is_default_debug_log(self, message: str) -> bool:
+        text = str(message or "").strip()
+        if text.startswith(_CODEX_GUI_DEFAULT_DEBUG_PREFIXES):
+            return True
+        if text.startswith(_CODEX_GUI_DEFAULT_DEBUG_UIA_PREFIXES):
+            return True
+        return "等待中随机 WindMouse 漫游" in text
+
+    def _log_debug(self, message: str) -> None:
+        self._log(message, level="debug")
+
     def _build_driver(self) -> CodexGUIDriver:
         """构建当前 GUI 链路使用的 driver 实现。"""
-        return PyAutoGUICodexGUIDriver(extra_config=self.extra_config, logger_fn=self._log)
+        return PyAutoGUICodexGUIDriver(extra_config=self.extra_config, logger_fn=self._log_debug)
 
     def _log_step(self, stage: str, detail: str) -> None:
         """按阶段输出标准化日志。"""

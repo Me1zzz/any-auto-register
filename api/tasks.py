@@ -12,7 +12,7 @@ from core.task_runtime import (
     SkipCurrentAttemptRequested,
     StopTaskRequested,
 )
-import time, json, asyncio, threading, logging, traceback
+import time, json, asyncio, threading, logging, traceback, re
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -22,6 +22,13 @@ CLEANUP_THRESHOLD = 250
 _task_store = RegisterTaskStore(
     max_finished_tasks=MAX_FINISHED_TASKS,
     cleanup_threshold=CLEANUP_THRESHOLD,
+)
+_TIMESTAMP_PREFIX_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s*")
+_TASK_DEBUG_LOG_PREFIXES = (
+    "[AliasPool] 当前可用别名邮箱快照",
+    "[AliasPool] vend:",
+    "[AliasPool] alias email:",
+    "[CloudMail] emailList 响应:",
 )
 
 
@@ -121,8 +128,17 @@ def has_active_register_task(
 
 def _log(task_id: str, msg: str):
     """向任务追加一条日志"""
-    ts = time.strftime("%H:%M:%S")
-    entry = f"[{ts}] {msg}"
+    text = str(msg or "")
+    if _TIMESTAMP_PREFIX_RE.match(text):
+        entry = text
+        body = _TIMESTAMP_PREFIX_RE.sub("", text, count=1)
+    else:
+        ts = time.strftime("%H:%M:%S")
+        entry = f"[{ts}] {text}"
+        body = text
+    if body.startswith(_TASK_DEBUG_LOG_PREFIXES):
+        logger.debug(entry)
+        return
     _task_store.append_log(task_id, entry)
     print(entry)
 
@@ -138,11 +154,18 @@ def _format_alias_pool_service_name(source_kind: str) -> str:
 
 def _log_alias_pool_snapshot(task_id: str, pool_manager) -> None:
     aliases_by_kind = pool_manager.snapshot_available_aliases_by_kind()
-    _log(task_id, "[AliasPool] 当前可用别名邮箱快照")
+    summary_parts = [
+        f"{_format_alias_pool_service_name(source_kind)}={len(aliases)}"
+        for source_kind, aliases in aliases_by_kind.items()
+    ]
+    summary = ", ".join(summary_parts) if summary_parts else "none"
+    _log(task_id, f"[AliasPool] 当前可用别名邮箱: {summary}")
     for source_kind, aliases in aliases_by_kind.items():
-        _log(
+        logger.debug(
+            "[AliasPool] task=%s %s aliases=%s",
             task_id,
-            f"[AliasPool] {_format_alias_pool_service_name(source_kind)}: {json.dumps(aliases, ensure_ascii=False)}",
+            _format_alias_pool_service_name(source_kind),
+            json.dumps(aliases, ensure_ascii=False),
         )
 
 
@@ -194,7 +217,13 @@ def _auto_upload_integrations(task_id: str, account):
             name = result.get("name", "Auto Upload")
             ok = bool(result.get("ok"))
             msg = result.get("msg", "")
-            _log(task_id, f"  [{name}] {'[OK] ' + msg if ok else '[FAIL] ' + msg}")
+            if ok:
+                status_text = "[OK] "
+            elif str(msg or "").strip() == "账号缺少 access_token":
+                status_text = "[SKIP] "
+            else:
+                status_text = "[FAIL] "
+            _log(task_id, f"  [{name}] {status_text}{msg}")
     except Exception as e:
         _log(task_id, f"  [Auto Upload] 自动导入异常: {e}")
 

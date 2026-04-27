@@ -8,6 +8,9 @@ class AliasLeaseConsumerContext:
     def acquire_alias_lease(self):
         if self._pool_manager is None:
             return None
+        acquire_available = getattr(self._pool_manager, "acquire_available_alias", None)
+        if callable(acquire_available):
+            return acquire_available()
         return self._pool_manager.acquire_alias()
 
     def release(self) -> None:

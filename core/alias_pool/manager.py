@@ -359,6 +359,32 @@ class AliasEmailPoolManager:
             lease.status = AliasLeaseStatus.LEASED
             return lease
 
+    def acquire_available_alias(
+        self,
+        *,
+        wait_timeout_seconds: float = 120,
+        poll_interval_seconds: float = 5,
+    ) -> AliasEmailLease:
+        timeout = max(float(wait_timeout_seconds or 0), 0.0)
+        poll_interval = max(float(poll_interval_seconds or 0), 0.1)
+        deadline = time.monotonic() + timeout
+
+        while True:
+            lease = self._pop_available_alias()
+            if lease is not None:
+                self.request_background_refill_if_needed()
+                return lease
+
+            if not self.has_live_sources():
+                raise AliasPoolStarvedError("CloudMail alias pool has no available aliases")
+
+            if time.monotonic() >= deadline:
+                raise AliasPoolStarvedError("CloudMail alias pool stayed empty until timeout")
+
+            self.request_background_refill_if_needed()
+            remaining = max(deadline - time.monotonic(), 0.0)
+            time.sleep(min(poll_interval, remaining))
+
     def acquire_alias(
         self,
         *,

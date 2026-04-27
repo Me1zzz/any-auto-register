@@ -121,6 +121,9 @@ class DefaultVendEmailRuntimeExecutor:
             field_name="register_url",
         )
 
+    def reset_session(self) -> None:
+        self._client = HTTPClient()
+
     def execute(
         self,
         operation: VendEmailRuntimeOperation,
@@ -457,6 +460,8 @@ def build_vend_email_alias_service_producer(
 
 
 class VendEmailRuntime(Protocol):
+    def reset_session(self) -> None: ...
+
     def restore_session(self, state) -> bool: ...
 
     def login(self, state, source: dict) -> bool: ...
@@ -534,6 +539,12 @@ class VendEmailContractRuntime:
         self._executor = executor
         self._captures: list[VendEmailCaptureRecord] = []
         self._active_state = None
+
+    def reset_session(self) -> None:
+        self._active_state = None
+        reset_session = getattr(self._executor, "reset_session", None)
+        if callable(reset_session):
+            reset_session()
 
     def restore_session(self, state) -> bool:
         self._active_state = state

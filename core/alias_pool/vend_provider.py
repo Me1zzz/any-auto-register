@@ -78,6 +78,7 @@ class VendAliasProvider:
             int(getattr(state, "created_alias_count", 0) or len(known_aliases_before)),
             len(known_aliases_before),
         )
+        rotated_state = False
         if (
             bool(getattr(state, "exhausted", False))
             or created_alias_count >= target_cap
@@ -86,11 +87,14 @@ class VendAliasProvider:
             state = self._state_repository.new_state()
             known_aliases_before = []
             created_alias_count = 0
+            rotated_state = True
         state.alias_limit = target_cap
 
         try:
             self._state = AliasSourceState.ACTIVE
             self._reset_run_state(state)
+            if rotated_state:
+                self._reset_runtime_session()
             self._ensure_session(state)
             remaining_capacity = max(target_cap - created_alias_count, 0)
             create_count = min(requested, remaining_capacity)
@@ -195,8 +199,11 @@ class VendAliasProvider:
         alias_items: list[dict[str, str]] = []
         try:
             self._state = AliasSourceState.ACTIVE
-            state = self._state_repository.new_state() if bool(policy.fresh_service_account) else self._state_repository.load()
+            fresh_service_account = bool(policy.fresh_service_account)
+            state = self._state_repository.new_state() if fresh_service_account else self._state_repository.load()
             self._reset_run_state(state)
+            if fresh_service_account:
+                self._reset_runtime_session()
             self._ensure_session(state)
             alias_items = self._load_alias_items(state, policy.minimum_alias_count)
             if bool(policy.capture_enabled):
@@ -246,6 +253,11 @@ class VendAliasProvider:
         state.last_failure = {"stageCode": "", "stageLabel": "", "reason": ""}
         state.last_error = ""
         state.last_capture_summary = []
+
+    def _reset_runtime_session(self) -> None:
+        reset_session = getattr(self.runtime, "reset_session", None)
+        if callable(reset_session):
+            reset_session()
 
     def _configured_confirmation_inbox_email(self) -> str:
         inbox_config = dict(getattr(self._spec, "confirmation_inbox_config", {}) or {})
