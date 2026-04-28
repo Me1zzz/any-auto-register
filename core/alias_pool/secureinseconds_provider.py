@@ -172,6 +172,7 @@ class SecureInSecondsProvider(InteractiveAliasProviderBase):
         if not forward_to_emails:
             raise RuntimeError("secureinseconds requires a verified forwarding email before alias creation")
 
+        self._wait_for_alias_creation_slot()
         alias_record = runtime.create_alias(
             prefix=self._alias_prefix(context, alias_index),
             description=f"SecureInSeconds automation alias {alias_index}",

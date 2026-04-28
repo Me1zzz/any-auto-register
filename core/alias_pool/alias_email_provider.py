@@ -133,6 +133,7 @@ class AliasEmailProvider(InteractiveAliasProviderBase):
         if domain is None:
             raise RuntimeError("alias.email requires discovered domains")
         local_part = self._build_alias_local_part(alias_index)
+        self._wait_for_alias_creation_slot()
         created = self._runtime.create_rule(
             session_state=context.session_state,
             name=local_part,

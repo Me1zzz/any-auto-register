@@ -1565,6 +1565,44 @@ class AliasPoolServiceAccountLoggingTests(unittest.TestCase):
         self.assertIn("password=fresh-pass", joined_logs)
 
 
+class AliasCreationThrottleTests(unittest.TestCase):
+    def test_simplelogin_create_alias_waits_three_seconds_between_same_service_calls(self):
+        from core.alias_pool.alias_creation_throttle import _reset_alias_creation_throttle_for_tests
+        from core.alias_pool.simplelogin_provider import SimpleLoginProvider
+
+        _reset_alias_creation_throttle_for_tests()
+        provider = SimpleLoginProvider(
+            spec=AliasProviderSourceSpec(
+                source_id="simplelogin-throttle",
+                provider_type="simplelogin",
+                state_key="simplelogin-throttle",
+                provider_config={"site_url": "https://simplelogin.example/"},
+            ),
+            context=AliasProviderBootstrapContext(task_id="task-throttle", purpose="alias_test"),
+        )
+        provider._ensure_authenticated = mock.Mock()
+        response = mock.Mock(status_code=200)
+        provider._request_json_allowing_fallback = mock.Mock(
+            side_effect=[
+                (response, {"email": "one@example.com"}),
+                (response, {"email": "two@example.com"}),
+            ]
+        )
+        context = AuthenticatedProviderContext(
+            service_account_email="service@example.com",
+            service_password="password",
+        )
+        domain = AliasDomainOption(key="signed-suffix", domain="example.com", label="@example.com")
+
+        with mock.patch("time.monotonic", side_effect=[0.0, 0.0, 3.0]), mock.patch("time.sleep") as sleep_mock:
+            first = provider.create_alias(context=context, domain=domain, alias_index=1)
+            second = provider.create_alias(context=context, domain=domain, alias_index=2)
+
+        self.assertEqual(first.email, "one@example.com")
+        self.assertEqual(second.email, "two@example.com")
+        sleep_mock.assert_called_once_with(3.0)
+
+
 class AliasPoolInteractiveProviderRotationTests(unittest.TestCase):
     def test_interactive_provider_rotates_accounts_when_first_account_hits_cap(self):
         store = _MemoryInteractiveStateStore()
@@ -3247,7 +3285,7 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         with mock.patch("core.alias_pool.vend_email_service.random.choice", return_value=("42", "serf.me")), mock.patch(
             "core.alias_pool.vend_email_service.secrets.choice",
             side_effect=list("mx8q4t2p6z1ar9c3v7b5n0yh"),
-        ):
+        ), mock.patch("core.alias_pool.vend_email_service.wait_for_alias_creation_slot"):
             aliases = runtime.create_aliases(state, source, 2)
 
         self.assertEqual(aliases, ["mx8q4t2p6z1a@serf.me", "r9c3v7b5n0yh@serf.me"])
@@ -3255,6 +3293,33 @@ class VendEmailRuntimeContractTests(unittest.TestCase):
         self.assertIn("forwarder[local_part]=r9c3v7b5n0yh", executor.calls[3]["request_body_excerpt"])
         for call in (executor.calls[1], executor.calls[3]):
             self.assertNotIn("forwarder[local_part]=vendcap202604170108", call["request_body_excerpt"])
+
+    def test_contract_create_aliases_waits_three_seconds_between_forwarder_creates(self):
+        from core.alias_pool.alias_creation_throttle import _reset_alias_creation_throttle_for_tests
+        from core.alias_pool.vend_email_service import VendEmailForwarderRecord
+
+        _reset_alias_creation_throttle_for_tests()
+        runtime = VendEmailContractRuntime(executor=mock.Mock())
+        runtime.create_forwarder = mock.Mock(
+            side_effect=[
+                VendEmailForwarderRecord(alias_email="one@serf.me", recipient_email="real@example.com"),
+                VendEmailForwarderRecord(alias_email="two@serf.me", recipient_email="real@example.com"),
+            ]
+        )
+        state = VendEmailServiceState(state_key="vend-email-throttle")
+        state.mailbox_email = "real@example.com"
+        source = {
+            "id": "vend-email-throttle",
+            "type": "vend_email",
+            "state_key": "vend-email-throttle",
+            "alias_domain_id": "42",
+        }
+
+        with mock.patch("time.monotonic", side_effect=[0.0, 0.0, 3.0]), mock.patch("time.sleep") as sleep_mock:
+            aliases = runtime.create_aliases(state, source, 2)
+
+        self.assertEqual(aliases, ["one@serf.me", "two@serf.me"])
+        sleep_mock.assert_called_once_with(3.0)
 
     def test_parse_forwarder_domain_options_reads_live_domain_selector_from_html(self):
         runtime = VendEmailContractRuntime(executor=_FakeVendEmailExecutor([]))

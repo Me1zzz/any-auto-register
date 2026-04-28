@@ -90,6 +90,7 @@ class SimpleLoginProvider(ExistingAccountAliasProviderBase):
 
         last_error = ""
         for endpoint, payload in request_attempts:
+            self._wait_for_alias_creation_slot()
             response, response_payload = self._request_json_allowing_fallback(
                 "create_alias",
                 "POST",

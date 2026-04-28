@@ -148,6 +148,7 @@ class MyAliasProProvider(InteractiveAliasProviderBase):
     ) -> AliasCreatedRecord:
         protocol_runtime, browser_runtime = self._build_runtimes()
         surface_context = self._adapter.load_alias_surface(protocol_runtime, browser_runtime, context)
+        self._wait_for_alias_creation_slot()
         created = self._adapter.submit_alias_creation(
             protocol_runtime,
             browser_runtime,

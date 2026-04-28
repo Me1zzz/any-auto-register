@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Mapping, Sequence
 
+from core.alias_pool.alias_creation_throttle import wait_for_alias_creation_slot
 from core.alias_pool.base import AliasEmailLease
 from core.alias_pool.base import AliasSourceState
 from core.alias_pool.account_logging import log_alias_service_account_registered
@@ -56,6 +57,22 @@ class InteractiveAliasProviderBase:
 
     def state(self) -> AliasSourceState:
         return self._state
+
+    def _alias_creation_service_key(self) -> str:
+        provider_config = dict(self._spec.provider_config or {})
+        service_key = str(
+            provider_config.get("alias_url")
+            or provider_config.get("site_url")
+            or provider_config.get("register_url")
+            or provider_config.get("login_url")
+            or self._spec.state_key
+            or self.source_id
+            or self.provider_type
+        ).strip()
+        return f"{self.provider_type}:{service_key or self.provider_type}"
+
+    def _wait_for_alias_creation_slot(self) -> None:
+        wait_for_alias_creation_slot(self._alias_creation_service_key())
 
     def load_into(self, pool_manager) -> None:
         self.ensure_available(

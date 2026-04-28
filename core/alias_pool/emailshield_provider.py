@@ -64,6 +64,7 @@ class EmailShieldProvider(ExistingAccountAliasProviderBase):
             "email_destination": context.real_mailbox_email or context.service_account_email,
             "note": note,
         }
+        self._wait_for_alias_creation_slot()
         self._request("create_alias", "POST", "/aliases/create/", data=payload)
 
         aliases_after = self.list_existing_aliases(context)

@@ -1294,6 +1294,7 @@ class RegisterTaskControlFlowTests(unittest.TestCase):
                 "core.alias_pool.secureinseconds_provider.CloudMailMailbox",
                 _FakeSecureInSecondsCloudMailMailbox,
             ),
+            patch("core.alias_pool.interactive_provider_base.wait_for_alias_creation_slot"),
         ):
             _FakeSecureInSecondsCloudMailMailbox.instances.clear()
             _run_register(task_id, req)

@@ -19,6 +19,7 @@ from typing import Any, Callable, Protocol, cast
 from core.http_client import HTTPClient
 from core.base_mailbox import CloudMailMailbox, MailboxAccount
 
+from .alias_creation_throttle import wait_for_alias_creation_slot
 from .base import AliasSourceState
 from .mailbox_verification_adapter import extract_anchored_link_from_message_content
 from .provider_contracts import AliasProviderSourceSpec
@@ -110,6 +111,17 @@ def _ensure_safe_outbound_url(*, url: str, field_name: str) -> str:
             )
 
     return raw_url
+
+
+def _vend_alias_creation_service_key(state, source: dict) -> str:
+    key = str(
+        source.get("register_url")
+        or getattr(state, "state_key", "")
+        or source.get("state_key")
+        or source.get("id")
+        or "vend-email"
+    ).strip()
+    return f"vend_email:{key or 'vend-email'}"
 
 
 class DefaultVendEmailRuntimeExecutor:
@@ -777,6 +789,7 @@ class VendEmailContractRuntime:
         while len(aliases) < missing_count:
             local_part = self._build_alias_local_part(generated_local_parts)
             generated_local_parts.add(local_part)
+            wait_for_alias_creation_slot(_vend_alias_creation_service_key(state, source))
             created = self.create_forwarder(
                 state,
                 source,
